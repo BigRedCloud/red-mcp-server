@@ -10,7 +10,7 @@ export function registerCustomerTools(server: ServerType) {
   registerRawCreateTool(
     server,
     "brc_create_customer",
-    "Creates a BRC customer using a raw BRC payload.",
+    "Creates a BRC customer using a raw BRC payload. Does not create or update opening balance transactions. If the user provides an opening balance, warn them that it must be entered directly in Big Red Cloud. Before creating, check whether the customer email appears to match the customer name; if it may be a mismatch, warn the user and ask for confirmation.",
     "/v1/customers"
   );
   registerRawUpdateTool(

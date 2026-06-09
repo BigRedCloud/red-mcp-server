@@ -479,3 +479,22 @@ export function clearRedConnectAuditLog() {
     redConnectAuditLog.length = 0;
     return clearedCount;
 }
+//requested by SM
+export function evidenceAnalysisResponse(args) {
+    return textResponse([
+        args.title ? `# ${args.title}` : "",
+        "## Data accessed",
+        ...args.dataAccessed.map((x) => `- ${x}`),
+        "",
+        "## Calculations / assumptions",
+        ...args.calculationsOrAssumptions.map((x) => `- ${x}`),
+        "",
+        "## Interpretation of data",
+        ...args.interpretation.map((x) => `- ${x}`),
+        "",
+        "## Limitations / checks recommended",
+        ...args.limitations.map((x) => `- ${x}`),
+    ]
+        .filter(Boolean)
+        .join("\n"));
+}

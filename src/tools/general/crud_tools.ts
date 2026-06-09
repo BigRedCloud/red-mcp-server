@@ -19,7 +19,32 @@ import {
   normalizeBatchItems,
   unwrapPayload,
 } from "./payloads_tools.js";
+import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
+//Removed opening balance fields from payload --> don't prompt customer for customer opening balance because there is no API that will POST it
+const OPENING_BALANCE_FIELD_NAMES = [
+  "openingBalance",
+  "opening_balance",
+  "openingBalanceAmount",
+  "opening_balance_amount",
+  "openingBal",
+  "opening_bal",
+  "openingBalanceDate",
+  "opening_balance_date",
+];
 
+function hasOpeningBalanceFields(value: Record<string, unknown>): boolean {
+  return OPENING_BALANCE_FIELD_NAMES.some((field) => field in value);
+}
+
+function removeOpeningBalanceFields<T extends Record<string, unknown>>(value: T): T {
+  const cleaned = { ...value };
+
+  for (const field of OPENING_BALANCE_FIELD_NAMES) {
+    delete cleaned[field];
+  }
+
+  return cleaned as T;
+}
 export function registerRawCreateTool(
   server: ServerType,
   toolName: string,
@@ -37,22 +62,45 @@ export function registerRawCreateTool(
     },
     async ({ companyName, payload }) => {
       let finalPayload = unwrapPayload(payload as Record<string, unknown>);
+      const openingBalanceIgnored =
+        (path === "/v1/customers" || path === "/v1/suppliers") &&
+        hasOpeningBalanceFields(finalPayload);
+    
+      if (openingBalanceIgnored) {
+        finalPayload = removeOpeningBalanceFields(finalPayload);
+      }
+    
       if (path === "/v1/products") finalPayload = buildProductPayload(finalPayload);
       if (path === "/v1/customers") finalPayload = buildCustomerLikePayload(finalPayload, 1);
       if (path === "/v1/suppliers") finalPayload = buildCustomerLikePayload(finalPayload, 3);
+
       if (path === "/v1/bankAccounts") finalPayload = buildBankAccountPayload(finalPayload);
       if (path === "/v1/cashReceipts") {
         const vatOnCashEnabled = await isVatOnCashReceiptEnabled(companyName);
         finalPayload = buildCashReceiptPayload(finalPayload, { vatOnCashEnabled });
       }
 
-      const response = await brcJsonRequest(companyName, "POST", path, finalPayload);
+      const emailNameCheck =
+  path === "/v1/customers" || path === "/v1/suppliers"
+    ? checkCustomerNameEmailMatch({
+        name: finalPayload.name ?? finalPayload.Name,
+        email: finalPayload.email ?? finalPayload.Email,
+      })
+    : { status: "not_checked" as const };
 
+      const response = await brcJsonRequest(companyName, "POST", path, finalPayload);
       return jsonResponse({
-        message: "Create request sent to BRC.",
+        message: openingBalanceIgnored
+          ? "Create request sent to BRC. Opening balance was not included because opening balances cannot currently be created or updated through Red Connect."
+          : "Create request sent to BRC.",
         companyName,
         endpoint: `POST ${path}`,
         payloadSent: finalPayload,
+        openingBalanceWarning: openingBalanceIgnored
+          ? "Opening balances must be entered directly in Big Red Cloud after the customer/supplier record is created."
+          : undefined,
+          dataQualityWarnings:
+  emailNameCheck.status === "warning" ? [emailNameCheck.message] : [],
         response,
       });
     }
@@ -85,7 +133,16 @@ export function registerRawUpdateTool(
         throw new Error(`Could not read ${label} ${id} before update.`);
       }
 
-      const mergeUpdates = unwrapPayload((updates ?? payloadAlias ?? {}) as Record<string, unknown>);
+      let mergeUpdates = unwrapPayload((updates ?? payloadAlias ?? {}) as Record<string, unknown>);
+
+      const openingBalanceIgnored =
+        (path === "/v1/customers" || path === "/v1/suppliers") &&
+        hasOpeningBalanceFields(mergeUpdates);
+
+      if (openingBalanceIgnored) {
+        mergeUpdates = removeOpeningBalanceFields(mergeUpdates);
+      }
+
       let payload = {
         ...(cloneJson(current) as JsonRecord),
         ...mergeUpdates,
@@ -114,12 +171,16 @@ export function registerRawUpdateTool(
         companyName,
         `${path}/${encodeURIComponent(String(id))}`
       );
-
       return jsonResponse({
-        message: `${label} updated using merged MCP payload.`,
+        message: openingBalanceIgnored
+          ? `${label} updated using merged MCP payload. Opening balance was not changed because opening balances cannot currently be created or updated through Red Connect.`
+          : `${label} updated using merged MCP payload.`,
         companyName,
         endpoint: `PUT ${path}/${id}`,
         payloadSent: payload,
+        openingBalanceWarning: openingBalanceIgnored
+          ? "Opening balances must be entered directly in Big Red Cloud."
+          : undefined,
         updateResponse,
         verification,
       });

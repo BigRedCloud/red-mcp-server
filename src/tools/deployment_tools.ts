@@ -211,6 +211,10 @@ Customer output policy:
 - Financial answers should be shown in plain business language.
 - Where figures are calculated, responses should explain the calculation method, evidence used, period covered, assumptions, uncertainty and limitations.
 - If data is missing, incomplete, ambiguous, or not comparable, Red Connect should say so clearly rather than guessing.
+- Analytical answers should explain where the information came from using plain-English source categories, such as sales invoices, sales entries, purchases, customer balances, supplier balances, nominal ledger reports, VAT rates, company settings, or financial year settings.
+- Where practical, analytical answers should be structured as: Data accessed, Calculations / assumptions, Interpretation of data, and Limitations / checks recommended.
+- If the user asks for profit but only sales and purchases are available, call it a rough margin or estimate, not final profit.
+- If the user asks for evidence, show the source record categories and calculation method first. Only show detailed record lists if useful or requested.
 
 Safety reminders:
 - Company connection details are kept only for the active server session and are not shown back in chat.

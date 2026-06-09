@@ -652,4 +652,30 @@ export function clearRedConnectAuditLog(): number {
   redConnectAuditLog.length = 0;
   return clearedCount;
 }
-
+//requested by SM
+export function evidenceAnalysisResponse(args: {
+  title?: string;
+  dataAccessed: string[];
+  calculationsOrAssumptions: string[];
+  interpretation: string[];
+  limitations: string[];
+}) {
+  return textResponse(
+    [
+      args.title ? `# ${args.title}` : "",
+      "## Data accessed",
+      ...args.dataAccessed.map((x) => `- ${x}`),
+      "",
+      "## Calculations / assumptions",
+      ...args.calculationsOrAssumptions.map((x) => `- ${x}`),
+      "",
+      "## Interpretation of data",
+      ...args.interpretation.map((x) => `- ${x}`),
+      "",
+      "## Limitations / checks recommended",
+      ...args.limitations.map((x) => `- ${x}`),
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+}
