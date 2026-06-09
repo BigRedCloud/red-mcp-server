@@ -1,0 +1,15 @@
+BRC MCP READ-ONLY TOOLS TEST SUMMARY
+===================================
+Company: Company C
+Read-only tools tested: 66
+Write tools excluded: 60
+Total invocations: 70
+PASS: 69
+FAIL: 0
+SKIPPED: 1
+MISSING: 0
+
+Failures:
+
+Skipped:
+- brc_get_company_logo: Optional; company may not have a logo configured.
