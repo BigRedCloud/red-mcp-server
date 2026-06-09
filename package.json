@@ -1,0 +1,37 @@
+{
+  "name": "brc-company-mcp-server",
+  "version": "1.4.0",
+  "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
+  "type": "module",
+  "bin": {
+    "brc-company-mcp-server": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postinstall": "npm run build",
+    "start": "node build/remote.js",
+    "start:local": "node build/index.js",
+    "dev": "tsx src/remote.ts",
+    "dev:local": "tsx src/index.ts",
+    "test:readonly": "node scripts/tests/test_readonly_tools.mjs",
+    "test:dev": "node scripts/tests/dev-only/dev_test.mjs",
+    "leftovers:scan": "node scripts/tests/dev-only/company_leftovers.mjs scan",
+    "leftovers:delete": "node scripts/tests/dev-only/company_leftovers.mjs delete"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "cors": "^2.8.6",
+    "dotenv": "latest",
+    "express": "^5.2.1",
+    "readline-sync": "^1.4.10",
+    "typescript": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "latest",
+    "@types/readline-sync": "^1.4.8",
+    "tsx": "latest"
+  }
+}
