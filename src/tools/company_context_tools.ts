@@ -33,7 +33,7 @@ export function registerCompanyContextTools(server: ServerType) {
           apiKeyMustNotBeRepeatedInChat: true,
           message: connected
             ? API_KEY_REFUSAL_MESSAGE
-            : `No API key is stored for "${companyName.trim()}" in this session. ${API_KEY_REFUSAL_MESSAGE}`,
+            : `This company is not connected in this session. ${API_KEY_REFUSAL_MESSAGE}`,
         });
       }
 

@@ -13,16 +13,26 @@ This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP al
 - Do not ask them to add tools to an allowlist or change Run Mode settings.
 - Do not name MCP tools when asking permission — describe the business action instead.
 
+## Connection before company data
+
+- Treat the company API key like a password.
+- Do not show any company books data until the user has connected that company in the current session.
+- If they ask for records (bank accounts, customers, invoices, balances, etc.) and no company is connected, ask them to connect by providing a company name and API key — do not show data from memory, prior runs, test reports, or cached results.
+- When no company is connected, keep connect prompts generic. Do not echo a company name from their question (e.g. not "provide the Company C API key").
+- Only show company records retrieved live in the current connected session.
+
 ## When to proceed vs confirm
 
 | Action | Behaviour |
 |--------|-----------|
-| Read-only lookups (lists, summaries, readiness, balances, reports) | Proceed immediately — no confirmation |
+| Read-only lookups (lists, summaries, readiness, balances, reports) | Proceed immediately once the company is connected — no confirmation |
 | Connecting a company (user provides key) | Store the key; confirm only that connection succeeded |
 | Create, update, delete, batch, or email company data | Summarise the change in plain English and ask for explicit yes/no |
 
 ## Wording examples
 
+- Good: "To continue, please connect a company by providing its name and API key."
+- Bad: "Please provide the Company C API key to connect."
 - Good: "Shall I create customer **TESTRO** with code **TESTRO**?"
 - Bad: "Can I run brc_create_customer?"
 - Bad: "Please allow this tool to proceed."

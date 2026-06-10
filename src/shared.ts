@@ -64,13 +64,19 @@ export function getApiKeyForCompany(companyName: string): string {
       [
         `No API key is currently stored for "${companyName}" in MCP server memory.`,
         "",
-        "To continue, ask the user to connect the company again and provide the API key (do not display or repeat any key value in chat).",
+        "To continue, ask the user to connect by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt (do not display or repeat any key value in chat).",
       ].join("\n")
     );
   }
 
   if (context.expiresAt < Date.now()) {
-    throw new Error(`API key for "${companyName}" has expired. Please provide it again in order to continue this session.`);
+    throw new Error(
+      [
+        `API key for "${companyName}" has expired.`,
+        "",
+        "To continue, ask the user to connect again by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt.",
+      ].join("\n")
+    );
   }
   
   assertApiKeyAllowed(context.apiKey);  
