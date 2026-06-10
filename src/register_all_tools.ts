@@ -16,6 +16,7 @@ import { registerSalesEntryInvoiceTools } from "./tools/sales_entry_inv_tools.js
 import { registerSupplierTools } from "./tools/supplier_tools.js";
 import { registerSalesVatTools } from "./tools/vat_sales_tools.js";
 import { registerBankListTools } from "./tools/under-development/bank_tools.js";
+import { registerEmailTools } from "./tools/email_tools.js";
 
 import { getDisabledSkillMessage,getToolSkillGroup, isToolEnabled } from "./server_config.js";
 
@@ -79,4 +80,5 @@ export function registerAllTools(server: McpServer): void {
   registerSalesVatTools(filteredServer);
   registerDeploymentTools(filteredServer);
   registerAuditTools(filteredServer);
+  registerEmailTools(filteredServer);
 }

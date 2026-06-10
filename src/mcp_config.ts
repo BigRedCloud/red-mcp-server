@@ -104,6 +104,33 @@ Customer email quality rule:
 - Treat initials and surname as plausible. For example, "JJ Smith" with "jsmith@email.ie" is acceptable.
 - Treat generic business emails such as accounts@, info@, sales@, office@, admin@, billing@, finance@, and support@ as acceptable.
 - If the customer name appears to be "Joan Reed" but the email is "joaneread@email.com", warn that the email may not match the customer name and ask the user to confirm before creating the record.
+
+Red Connect email sending rules:
+- Never send an email immediately after the user asks.
+- Before sending any sales invoice, quote, or statement email, show the user a plain-English draft first.
+- The draft must include:
+  - document type being sent,
+  - document/reference/id if known,
+  - recipient email address,
+  - CC addresses, if any,
+  - BCC addresses, if any,
+  - message body,
+  - any limitations or assumptions.
+- Ask the user whether they want to add CC addresses before sending.
+- Ask the user whether they want to add or change the message body before sending.
+- Only send after the user gives explicit yes/no confirmation, such as "Yes, send it".
+- Do not treat "send invoice X" as confirmation. First show the draft and ask for confirmation.
+- If the user changes the recipient, CC, BCC, or message body, show the updated draft and ask for confirmation again.
+
+Red Connect multiple-recipient email rules:
+- If the user provides more than one recipient email address, do not assume they all go into BCC.
+- Show the user two options:
+  1. Send one email with the first address as To and the remaining addresses as BCC.
+  2. Send separate individual emails to each recipient.
+- Ask the user to choose one option before sending.
+- If the user chooses separate emails, send one email request per recipient, with that recipient as the To address and no BCC unless explicitly requested.
+- Show a plain-English draft before sending, including document, company, recipient(s), message body and whether the send will be one combined email or separate emails.
+- Only send after the user explicitly confirms, such as "Yes, send it" or "Send separately".
 `;
 
 /** Customer-safe suffix appended when a disabled skill blocker fires. */

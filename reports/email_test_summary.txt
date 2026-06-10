@@ -1,0 +1,9 @@
+BRC EMAIL TOOLS TEST SUMMARY
+============================
+Company: Company C
+To address: laurendwyer@gmail.com
+From address: lauren.dwyer@bigredbook.com
+PASS: 8
+FAIL: 0
+
+Failures:

@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { brcJsonRequest, companyNameSchema, jsonResponse } from "../../shared.js";
 const optionalEmailFields = {
+    fromAddress: z
+        .string()
+        .optional()
+        .describe("Optional sender address override."),
     toAddress: z
         .string()
         .optional()
@@ -18,6 +22,8 @@ function requireConfirmSend(confirmSend) {
     }
 }
 function applyOptionalEmailFields(payload, fields) {
+    if (fields.fromAddress !== undefined)
+        payload.fromAddress = fields.fromAddress;
     if (fields.bccAddresses !== undefined)
         payload.bccAddresses = fields.bccAddresses;
     if (fields.messageBody !== undefined)
@@ -40,7 +46,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
         ...extraShape,
         ...optionalEmailFields,
     }, async (args) => {
-        const { companyName, toAddress, bccAddresses, messageBody, confirmSend, ...rest } = args;
+        const { companyName, fromAddress, toAddress, bccAddresses, messageBody, confirmSend, ...rest } = args;
         requireConfirmSend(Boolean(confirmSend));
         const payload = {
             [idField]: rest[idField],
@@ -51,6 +57,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
                 payload[key] = rest[key];
         }
         applyOptionalEmailFields(payload, {
+            fromAddress: fromAddress,
             bccAddresses: bccAddresses,
             messageBody: messageBody,
         });
@@ -68,7 +75,7 @@ export function registerEmailTools(server) {
             .string()
             .optional()
             .describe("Statement period end (ISO date-time, e.g. 2026-05-31T00:00:00)."),
-        minimumBalance: z
+        minBalance: z
             .number()
             .optional()
             .describe("Minimum balance threshold for transactions included on the statement."),

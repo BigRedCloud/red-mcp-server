@@ -14,6 +14,7 @@
     "dev": "tsx src/remote.ts",
     "dev:local": "tsx src/index.ts",
     "test:readonly": "node scripts/tests/test_readonly_tools.mjs",
+    "test:email": "node scripts/tests/dev-only/test_email_tools.mjs",
     "test:dev": "node scripts/tests/dev-only/dev_test.mjs",
     "leftovers:scan": "node scripts/tests/dev-only/company_leftovers.mjs scan",
     "leftovers:delete": "node scripts/tests/dev-only/company_leftovers.mjs delete"
