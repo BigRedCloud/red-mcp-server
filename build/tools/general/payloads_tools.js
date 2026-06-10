@@ -513,24 +513,28 @@ export function buildQuotePayload(args) {
 export function buildBankAccountPayload(args) {
     const acCode = asString(args.acCode ?? args.code);
     const details = asString(args.details ?? args.name ?? args.accountName);
-    const nominalAcCode = asString(args.nominalAcCode ?? args.accountCode);
-    const lastChq = asString(args.lastChq, "000001");
+    const nominalAcCode = asString(args.nominalAcCode ?? args.accountCode ?? args.accountAcCode);
+    const lastChq = asString(args.lastChq);
     const categoryId = asNumber(args.categoryId);
     const balance = asNumber(args.balance ?? args.oBalance, 0);
-    if (!acCode || !details || !nominalAcCode || !categoryId) {
-        throw new Error("Bank account create requires acCode, details, nominalAcCode and categoryId. " +
-            "Use an existing Bank Payments categoryId and a nominal account already linked for bank use in BRC.");
+    if (!acCode || !details || !nominalAcCode || !lastChq) {
+        throw new Error("Bank account create requires acCode, details, nominalAcCode and lastChq. " +
+            "The nominalAcCode must be an existing nominal account code in Big Red Cloud.");
     }
     return {
         id: asNumber(args.id, 0),
         acCode,
         details,
         lastChq,
-        nominalAcCode,
-        categoryId,
+        isDefaultBank: Boolean(args.isDefaultBank ?? false),
         balance,
         oBalance: balance,
-        isDefaultBank: Boolean(args.isDefaultBank ?? false),
+        ...(categoryId ? { categoryId } : {}),
+        // BRC bank account API requires an Account object.
+        // Swagger confirms this works as: account: { acCode: "8101" }
+        account: {
+            acCode: nominalAcCode,
+        },
         address: asStringArray(args.address),
         accountName: asString(args.accountName, details),
         businessIdentifierCode: asString(args.businessIdentifierCode ?? args.businessIdentifierCodes),

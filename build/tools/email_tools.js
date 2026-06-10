@@ -30,11 +30,13 @@ const optionalEmailFields = {
         .default(false)
         .describe("Must be true only after the user has reviewed the email draft and explicitly confirmed sending."),
 };
+//normalise the email list to an array of unique email addresses
 function normaliseEmailList(args) {
     const emails = [];
     if (typeof args.toAddress === "string" && args.toAddress.trim()) {
         emails.push(args.toAddress.trim());
     }
+    //if the toAddresses is an array, add each email to the list
     if (Array.isArray(args.toAddresses)) {
         for (const value of args.toAddresses) {
             if (typeof value === "string" && value.trim()) {
@@ -44,6 +46,7 @@ function normaliseEmailList(args) {
     }
     return [...new Set(emails)];
 }
+//build the text for the multi-recipient choice
 function buildMultiRecipientChoiceText(args) {
     return textResponse([
         "Email draft — not sent yet",
@@ -131,14 +134,20 @@ async function sendEmail(companyName, path, payload) {
 function registerEmailSendTool(server, toolName, description, path, idField, idSchema, extraShape = {}) {
     server.tool(toolName, description, {
         companyName: companyNameSchema,
+        //the id field is the id of the document to send the email for
         [idField]: idSchema.describe(`BRC field: ${idField}.`),
         ...extraShape,
         ...optionalEmailFields,
-    }, async (args) => {
+    }, 
+    //pass the user's arguments to the function
+    async (args) => {
         const { companyName, fromAddress, toAddress, toAddresses, sendMode, bccAddresses, messageBody, confirmSend, ...rest } = args;
         const documentLabel = `${idField} ${String(rest[idField])}`;
+        //normalise the email list to an array of unique email addresses
         const recipients = normaliseEmailList({ toAddress, toAddresses });
+        //parse the send mode
         const parsedSendMode = sendMode;
+        //if the user has provided multiple recipient addresses and no send mode, build the text for the multi-recipient choice
         if (recipients.length > 1 && !parsedSendMode) {
             return buildMultiRecipientChoiceText({
                 documentLabel,
@@ -146,6 +155,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
                 messageBody: typeof messageBody === "string" ? messageBody : undefined,
             });
         }
+        //build the combined BCC addresses
         const combinedBcc = parsedSendMode === "single_with_bcc" && recipients.length > 1
             ? [
                 ...recipients.slice(1),
@@ -156,6 +166,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
             : Array.isArray(bccAddresses)
                 ? bccAddresses
                 : undefined;
+        //if the user has not confirmed the email, build the text for the email draft
         if (!Boolean(confirmSend)) {
             return buildEmailDraftText({
                 documentLabel,
@@ -171,6 +182,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
                 separateRecipients: parsedSendMode === "separate" ? recipients : undefined,
             });
         }
+        //if the user has confirmed the email and the send mode is separate, send the email to each recipient separately
         if (parsedSendMode === "separate" && recipients.length > 1) {
             const results = [];
             for (const recipient of recipients) {
@@ -211,6 +223,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
                     ? toAddress
                     : "",
         };
+        //apply the extra fields to the payload
         for (const key of Object.keys(extraShape)) {
             if (rest[key] !== undefined) {
                 payload[key] = rest[key];
@@ -225,6 +238,7 @@ function registerEmailSendTool(server, toolName, description, path, idField, idS
     });
 }
 export function registerEmailTools(server) {
+    //common email rules
     const commonEmailRule = "Do not call this tool with confirmSend=true until the user has reviewed a plain-English email draft and explicitly confirmed they want to send it. If the user provides multiple recipient addresses, ask whether to send one email using BCC or separate individual emails. Only use sendMode='separate' when the user explicitly chooses separate emails. Do not ask about BCC unless the user provides multiple recipients or asks to copy another address.";
     registerEmailSendTool(server, "brc_send_sales_invoice_email", `Sends a sales invoice email. ${commonEmailRule}`, "/v1/email/sendSalesInvoice", "salesInvoiceId", z.number().int().positive());
     registerEmailSendTool(server, "brc_send_email_statement", `Sends a customer statement email. ${commonEmailRule}`, "/v1/email/sendEmailStatement", "customerId", z.number().int().positive(), {
