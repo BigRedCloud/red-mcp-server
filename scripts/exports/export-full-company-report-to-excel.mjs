@@ -3,11 +3,11 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as XLSX from "xlsx";
+import { getApiKeyExpirationMs } from "../../build/server_config.js";
 import {
   brcFetch,
   companyApiContexts,
   extractListItems,
-  EXPIRATION_TIME,
   normaliseCompanyName,
 } from "../../build/shared.js";
 
@@ -68,7 +68,7 @@ function registerCompany(name, key) {
   companyApiContexts.set(normaliseCompanyName(name), {
     companyName: name,
     apiKey: key,
-    expiresAt: Date.now() + EXPIRATION_TIME,
+    expiresAt: Date.now() + getApiKeyExpirationMs(),
   });
 }
 

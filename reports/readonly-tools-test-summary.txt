@@ -2,7 +2,7 @@ BRC MCP READ-ONLY TOOLS TEST SUMMARY
 ===================================
 Company: Company C
 Read-only tools tested: 66
-Write tools excluded: 60
+Write tools excluded: 66
 Total invocations: 70
 PASS: 69
 FAIL: 0

@@ -16,23 +16,14 @@ import { registerSupplierTools } from "./tools/supplier_tools.js";
 import { registerSalesVatTools } from "./tools/vat_sales_tools.js";
 import { registerBankTools } from "./tools/bank_tools.js";
 import { registerEmailTools } from "./tools/email_tools.js";
-import { getDisabledSkillMessage, getToolSkillGroup, isToolEnabled } from "./server_config.js";
+import { getToolSkillGroup, isToolEnabled } from "./server_config.js";
 function createFilteredServer(server) {
     const originalTool = server.tool.bind(server);
     const filteredServer = Object.create(server);
     filteredServer.tool = (toolName, ...args) => {
         if (!isToolEnabled(toolName)) {
-            console.warn(`Red Connect: registering disabled ${getToolSkillGroup(toolName)} blocker for "${toolName}".`);
-            const description = "This Red Connect action is disabled in the current deployment. It returns a permission message and does not call Big Red Cloud. Assistants must not change deployment configuration to enable it.";
-            const emptySchema = {};
-            return originalTool(toolName, description, emptySchema, async () => ({
-                content: [
-                    {
-                        type: "text",
-                        text: getDisabledSkillMessage(toolName),
-                    },
-                ],
-            }));
+            console.warn(`Red Connect: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`);
+            return undefined;
         }
         return originalTool(toolName, ...args);
     };

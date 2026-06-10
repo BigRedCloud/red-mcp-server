@@ -9,7 +9,7 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../shared.js";
-  import{buildQuotePayload} from "./general/payloads_tools.js";
+  import{buildQuotePayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} from "./general/payloads_tools.js";
 
   export function registerQuoteTools(server:ServerType){
 
@@ -25,8 +25,8 @@ const quoteSchemaBase = {
     entryDate: z.string(),
     procDate: z.string(),
     vatTypeId: z.number().int().positive().optional(),
-    saleRepId: z.number().int().positive().optional(),
-    saleRepCode: z.string().optional(),
+    saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
+    saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
     reference: z.string().optional(),
     poNumber: z.string().optional(),
     ddNumber: z.string().optional(),
@@ -44,7 +44,7 @@ const quoteSchemaBase = {
   
   server.tool(
     "brc_create_quote",
-    "Creates a BRC quote using structured MCP fields.",
+    `Creates a BRC quote using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
     quoteSchemaBase,
     async ({ companyName, ...args }) => {
       const payload = buildQuotePayload(args);
@@ -59,7 +59,7 @@ const quoteSchemaBase = {
   
   server.tool(
     "brc_create_quote_gen_ref",
-    "Creates a BRC quote with a generated reference using structured MCP fields.",
+    `Creates a BRC quote with a generated reference using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
     quoteSchemaBase,
     async ({ companyName, ...args }) => {
       const payload = buildQuotePayload(args);

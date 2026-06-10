@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { assertApiKeyAllowed } from "./server_config.js";
+import { assertApiKeyAllowed, getMaxAuditEntries } from "./server_config.js";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -45,8 +45,6 @@ export function runWithSessionKeyStore<T>(
 ): T {
   return sessionKeyStorage.run(store, fn);
 }
-
-export const EXPIRATION_TIME = 10 * 60 * 1000; // 10 minutes
 
 export const companyNameSchema = z
   .string()
@@ -145,8 +143,6 @@ function parseRequestBody(init: RequestInit): unknown {
     return body;
   }
 }
-
-const MAX_AUDIT_ENTRIES = 500;
 
 export type RedConnectAuditEntry = {
   id: number;
@@ -450,8 +446,9 @@ export function recordRedConnectAuditEntry(args: {
 
   redConnectAuditLog.push(entry);
 
-  if (redConnectAuditLog.length > MAX_AUDIT_ENTRIES) {
-    redConnectAuditLog.splice(0, redConnectAuditLog.length - MAX_AUDIT_ENTRIES);
+  const maxAuditEntries = getMaxAuditEntries();
+  if (redConnectAuditLog.length > maxAuditEntries) {
+    redConnectAuditLog.splice(0, redConnectAuditLog.length - maxAuditEntries);
   }
 
   return entry;

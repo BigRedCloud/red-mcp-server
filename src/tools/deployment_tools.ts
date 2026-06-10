@@ -141,6 +141,7 @@ function deploymentPolicy() {
     mcpSession: {
       sessionStorage: "MCP server session memory",
       sessionTtlMinutes: redConnectServerConfig.sessionTtlMinutes,
+      apiKeyTtlMinutes: redConnectServerConfig.apiKeyTtlMinutes,
       apiKeyStorage: "session-memory-only",
       apiKeysReturnedInResponses: false,
       apiKeysMustNotBeRepeatedInChat: true,
@@ -159,19 +160,32 @@ function deploymentPolicy() {
       format: "SHA-256 hashes only",
     },
 
+    limits: {
+      maxBatchItems: redConnectServerConfig.maxBatchItems,
+      maxAuditEntries: redConnectServerConfig.maxAuditEntries,
+    },
+
     skillConfiguration: {
-      allowTestingSkills: redConnectServerConfig.allowTestingSkills,
       allowReadSkills: redConnectServerConfig.allowReadSkills,
       allowUpdateSkills: redConnectServerConfig.allowUpdateSkills,
       allowDeleteSkills: redConnectServerConfig.allowDeleteSkills,
+      allowEmailSkills: redConnectServerConfig.allowEmailSkills,
+      allowBatchSkills: redConnectServerConfig.allowBatchSkills,
       allowDevMode: redConnectServerConfig.allowDevMode,
       disabledSkillsHiddenFromMcpClients: true,
       cachedDisabledSkillRequestsRejected: true,
       environmentVariables: {
-        BRC_ALLOW_TESTING_SKILLS: redConnectServerConfig.allowTestingSkills,
+        BRC_MCP_SESSION_TTL_MINUTES: redConnectServerConfig.sessionTtlMinutes,
+        BRC_API_KEY_TTL_MINUTES: redConnectServerConfig.apiKeyTtlMinutes,
+        BRC_RATE_LIMIT_REQUESTS_PER_MINUTE:
+          redConnectServerConfig.rateLimitRequestsPerMinute,
+        BRC_MAX_BATCH_ITEMS: redConnectServerConfig.maxBatchItems,
+        BRC_MAX_AUDIT_ENTRIES: redConnectServerConfig.maxAuditEntries,
         BRC_ALLOW_READ_SKILLS: redConnectServerConfig.allowReadSkills,
         BRC_ALLOW_UPDATE_SKILLS: redConnectServerConfig.allowUpdateSkills,
         BRC_ALLOW_DELETE_SKILLS: redConnectServerConfig.allowDeleteSkills,
+        BRC_ALLOW_EMAIL_SKILLS: redConnectServerConfig.allowEmailSkills,
+        BRC_ALLOW_BATCH_SKILLS: redConnectServerConfig.allowBatchSkills,
         BRC_ALLOW_DEV_MODE: redConnectServerConfig.allowDevMode,
       },
     },
@@ -201,13 +215,24 @@ function customerDeploymentPolicyText() {
 
   return `Current capabilities in this Red Connect session:
 
+- Development / operator mode: ${capabilities.devModeActive ? "enabled" : "not enabled (customer/staff mode)"}
 - Reading company data: ${availability(capabilities.canReadCompanyData)}
 - Creating or changing records: ${availability(capabilities.canCreateOrUpdateRecords)}
 - Deleting records: ${availability(capabilities.canDeleteRecords)}
+- Sending invoice, quote, or statement emails: ${availability(capabilities.canSendEmails)}
+- Batch processing records: ${availability(capabilities.canBatchProcessRecords)}${
+    capabilities.canBatchProcessRecords
+      ? `\n- Maximum records per batch request: ${capabilities.maxBatchItems}`
+      : ""
+  }
 
 Customer output policy:
 - Red Connect may perform internal analysis where needed to answer business questions.
-- Customer-facing responses should not show code, scripts, JSON, MCP tool names, endpoint names, schemas, terminal commands, local file paths, temporary files, raw payloads, or implementation details.
+- Customer-facing responses should not show code, scripts, JSON, MCP tool names, endpoint names, schemas, terminal commands, local file paths, temporary files, raw payloads, or implementation details.${
+    capabilities.devModeActive
+      ? ""
+      : "\n- Dev mode is off: do not change or discuss MCP server source code, configuration, file names, or other implementation details. Help with Big Red Cloud company data only."
+  }
 - Financial answers should be shown in plain business language.
 - Where figures are calculated, responses should explain the calculation method, evidence used, period covered, assumptions, uncertainty and limitations.
 - If data is missing, incomplete, ambiguous, or not comparable, Red Connect should say so clearly rather than guessing.

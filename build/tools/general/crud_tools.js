@@ -3,8 +3,7 @@ import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFro
 import { isVatOnCashReceiptEnabled } from "../../cash_receipt_settings.js";
 import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildProductPayload, normalizeBatchItems, unwrapPayload, } from "./payloads_tools.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
-//maximum number of items allowed in a batch request
-const MAX_BATCH_ITEMS = 5;
+import { getMaxBatchItems } from "../../server_config.js";
 //Removed opening balance fields from payload --> don't prompt customer for customer opening balance because there is no API that will POST it
 const OPENING_BALANCE_FIELD_NAMES = [
     "openingBalance",
@@ -150,16 +149,15 @@ export function registerRawDeleteTool(server, toolName, description, path, label
     });
 }
 export function registerRawBatchTool(server, toolName, description, path) {
-    server.tool(toolName, `${description} Maximum ${MAX_BATCH_ITEMS} items per batch request.`, {
+    const maxBatchItems = getMaxBatchItems();
+    server.tool(toolName, `${description} Maximum ${maxBatchItems} items per batch request.`, {
         companyName: companyNameSchema,
-        //minimum 1 item, maximum MAX_BATCH_ITEMS items
         items: z.array(z.record(z.string(), z.unknown())).min(1)
-            .max(MAX_BATCH_ITEMS)
-            .describe(`Batch items to process. Maximum ${MAX_BATCH_ITEMS} items per request.`),
+            .max(maxBatchItems)
+            .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
     }, async ({ companyName, items }) => {
-        //throw an error if the number of items is greater than the maximum allowed
-        if (items.length > MAX_BATCH_ITEMS) {
-            throw new Error(`Batch limit exceeded. Red Connect allows a maximum of ${MAX_BATCH_ITEMS} items per batch request. Please split this into smaller batches.`);
+        if (items.length > maxBatchItems) {
+            throw new Error(`Batch limit exceeded. Red Connect allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`);
         }
         const vatOnCashReceiptEnabled = path === "/v1/cashReceipts" ? await isVatOnCashReceiptEnabled(companyName) : true;
         const normalizedItems = normalizeBatchItems(path, items, {

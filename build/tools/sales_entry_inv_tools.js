@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../shared.js";
-import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload } from "./general/payloads_tools.js";
+import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, requireSalesRepInPayload } from "./general/payloads_tools.js";
 export function registerSalesEntryInvoiceTools(server) {
     // Sales entry tools ----------------------------------------------------------
     server.tool("brc_create_sales_entry", "Creates a BRC sales entry using structured MCP fields.", {
@@ -55,7 +55,7 @@ export function registerSalesEntryInvoiceTools(server) {
         return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
     });
     // Sales invoice tools --------------------------------------------------------
-    server.tool("brc_create_sales_invoice", "Creates a BRC sales invoice using structured MCP fields.", {
+    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
         acCode: z.string(),
@@ -73,8 +73,8 @@ export function registerSalesEntryInvoiceTools(server) {
         productCode: z.string(),
         quantity: z.number().int().positive(),
         unitPrice: z.number().positive(),
-        saleRepId: z.number().int().positive().optional(),
-        saleRepCode: z.string().optional(),
+        saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
+        saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
         reference: z.string().optional(),
     }, async ({ companyName, ...args }) => {
         let payload;
@@ -87,15 +87,17 @@ export function registerSalesEntryInvoiceTools(server) {
             return jsonResponse({ message: "Error creating sales invoice.", companyName, endpoint: "POST /v1/salesInvoices", inputArgs: args, payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_create_sales_invoice_gen_ref", "Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload.", {
+    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
     }, async ({ companyName, payload }) => {
-        const response = await brcJsonRequest(companyName, "POST", "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference", payload);
+        const finalPayload = payload;
+        requireSalesRepInPayload(finalPayload);
+        const response = await brcJsonRequest(companyName, "POST", "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference", finalPayload);
         return jsonResponse({
             message: "Sales invoice created with generated reference.",
             companyName,
-            payloadSent: payload,
+            payloadSent: finalPayload,
             response,
         });
     });

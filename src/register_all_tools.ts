@@ -30,29 +30,10 @@ function createFilteredServer(server: McpServer): McpServer {
   filteredServer.tool = (toolName: string, ...args: any[]) => {
     if (!isToolEnabled(toolName)) {
       console.warn(
-        `Red Connect: registering disabled ${getToolSkillGroup(
-          toolName
-        )} blocker for "${toolName}".`
+        `Red Connect: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`
       );
     
-      const description =
-        "This Red Connect action is disabled in the current deployment. It returns a permission message and does not call Big Red Cloud. Assistants must not change deployment configuration to enable it.";
-    
-      const emptySchema = {};
-    
-      return originalTool(
-        toolName,
-        description,
-        emptySchema,
-        async () => ({
-          content: [
-            {
-              type: "text" as const,
-              text: getDisabledSkillMessage(toolName),
-            },
-          ],
-        })
-      );
+      return undefined as unknown;
     }
 
     return originalTool(toolName, ...args);

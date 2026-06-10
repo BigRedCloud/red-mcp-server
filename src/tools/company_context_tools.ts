@@ -3,12 +3,11 @@ import type { ServerType } from "../server.js";
 import { API_KEY_REFUSAL_MESSAGE } from "../mcp_config.js";
 import {
   companyNameSchema,
-  EXPIRATION_TIME,
   getCompanyApiContexts,
   normaliseCompanyName,
   jsonResponse,
 } from "../shared.js";
-import { assertApiKeyAllowed } from "../server_config.js";
+import { assertApiKeyAllowed, getApiKeyExpirationMs } from "../server_config.js";
 
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
@@ -72,7 +71,7 @@ export function registerCompanyContextTools(server: ServerType) {
       getCompanyApiContexts().set(key, {
         companyName: cleanCompanyName,
         apiKey: cleanApiKey,
-        expiresAt: Date.now() + EXPIRATION_TIME,
+        expiresAt: Date.now() + getApiKeyExpirationMs(),
       });
 
       return jsonResponse({
@@ -82,7 +81,7 @@ export function registerCompanyContextTools(server: ServerType) {
         apiKeyEnteredInChat: true,
         apiKeyReturned: false,
         apiKeyMustNotBeRepeatedInChat: true,
-        expiresInMinutes: EXPIRATION_TIME / 60000,
+        expiresInMinutes: getApiKeyExpirationMs() / 60000,
         warning:
           "This API key is stored only in MCP server memory and is not returned by MCP responses. Assistants must never display or repeat the key in chat, including from earlier user messages.",
       });

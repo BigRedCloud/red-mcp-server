@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { assertApiKeyAllowed } from "./server_config.js";
+import { assertApiKeyAllowed, getMaxAuditEntries } from "./server_config.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
 const globalContexts = new Map();
@@ -27,7 +27,6 @@ export const companyApiContexts = new Proxy(globalContexts, {
 export function runWithSessionKeyStore(store, fn) {
     return sessionKeyStorage.run(store, fn);
 }
-export const EXPIRATION_TIME = 10 * 60 * 1000; // 10 minutes
 export const companyNameSchema = z
     .string()
     .min(1)
@@ -107,7 +106,6 @@ function parseRequestBody(init) {
         return body;
     }
 }
-const MAX_AUDIT_ENTRIES = 500;
 const redConnectAuditLog = [];
 let redConnectAuditCounter = 1;
 const RESOURCE_LABELS = {
@@ -330,8 +328,9 @@ export function recordRedConnectAuditEntry(args) {
         responseBody: args.responseBody,
     };
     redConnectAuditLog.push(entry);
-    if (redConnectAuditLog.length > MAX_AUDIT_ENTRIES) {
-        redConnectAuditLog.splice(0, redConnectAuditLog.length - MAX_AUDIT_ENTRIES);
+    const maxAuditEntries = getMaxAuditEntries();
+    if (redConnectAuditLog.length > maxAuditEntries) {
+        redConnectAuditLog.splice(0, redConnectAuditLog.length - maxAuditEntries);
     }
     return entry;
 }

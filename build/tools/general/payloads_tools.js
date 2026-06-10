@@ -29,6 +29,36 @@ function asStringArray(value) {
         return [];
     return [String(value)];
 }
+function requireQuoteCompanyId(companyId) {
+    if (companyId === undefined || !Number.isFinite(companyId) || companyId <= 0) {
+        throw new Error("Quote payload requires companyId. Provide the connected company's id from existing records such as customers, products, or sales reps.");
+    }
+    return companyId;
+}
+export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION = "Requires saleRepId and saleRepCode. Do not use default or demo sales rep values. If missing, list sales reps or ask the user to choose one before creating.";
+export function requireSalesRepFields(saleRepId, saleRepCode) {
+    if (saleRepId === undefined ||
+        !Number.isFinite(saleRepId) ||
+        saleRepId <= 0 ||
+        saleRepCode === undefined ||
+        saleRepCode === "") {
+        throw new Error("Sales document payload requires saleRepId and saleRepCode. Choose a sales rep from brc_list_sales_reps.");
+    }
+    return { saleRepId, saleRepCode };
+}
+export function requireSalesRepInPayload(payload) {
+    requireSalesRepFields(payload.saleRepId !== undefined ? asNumber(payload.saleRepId) : undefined, payload.saleRepCode !== undefined ? asString(payload.saleRepCode) : undefined);
+}
+function requireVatRateId(value) {
+    if (value === undefined || value === null || value === "") {
+        throw new Error("Product payload requires vatRateId. Choose a VAT rate from brc_list_vat_rates for the connected company.");
+    }
+    const vatRateId = Number(value);
+    if (!Number.isFinite(vatRateId) || vatRateId <= 0) {
+        throw new Error("Product payload requires a valid vatRateId. Choose a VAT rate from brc_list_vat_rates for the connected company.");
+    }
+    return vatRateId;
+}
 export function buildProductPayload(args) {
     const code = asString(args.stockCode ?? args.code);
     const details = Array.isArray(args.details) ? asStringArray(args.details) : asStringArray(args.details ?? args.description ?? args.name);
@@ -38,7 +68,7 @@ export function buildProductPayload(args) {
         unitPrice: asNumber(args.unitPrice ?? args.price, 0),
         grossUnitPrice: Boolean(args.grossUnitPrice ?? false),
         hasDefaultVatRate: args.hasDefaultVatRate !== undefined ? Boolean(args.hasDefaultVatRate) : Boolean(args.useDefaultVatRate ?? true),
-        vatRateId: asNumber(args.vatRateId, 1596277),
+        vatRateId: requireVatRateId(args.vatRateId),
         details: details.length ? details : [code],
         vatAnalysisTypeId: asNumber(args.vatAnalysisTypeId, 1),
         productTypeId: asNumber(args.productTypeId, 4),
@@ -330,6 +360,7 @@ export function buildSalesInvoicePayload(args) {
     }
     const vat = round2(calculatedNet * (args.vatPercentage / 100));
     const total = round2(calculatedNet + vat);
+    const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     return {
         ourReference: args.ourReference ?? args.reference ?? "MCP_TEST",
         yourReference: args.yourReference ?? args.reference ?? "MCP_TEST",
@@ -361,8 +392,8 @@ export function buildSalesInvoicePayload(args) {
             },
         ],
         quoteId: 0,
-        saleRepId: args.saleRepId ?? 153528,
-        saleRepCode: args.saleRepCode ?? "9991",
+        saleRepId,
+        saleRepCode,
         useTaxInclusiveUnitPrice: false,
         customerId: args.customerId,
         reference: args.reference ?? "MCP_TEST",
@@ -457,13 +488,14 @@ export function buildQuotePayload(args) {
     const net = round2(args.quantity * args.unitPrice);
     const vat = round2(net * (args.vatPercentage / 100));
     const total = round2(net + vat);
-    const companyId = args.companyId ?? 805174;
+    const companyId = requireQuoteCompanyId(args.companyId);
+    const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     return {
         companyId,
         customerOwnerId: args.customerOwnerId,
         vatTypeId: args.vatTypeId ?? 1,
-        saleRepId: args.saleRepId ?? 153528,
-        saleRepCode: args.saleRepCode ?? "9991",
+        saleRepId,
+        saleRepCode,
         saleInvoiceId: null,
         entryDate: args.entryDate,
         procDate: args.procDate,

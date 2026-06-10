@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { BRC_MCP_SERVER_INSTRUCTIONS } from "./mcp_config.js";
+import { getBrcMcpServerInstructions } from "./mcp_config.js";
+import { getMaxBatchItems, redConnectServerConfig } from "./server_config.js";
 
 export function createBrcMcpServer(): McpServer {
   return new McpServer(
@@ -8,7 +9,10 @@ export function createBrcMcpServer(): McpServer {
       version: "1.4.0",
     },
     {
-      instructions: BRC_MCP_SERVER_INSTRUCTIONS,
+      instructions: getBrcMcpServerInstructions(
+        getMaxBatchItems(),
+        redConnectServerConfig.allowDevMode
+      ),
     }
   );
 }

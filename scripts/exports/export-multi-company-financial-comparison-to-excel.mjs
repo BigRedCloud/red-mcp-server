@@ -2,9 +2,9 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as XLSX from "xlsx";
+import { getApiKeyExpirationMs } from "../../build/server_config.js";
 import {
   companyApiContexts,
-  EXPIRATION_TIME,
   fetchAllNominalAccounts,
   round2,
   toNumber,
@@ -132,7 +132,7 @@ async function loadCompanyData(company) {
   companyApiContexts.set(company.name.trim().toLowerCase(), {
     companyName: company.name,
     apiKey: company.apiKey,
-    expiresAt: Date.now() + EXPIRATION_TIME,
+    expiresAt: Date.now() + getApiKeyExpirationMs(),
   });
 
   const nominalAccounts = await fetchAllNominalAccounts(company.name);

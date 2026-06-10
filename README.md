@@ -290,7 +290,8 @@ Deployment skill flags (see `brc_get_deployment_policy`). When a flag is off, ma
 $env:BRC_ALLOW_READ_SKILLS="true"
 $env:BRC_ALLOW_UPDATE_SKILLS="true"
 $env:BRC_ALLOW_DELETE_SKILLS="true"
-$env:BRC_ALLOW_TESTING_SKILLS="false"
+$env:BRC_ALLOW_EMAIL_SKILLS="true"
+$env:BRC_ALLOW_BATCH_SKILLS="true"
 # Exposes operator-only diagnostics (brc_get_dev_mode_details); off for customers
 $env:BRC_ALLOW_DEV_MODE="false"
 ```

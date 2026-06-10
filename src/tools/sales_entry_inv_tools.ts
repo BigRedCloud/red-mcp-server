@@ -9,7 +9,7 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../shared.js";
-  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload} from "./general/payloads_tools.js";
+  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, requireSalesRepInPayload} from "./general/payloads_tools.js";
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
 // Sales entry tools ----------------------------------------------------------
@@ -82,7 +82,7 @@ server.tool(
   
   server.tool(
     "brc_create_sales_invoice",
-    "Creates a BRC sales invoice using structured MCP fields.",
+    `Creates a BRC sales invoice using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       customerId: z.number().int().positive(),
@@ -101,8 +101,8 @@ server.tool(
       productCode: z.string(),
       quantity: z.number().int().positive(),
       unitPrice: z.number().positive(),
-      saleRepId: z.number().int().positive().optional(),
-      saleRepCode: z.string().optional(),
+      saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
+      saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
       reference: z.string().optional(),
     },
     async ({ companyName, ...args }) => {
@@ -118,23 +118,25 @@ server.tool(
   );
   server.tool(
     "brc_create_sales_invoice_gen_ref",
-    "Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload.",
+    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       payload: z.record(z.string(),z.unknown()),
     },
     async ({ companyName, payload }) => {
+      const finalPayload = payload as Record<string, unknown>;
+      requireSalesRepInPayload(finalPayload);
       const response = await brcJsonRequest(
         companyName,
         "POST",
         "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
-        payload
+        finalPayload
       );
   
       return jsonResponse({
         message: "Sales invoice created with generated reference.",
         companyName,
-        payloadSent: payload,
+        payloadSent: finalPayload,
         response,
       });
     }

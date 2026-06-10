@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../shared.js";
-import { buildQuotePayload } from "./general/payloads_tools.js";
+import { buildQuotePayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION } from "./general/payloads_tools.js";
 export function registerQuoteTools(server) {
     // Quote tools ----------------------------------------------------------------
     const quoteSchemaBase = {
@@ -13,8 +13,8 @@ export function registerQuoteTools(server) {
         entryDate: z.string(),
         procDate: z.string(),
         vatTypeId: z.number().int().positive().optional(),
-        saleRepId: z.number().int().positive().optional(),
-        saleRepCode: z.string().optional(),
+        saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
+        saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
         reference: z.string().optional(),
         poNumber: z.string().optional(),
         ddNumber: z.string().optional(),
@@ -29,7 +29,7 @@ export function registerQuoteTools(server) {
         analysisCategoryId: z.number().int().positive(),
         accountCode: z.string().optional(),
     };
-    server.tool("brc_create_quote", "Creates a BRC quote using structured MCP fields.", quoteSchemaBase, async ({ companyName, ...args }) => {
+    server.tool("brc_create_quote", `Creates a BRC quote using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, ...args }) => {
         const payload = buildQuotePayload(args);
         try {
             const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes", payload);
@@ -39,7 +39,7 @@ export function registerQuoteTools(server) {
             return jsonResponse({ message: "Error creating quote.", companyName, endpoint: "POST /v1/quotes", payloadSent: payload, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_create_quote_gen_ref", "Creates a BRC quote with a generated reference using structured MCP fields.", quoteSchemaBase, async ({ companyName, ...args }) => {
+    server.tool("brc_create_quote_gen_ref", `Creates a BRC quote with a generated reference using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, ...args }) => {
         const payload = buildQuotePayload(args);
         try {
             const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes/createQuoteWithGeneratingReference", payload);

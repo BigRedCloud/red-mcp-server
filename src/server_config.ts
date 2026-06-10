@@ -1,5 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { RED_CONNECT_DISABLED_ACTION_USER_MESSAGE } from "./mcp_config.js";
+
+/** Customer-safe suffix appended when a disabled skill blocker fires. */
+export const RED_CONNECT_DISABLED_ACTION_USER_MESSAGE = [
+  "",
+  "You can still review data here, prepare a draft, or complete the action directly in Big Red Cloud if appropriate.",
+].join("\n");
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const value = process.env[name];
@@ -15,6 +20,14 @@ function envNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
+function envNumberCapped(
+  name: string,
+  defaultValue: number,
+  maxValue: number
+): number {
+  return Math.min(envNumber(name, defaultValue), maxValue);
+}
+
 function envList(name: string): string[] {
   return (process.env[name] ?? "")
     .split(",")
@@ -22,30 +35,50 @@ function envList(name: string): string[] {
     .filter(Boolean);
 }
 
+const MAX_BATCH_ITEMS_CAP = 10;
+
 export const redConnectServerConfig = {
   sessionTtlMinutes: envNumber("BRC_MCP_SESSION_TTL_MINUTES", 10),
+  apiKeyTtlMinutes: envNumber("BRC_API_KEY_TTL_MINUTES", 10),
 
   rateLimitRequestsPerMinute: envNumber(
     "BRC_RATE_LIMIT_REQUESTS_PER_MINUTE",
     100
   ),
 
-  allowTestingSkills: envFlag("BRC_ALLOW_TESTING_SKILLS", false),
+  maxBatchItems: envNumberCapped("BRC_MAX_BATCH_ITEMS", 5, MAX_BATCH_ITEMS_CAP),
+  maxAuditEntries: envNumber("BRC_MAX_AUDIT_ENTRIES", 500),
+
   allowReadSkills: envFlag("BRC_ALLOW_READ_SKILLS", true),
   allowUpdateSkills: envFlag("BRC_ALLOW_UPDATE_SKILLS", true),
   allowDeleteSkills: envFlag("BRC_ALLOW_DELETE_SKILLS", true),
+  allowEmailSkills: envFlag("BRC_ALLOW_EMAIL_SKILLS", true),
+  allowBatchSkills: envFlag("BRC_ALLOW_BATCH_SKILLS", true),
   allowDevMode: envFlag("BRC_ALLOW_DEV_MODE", false),
 
   apiKeyBlacklistSha256: envList("BRC_API_KEY_BLACKLIST_SHA256"),
 };
 
+export function getApiKeyExpirationMs(): number {
+  return redConnectServerConfig.apiKeyTtlMinutes * 60 * 1000;
+}
+
+export function getMaxBatchItems(): number {
+  return redConnectServerConfig.maxBatchItems;
+}
+
+export function getMaxAuditEntries(): number {
+  return redConnectServerConfig.maxAuditEntries;
+}
+
 export type RedConnectSkillGroup =
   | "session"
-  | "testing"
   | "dev"
   | "read"
   | "update"
-  | "delete";
+  | "delete"
+  | "email"
+  | "batch";
 
 const SESSION_TOOL_NAMES = new Set([
   "brc_set_company_api_key",
@@ -57,29 +90,24 @@ const SESSION_TOOL_NAMES = new Set([
   "brc_get_deployment_policy",
 ]);
 
-const TESTING_TOOL_NAMES = new Set<string>([
-  // Add future dev-only MCP tools here if needed.
-]);
-
 const DEV_TOOL_NAMES = new Set<string>(["brc_get_dev_mode_details"]);
 
 function classifyTool(toolName: string): RedConnectSkillGroup {
   if (SESSION_TOOL_NAMES.has(toolName)) return "session";
-  if (TESTING_TOOL_NAMES.has(toolName)) return "testing";
   if (DEV_TOOL_NAMES.has(toolName)) return "dev";
 
   if (toolName.startsWith("brc_delete_")) return "delete";
+  if (toolName.startsWith("brc_batch_")) return "batch";
+  if (toolName.startsWith("brc_send_")) return "email";
 
   if (
     toolName.startsWith("brc_create_") ||
     toolName.startsWith("brc_update_") ||
-    toolName.startsWith("brc_batch_") ||
     toolName.includes("_gen_ref") ||
     toolName.includes("generate") ||
     toolName.includes("process") ||
     toolName.includes("close") ||
-    toolName.includes("reopen") ||
-    toolName.includes("send_")
+    toolName.includes("reopen")
   ) {
     return "update";
   }
@@ -93,8 +121,6 @@ export function isToolEnabled(toolName: string): boolean {
   switch (group) {
     case "session":
       return true;
-    case "testing":
-      return redConnectServerConfig.allowTestingSkills;
     case "dev":
       return redConnectServerConfig.allowDevMode;
     case "read":
@@ -103,6 +129,10 @@ export function isToolEnabled(toolName: string): boolean {
       return redConnectServerConfig.allowUpdateSkills;
     case "delete":
       return redConnectServerConfig.allowDeleteSkills;
+    case "email":
+      return redConnectServerConfig.allowEmailSkills;
+    case "batch":
+      return redConnectServerConfig.allowBatchSkills;
     default:
       return false;
   }
@@ -118,7 +148,11 @@ export function getCustomerDeploymentCapabilities() {
     canReadCompanyData: redConnectServerConfig.allowReadSkills,
     canCreateOrUpdateRecords: redConnectServerConfig.allowUpdateSkills,
     canDeleteRecords: redConnectServerConfig.allowDeleteSkills,
+    canSendEmails: redConnectServerConfig.allowEmailSkills,
+    canBatchProcessRecords: redConnectServerConfig.allowBatchSkills,
     devModeActive: redConnectServerConfig.allowDevMode,
+    apiKeyTtlMinutes: redConnectServerConfig.apiKeyTtlMinutes,
+    maxBatchItems: redConnectServerConfig.maxBatchItems,
   };
 }
 
@@ -159,7 +193,7 @@ export function getDisabledSkillMessage(toolName: string): string {
       return [
         "This action is not available in the current Red Connect deployment.",
         "",
-        "Creating, updating, batch processing, generating, closing, reopening, or emailing records has been disabled by the server administrator.",
+        "Creating, updating, generating, closing, reopening, or processing records has been disabled by the server administrator.",
         "",
         "You can still use read-only tools to view records, check company readiness, or prepare details for review.",
         RED_CONNECT_DISABLED_ACTION_USER_MESSAGE,
@@ -176,12 +210,26 @@ export function getDisabledSkillMessage(toolName: string): string {
         RED_CONNECT_DISABLED_ACTION_USER_MESSAGE,
       ].join("\n");
     }
-  
-    if (group === "testing") {
+
+    if (group === "email") {
       return [
-        "This testing action is not available in the current Red Connect deployment.",
+        "This action is not available in the current Red Connect deployment.",
         "",
-        "Testing tools are only available in approved internal QA environments.",
+        "Sending sales invoice, quote, or statement emails has been disabled by the server administrator.",
+        "",
+        "You can still view the document and prepare a draft message for review.",
+        RED_CONNECT_DISABLED_ACTION_USER_MESSAGE,
+      ].join("\n");
+    }
+
+    if (group === "batch") {
+      return [
+        "This action is not available in the current Red Connect deployment.",
+        "",
+        "Batch processing has been disabled by the server administrator.",
+        "",
+        "You can still create or update records one at a time where that is enabled, or prepare batch details for review.",
+        RED_CONNECT_DISABLED_ACTION_USER_MESSAGE,
       ].join("\n");
     }
 

@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, round2, } from "../shared.js";
+import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../shared.js";
+import { buildSalesCreditNotePayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, requireSalesRepInPayload } from "./general/payloads_tools.js";
 export function registerSalesCreditNoteAndRepTools(server) {
     // Sales credit note tools ----------------------------------------------------
-    server.tool("brc_create_sales_credit_note", "Creates a BRC sales credit note using structured MCP fields.", {
+    server.tool("brc_create_sales_credit_note", `Creates a BRC sales credit note using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
         acCode: z.string(),
@@ -20,81 +21,31 @@ export function registerSalesCreditNoteAndRepTools(server) {
         productCode: z.string(),
         quantity: z.number().positive(),
         unitPrice: z.number().positive(),
-        saleRepId: z.number().int().positive().optional(),
-        saleRepCode: z.string().optional(),
+        saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
+        saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
         reference: z.string().optional(),
-    }, async (args) => {
-        const { companyName } = args;
-        const net = -round2(args.netAmount);
-        const vat = -round2(args.netAmount * (args.vatPercentage / 100));
-        const total = round2(net + vat);
-        const quantity = -Math.abs(args.quantity);
-        const payload = {
-            ourReference: args.reference ?? "MCP_TEST_CN_TOOL",
-            yourReference: args.reference ?? "MCP_TEST_CN_TOOL",
-            loType: "1",
-            deliveryTo: ["MCP Test"],
-            productTrans: [
-                {
-                    id: 0,
-                    amount: total,
-                    amountNet: net,
-                    percentage: args.vatPercentage,
-                    productId: args.productId,
-                    productCode: args.productCode,
-                    quantity,
-                    unitPrice: args.unitPrice,
-                    vat,
-                    vatRateId: args.vatRateId,
-                    vatAnalysisTypeId: 0,
-                    useTaxInclusiveUnitPrice: false,
-                    tranNotes: [args.description],
-                    acEntries: [
-                        {
-                            id: 0,
-                            accountCode: args.accountCode,
-                            analysisCategoryId: args.analysisCategoryId,
-                            description: args.description,
-                            value: net,
-                        },
-                    ],
-                },
-            ],
-            saleRepId: args.saleRepId ?? 153528,
-            saleRepCode: args.saleRepCode ?? "9991",
-            useTaxInclusiveUnitPrice: false,
-            customerId: args.customerId,
-            reference: args.reference ?? "MCP_TEST_CN_TOOL",
-            details: null,
-            vatTypeId: 1,
-            totalNet: net,
-            totalVAT: vat,
-            id: 0,
-            bookTranTypeId: args.bookTranTypeId,
-            acCode: args.acCode,
-            note: args.note,
-            entryDate: args.entryDate,
-            procDate: args.procDate,
-            total,
-            customFields: [],
-        };
+    }, async ({ companyName, ...args }) => {
+        let payload;
         try {
+            payload = buildSalesCreditNotePayload(args);
             const createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesCreditNotes", payload);
-            return jsonResponse({ message: "Sales credit note created using negative productTrans MCP payload.", companyName, payloadSent: payload, createResponse });
+            return jsonResponse({ message: "Sales credit note created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
         }
         catch (error) {
-            return jsonResponse({ message: "Error creating sales credit note.", companyName, endpoint: "POST /v1/salesCreditNotes", payloadSent: payload, error: error instanceof Error ? error.message : String(error) });
+            return jsonResponse({ message: "Error creating sales credit note.", companyName, endpoint: "POST /v1/salesCreditNotes", inputArgs: args, payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_create_sales_credit_note_gen_ref", "Creates a BRC sales credit note with an auto-generated reference using a raw BRC payload.", {
+    server.tool("brc_create_sales_credit_note_gen_ref", `Creates a BRC sales credit note with an auto-generated reference using a raw BRC payload. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
     }, async ({ companyName, payload }) => {
-        const response = await brcJsonRequest(companyName, "POST", "/v1/salesCreditNotes/createCreditNoteWithGeneratingReference", payload);
+        const finalPayload = payload;
+        requireSalesRepInPayload(finalPayload);
+        const response = await brcJsonRequest(companyName, "POST", "/v1/salesCreditNotes/createCreditNoteWithGeneratingReference", finalPayload);
         return jsonResponse({
             message: "Sales credit note created with generated reference.",
             companyName,
-            payloadSent: payload,
+            payloadSent: finalPayload,
             response,
         });
     });

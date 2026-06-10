@@ -25,7 +25,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-process.env.BRC_ALLOW_TESTING_SKILLS ??= "false";
 process.env.BRC_ALLOW_READ_SKILLS ??= "true";
 process.env.BRC_ALLOW_UPDATE_SKILLS ??= "true";
 process.env.BRC_ALLOW_DELETE_SKILLS ??= "true";
