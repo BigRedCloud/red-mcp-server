@@ -19,7 +19,7 @@ export function registerCompanySetupTools(server) {
         const data = await brcFetch(companyName, "/v1/companySetupConfig/getFinancialYear");
         return jsonResponse(data);
     });
-    server.tool("brc_get_company_options", "Gets raw BRC company processing/options settings, including nominal ledger, VAT on cash receipts, gross price entry, margin VAT, reverse charge VAT, VAT discrepancy tolerance, and ageing options. Read-only in Red Connect; changes must be made in Big Red Cloud.", { companyName: companyNameSchema }, async ({ companyName }) => {
+    server.tool("brc_get_company_options", "Gets raw BRC company processing/options settings, including nominal ledger, VAT on cash receipts, gross price entry, margin VAT, reverse charge VAT, VAT discrepancy tolerance, and ageing options. Read-only in Red; changes must be made in Big Red Cloud.", { companyName: companyNameSchema }, async ({ companyName }) => {
         const data = await brcFetch(companyName, "/v1/companySetupConfig/getCompanyOptions");
         return jsonResponse(data);
     });

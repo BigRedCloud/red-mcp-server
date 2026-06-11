@@ -12,7 +12,7 @@ import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { CompanyApiContext, runWithSessionKeyStore } from "./shared.js";
 
-import { redConnectServerConfig } from "./server_config.js";
+import { redServerConfig } from "./server_config.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -30,7 +30,7 @@ interface Session {
 
 const sessions = new Map<string, Session>();
 function getSessionTtlMs(): number {
-  return redConnectServerConfig.sessionTtlMinutes * 60 * 1000;
+  return redServerConfig.sessionTtlMinutes * 60 * 1000;
 }
 
 function touchSession(session: Session): void {
@@ -79,7 +79,7 @@ function getClientIp(req: Request): string {
 }
 
 function rateLimitMiddleware(req: Request, res: Response, next: () => void) {
-  const limit = redConnectServerConfig.rateLimitRequestsPerMinute;
+  const limit = redServerConfig.rateLimitRequestsPerMinute;
 
   if (!limit || limit <= 0) {
     next();

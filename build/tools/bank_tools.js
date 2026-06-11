@@ -84,7 +84,7 @@ export function registerBankTools(server) {
                 "- Existing linked nominal account code",
                 "- Last cheque number",
                 "",
-                "Important: Red Connect cannot create a new nominal account. The linked nominal account must already exist in Big Red Cloud before this bank account can be created.",
+                "Important: Red cannot create a new nominal account. The linked nominal account must already exist in Big Red Cloud before this bank account can be created.",
             ].join("\n"));
         }
         if (!confirmCreate) {
@@ -113,7 +113,7 @@ export function registerBankTools(server) {
                     : undefined,
                 "",
                 "Please review this carefully.",
-                'WARNING: Red Connect can only link bank accounts to existing nominal accounts. Red Connect cannot create a new nominal account, if you need to create a new nominal account please go to Big Red Cloud to do so before continuring.',
+                'WARNING: Red can only link bank accounts to existing nominal accounts. Red cannot create a new nominal account, if you need to create a new nominal account please go to Big Red Cloud to do so before continuring.',
                 "",
                 "Reply with \"Yes, create this bank account\" to create it, or tell me what to change.",
             ]

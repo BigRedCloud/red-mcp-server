@@ -39,7 +39,7 @@ function createFilteredServer(server: McpServer): McpServer {
   filteredServer.tool = (toolName: string, ...args: any[]) => {
     if (!isToolEnabled(toolName)) {
       console.warn(
-        `Red Connect: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`
+        `Red: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`
       );
 
       return undefined as unknown;

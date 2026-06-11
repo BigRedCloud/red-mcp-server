@@ -36,7 +36,7 @@ function requireQuoteCompanyId(companyId) {
 }
 export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION = "Requires saleRepId and saleRepCode. Do not use default or demo sales rep values. If missing, list sales reps or ask the user to choose one before creating.";
 export const SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION = "Requires analysisCategoryId and accountCode from a Sales Analysis category on each product line. Do not default to CR01/Customer or the first listed category. Set confirmCrAnalysisCategory=true only after the user confirms a CR account code is intentional.";
-const SALES_ANALYSIS_STOP_PREFIX = "Red Connect stopped before posting because sales analysis details need attention.";
+const SALES_ANALYSIS_STOP_PREFIX = "Red stopped before posting because sales analysis details need attention.";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -105,15 +105,15 @@ export function enforceSalesProductLineAnalysisOrThrow(payload, workflow, option
     const documentLabel = salesDocumentLabel(workflow);
     const lines = collectProductLineAnalysis(payload);
     if (lines.length === 0) {
-        throw salesAnalysisPreflightError(`Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not use Customer (CR) categories unless the user confirms that choice.`);
+        throw salesAnalysisPreflightError(`Red needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not use Customer (CR) categories unless the user confirms that choice.`);
     }
     for (const line of lines) {
         if (!isValidAnalysisCategoryId(line.analysisCategoryId) || !line.accountCode) {
-            throw salesAnalysisPreflightError(`Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not default to CR01, Customer, or the first listed analysis category.`);
+            throw salesAnalysisPreflightError(`Red needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not default to CR01, Customer, or the first listed analysis category.`);
         }
         if (line.accountCode.toUpperCase().startsWith("CR") &&
             options?.confirmCrAnalysisCategory !== true) {
-            throw salesAnalysisPreflightError(`The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red Connect blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`);
+            throw salesAnalysisPreflightError(`The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`);
         }
     }
 }

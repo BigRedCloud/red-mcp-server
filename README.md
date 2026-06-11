@@ -1,4 +1,4 @@
-# BRC Company MCP Server (RED Connect)
+# BRC Company MCP Server (Red)
 
 ## For customers: how to start
 
@@ -94,7 +94,7 @@ Cash receipt create/update/batch reads **VOCR** (`vocrSettingValue` from `/v1/co
 - VAT lookup and guarded VAT processing
 - Bank account list/get/create/update/delete (tenant setup may block create)
 - Email send tools with `confirmSend` guard
-- **Red Connect session audit log** for writes made through this MCP server
+- **Red session audit log** for writes made through this MCP server
 - Customer onboarding tools (`brc_getting_started`, readiness check, date validation)
 - Excel/report export scripts and regression tests
 
@@ -205,7 +205,7 @@ Opening `http://localhost:3000/mcp` in a browser without an MCP session returns 
 
 ### `src/server.ts`
 
-`createBrcMcpServer()` — shared server metadata (name **RED Connect**, version, instructions).
+`createBrcMcpServer()` — shared server metadata (name **Red**, version, instructions).
 
 ### `src/register_all_tools.ts`
 
@@ -310,7 +310,7 @@ Never paste API keys into chat unless you intend to connect. Assistants must not
 
 ---
 
-## Red Connect audit log
+## Red audit log
 
 | MCP Tool | Purpose |
 | -------- | ------- |
@@ -613,7 +613,7 @@ Show me all open quotes in <Company Name>.
 Create a quote for <Company Name> using product <Product Code>.
 Turn that quote into a sales invoice.
 Show me the nominal accounts for <Company Name> grouped by account group.
-Show me the Red Connect audit log for this session.
+Show me the Red audit log for this session.
 Clear all connected company API keys from this session.
 ```
 

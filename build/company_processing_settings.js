@@ -2,7 +2,7 @@
  * Company processing settings mapper.
  *
  * This file reads BRC company setup/options data and converts the raw API
- * fields into safer, more meaningful settings used by Red Connect.
+ * fields into safer, more meaningful settings used by Red.
  *
  * These settings matter because they affect how transactions should be created
  * or checked, especially VAT-sensitive workflows such as sales invoices,
@@ -21,7 +21,7 @@
  *   vocrSettingValue
  *
  * did NOT change when the checkbox was toggled, so it must not be treated as
- * the visible checkbox. Red Connect keeps vocrSettingValue as a separate
+ * the visible checkbox. Red keeps vocrSettingValue as a separate
  * displayed field for transparency, but uses enableVOCRReporting to determine
  * vatOnCashReceiptsEnabled and cashReceiptVatMode.
  */
@@ -211,7 +211,7 @@ export function getTransactionSafetyWarnings(settings, workflow) {
         workflow === "purchase" ||
         workflow === "cash_receipt") {
         if (settings.marginVatSchemeEnabled === true) {
-            warnings.push("Margin VAT Scheme is enabled. Red Connect should not create margin-scheme VAT transactions unless that workflow is explicitly supported.");
+            warnings.push("Margin VAT Scheme is enabled. Red should not create margin-scheme VAT transactions unless that workflow is explicitly supported.");
         }
         if (settings.vatDiscrepancyAllowed !== undefined) {
             warnings.push(`VAT discrepancy tolerance is ${settings.vatDiscrepancyAllowed}. Check supplied VAT amounts against this tolerance where VAT is manually provided.`);
@@ -239,18 +239,18 @@ export function getTransactionSafetyWarnings(settings, workflow) {
                 warnings.push("VAT on Cash Receipts is enabled and cash receipt VAT mode is manual. Confirm VAT entry requirements in Big Red Cloud before creating VAT-sensitive cash receipts.");
             }
             if (settings.cashReceiptVatMode === "unknown") {
-                warnings.push("VAT on Cash Receipts is enabled, but Red Connect could not determine the cash receipt VAT mode. Verify cash receipt VAT handling in Big Red Cloud before creating VAT-sensitive cash receipts.");
+                warnings.push("VAT on Cash Receipts is enabled, but Red could not determine the cash receipt VAT mode. Verify cash receipt VAT handling in Big Red Cloud before creating VAT-sensitive cash receipts.");
             }
         }
         if (settings.vatOnCashReceiptsEnabled === false) {
             warnings.push("VAT on Cash Receipts is not enabled. Cash receipt VAT should not be treated as receipt-basis VAT unless the user confirms otherwise.");
         }
         if (settings.vatOnCashReceiptsEnabled === undefined) {
-            warnings.push("Red Connect could not determine whether VAT on Cash Receipts is enabled. Verify the setting in Big Red Cloud before creating VAT-sensitive cash receipts.");
+            warnings.push("Red could not determine whether VAT on Cash Receipts is enabled. Verify the setting in Big Red Cloud before creating VAT-sensitive cash receipts.");
         }
         if (settings.vocrSettingValue === true &&
             settings.vatOnCashReceiptsEnabled !== true) {
-            warnings.push("The API returned vocrSettingValue as true, but this does not confirm the visible VAT on Cash Receipts checkbox. Red Connect uses enableVOCRReporting for the checkbox state.");
+            warnings.push("The API returned vocrSettingValue as true, but this does not confirm the visible VAT on Cash Receipts checkbox. Red uses enableVOCRReporting for the checkbox state.");
         }
     }
     if (workflow === "statement") {
@@ -260,7 +260,7 @@ export function getTransactionSafetyWarnings(settings, workflow) {
     }
     return warnings;
 }
-const PREFLIGHT_STOP_PREFIX = "Red Connect stopped before posting because the company processing settings need attention.";
+const PREFLIGHT_STOP_PREFIX = "Red stopped before posting because the company processing settings need attention.";
 function preflightError(detail) {
     return new Error(`${PREFLIGHT_STOP_PREFIX}\n\n${detail}`);
 }
@@ -383,11 +383,11 @@ function readStatementMinBalance(payload) {
 }
 function enforceSalesDocumentSettings(settings, payload, documentLabel) {
     if (settings.marginVatSchemeEnabled === true) {
-        throw preflightError(`Margin VAT Scheme is enabled in Big Red Cloud. Red Connect does not currently support creating margin-scheme VAT ${documentLabel}. Please disable Margin VAT Scheme in Big Red Cloud or create this ${documentLabel} manually in BRC.`);
+        throw preflightError(`Margin VAT Scheme is enabled in Big Red Cloud. Red does not currently support creating margin-scheme VAT ${documentLabel}. Please disable Margin VAT Scheme in Big Red Cloud or create this ${documentLabel} manually in BRC.`);
     }
     if (settings.grossPriceSalesInvoicingEnabled === true &&
         !payloadClearlyStatesGrossOrNetPrice(payload)) {
-        throw preflightError(`Gross Price Entry is enabled in Big Red Cloud. Red Connect stopped before posting because it is unclear whether your line prices are VAT-inclusive (gross) or net. Please confirm whether prices are VAT-inclusive or net before creating the ${documentLabel}.`);
+        throw preflightError(`Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your line prices are VAT-inclusive (gross) or net. Please confirm whether prices are VAT-inclusive or net before creating the ${documentLabel}.`);
     }
 }
 function enforceCashReceiptSettings(settings, payload) {
@@ -396,11 +396,11 @@ function enforceCashReceiptSettings(settings, payload) {
     }
     if (settings.vatOnCashReceiptsEnabled === undefined ||
         settings.cashReceiptVatMode === "unknown") {
-        throw preflightError("Red Connect could not confirm the Enable VAT on Cash Receipts setting from the company options API. Please verify this setting in Big Red Cloud before posting cash receipts.");
+        throw preflightError("Red could not confirm the Enable VAT on Cash Receipts setting from the company options API. Please verify this setting in Big Red Cloud before posting cash receipts.");
     }
     if (settings.cashReceiptVatMode === "manual") {
         if (!hasManualCashReceiptVatDetails(payload)) {
-            throw preflightError("VAT on Cash Receipts is enabled and cash receipt VAT mode is manual. Red Connect needs the VAT amount/details before posting this cash receipt. Please provide the VAT details or update the setting in Big Red Cloud.");
+            throw preflightError("VAT on Cash Receipts is enabled and cash receipt VAT mode is manual. Red needs the VAT amount/details before posting this cash receipt. Please provide the VAT details or update the setting in Big Red Cloud.");
         }
         return;
     }
@@ -421,7 +421,7 @@ export function enforceTransactionSettingsOrThrow(settings, workflow, payload) {
     }
     if (workflow === "purchase") {
         if (settings.marginVatSchemeEnabled === true) {
-            throw preflightError("Margin VAT Scheme is enabled in Big Red Cloud. Red Connect does not currently support creating margin-scheme VAT purchases. Please disable Margin VAT Scheme in Big Red Cloud or create this purchase manually in BRC.");
+            throw preflightError("Margin VAT Scheme is enabled in Big Red Cloud. Red does not currently support creating margin-scheme VAT purchases. Please disable Margin VAT Scheme in Big Red Cloud or create this purchase manually in BRC.");
         }
         return;
     }
@@ -436,7 +436,7 @@ export function enforceTransactionSettingsOrThrow(settings, workflow, payload) {
         if (readStatementMinBalance(payload) !== undefined) {
             return;
         }
-        throw preflightError("Red Connect could not determine the default debtor statement minimum balance from company settings. Please provide a minimum balance for this statement, or confirm you want no minimum balance before sending.");
+        throw preflightError("Red could not determine the default debtor statement minimum balance from company settings. Please provide a minimum balance for this statement, or confirm you want no minimum balance before sending.");
     }
 }
 export async function loadAndEnforceTransactionSettings(companyName, workflow, payload) {

@@ -82,7 +82,7 @@ export function registerRawCreateTool(server, toolName, description, path) {
         const response = await brcJsonRequest(companyName, "POST", path, finalPayload);
         return jsonResponse({
             message: openingBalanceIgnored
-                ? "Create request sent to BRC. Opening balance was not included because opening balances cannot currently be created or updated through Red Connect."
+                ? "Create request sent to BRC. Opening balance was not included because opening balances cannot currently be created or updated through Red."
                 : "Create request sent to BRC.",
             companyName,
             endpoint: `POST ${path}`,
@@ -137,7 +137,7 @@ export function registerRawUpdateTool(server, toolName, description, path, label
         const verification = await brcFetch(companyName, `${path}/${encodeURIComponent(String(id))}`);
         return jsonResponse({
             message: openingBalanceIgnored
-                ? `${label} updated using merged MCP payload. Opening balance was not changed because opening balances cannot currently be created or updated through Red Connect.`
+                ? `${label} updated using merged MCP payload. Opening balance was not changed because opening balances cannot currently be created or updated through Red.`
                 : `${label} updated using merged MCP payload.`,
             companyName,
             endpoint: `PUT ${path}/${id}`,
@@ -184,7 +184,7 @@ export function registerRawBatchTool(server, toolName, description, path) {
             .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
     }, async ({ companyName, items }) => {
         if (items.length > maxBatchItems) {
-            throw new Error(`Batch limit exceeded. Red Connect allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`);
+            throw new Error(`Batch limit exceeded. Red allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`);
         }
         let vatOnCashReceiptEnabled = true;
         const transactionWorkflow = TRANSACTION_BATCH_WORKFLOWS[path];
@@ -204,7 +204,7 @@ export function registerRawBatchTool(server, toolName, description, path) {
                 }
             }
             if (preflightFailures.length > 0) {
-                throw new Error(`Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed transaction settings preflight checks:\n${preflightFailures.join("\n")}`);
+                throw new Error(`Red stopped before posting the batch because ${preflightFailures.length} item(s) failed transaction settings preflight checks:\n${preflightFailures.join("\n")}`);
             }
         }
         const referenceWorkflow = REFERENCE_BATCH_WORKFLOWS[path];
@@ -221,7 +221,7 @@ export function registerRawBatchTool(server, toolName, description, path) {
                 }
             }
             if (preflightFailures.length > 0) {
-                throw new Error(`Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed reference preflight checks:\n${preflightFailures.join("\n")}`);
+                throw new Error(`Red stopped before posting the batch because ${preflightFailures.length} item(s) failed reference preflight checks:\n${preflightFailures.join("\n")}`);
             }
         }
         const salesAnalysisWorkflow = SALES_ANALYSIS_BATCH_WORKFLOWS[path];
@@ -242,7 +242,7 @@ export function registerRawBatchTool(server, toolName, description, path) {
                 }
             }
             if (preflightFailures.length > 0) {
-                throw new Error(`Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed sales analysis preflight checks:\n${preflightFailures.join("\n")}`);
+                throw new Error(`Red stopped before posting the batch because ${preflightFailures.length} item(s) failed sales analysis preflight checks:\n${preflightFailures.join("\n")}`);
             }
         }
         const normalizedItems = normalizeBatchItems(path, items, {

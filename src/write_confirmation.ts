@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { getToolSkillGroup, type RedConnectSkillGroup } from "./server_config.js";
+import { getToolSkillGroup, type RedSkillGroup } from "./server_config.js";
 import { jsonResponse } from "./shared.js";
 
-const WRITE_CONFIRMATION_SKILL_GROUPS = new Set<RedConnectSkillGroup>([
+const WRITE_CONFIRMATION_SKILL_GROUPS = new Set<RedSkillGroup>([
   "update",
   "delete",
   "batch",
@@ -326,7 +326,7 @@ function validateCounterpartyForWrite(args: {
     return jsonResponse({
       status: "counterparty_missing",
       message: [
-        `Red Connect stopped before preparing this draft because the required ${label} is missing.`,
+        `Red stopped before preparing this draft because the required ${label} is missing.`,
         "",
         `Ask the user which ${label} to use before calling this tool again.`,
         "You may suggest a customer or supplier from an earlier draft as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
@@ -356,7 +356,7 @@ function validateCounterpartyForWrite(args: {
   return jsonResponse({
     status: "counterparty_confirmation_required",
     message: [
-      `Red Connect stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
+      `Red stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
       "",
       "Do not silently carry over a customer or supplier from an earlier draft.",
       "Do not pass confirmWrite: true until the counterparty has been explicitly confirmed.",
@@ -529,7 +529,7 @@ export function requireWriteConfirmation(args: {
   return jsonResponse({
     status: "confirmation_required",
     message: [
-      `Red Connect stopped before ${action} because explicit user confirmation is required.`,
+      `Red stopped before ${action} because explicit user confirmation is required.`,
       "",
       "This is a draft/preview step only. Nothing has been posted to Big Red Cloud.",
       "",

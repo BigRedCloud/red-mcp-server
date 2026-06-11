@@ -1,7 +1,7 @@
 /**
  * Company processing settings MCP tools.
  *
- * This file registers read-only Red Connect tools for inspecting BRC company
+ * This file registers read-only Red tools for inspecting BRC company
  * processing/options settings. These settings affect VAT behaviour, gross/net
  * sales invoice handling, cash receipt VAT handling, payment terms, statements,
  * and transaction safety checks.
@@ -34,7 +34,7 @@ export function registerCompanyProcessingSettingsTools(server: ServerType) {
       "cash receipts, payment terms, debtor statements, gross price entry,",
       "and transaction creation behaviour.",
       "Use this before VAT-sensitive write workflows where possible.",
-      "These settings are read-only in Red Connect; changes must be made in Big Red Cloud.",
+      "These settings are read-only in Red; changes must be made in Big Red Cloud.",
     ].join(" "),
     {
       companyName: companyNameSchema,
@@ -65,7 +65,7 @@ export function registerCompanyProcessingSettingsTools(server: ServerType) {
       "debtors journal, and creditors journal.",
       "Use this before preparing or creating quotes, invoices, purchases, or other reference-sensitive records.",
       "If Quotes is Unknown, do not assume auto-generate; ask for a quote reference or user confirmation first.",
-      "These settings are read-only in Red Connect; changes must be made in Big Red Cloud.",
+      "These settings are read-only in Red; changes must be made in Big Red Cloud.",
     ].join(" "),
     {
       companyName: companyNameSchema,

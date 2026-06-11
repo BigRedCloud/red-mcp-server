@@ -1,11 +1,11 @@
 ---
-description: Red Connect — auto-run MCP tools; plain-English confirmation only for data changes
+description: Red — auto-run MCP tools; plain-English confirmation only for data changes
 alwaysApply: true
 ---
 
-# Red Connect tool execution
+# Red tool execution
 
-This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP allowlist. Red Connect tools must run without Cursor approval prompts.
+This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP allowlist. Red tools must run without Cursor approval prompts.
 
 ## Never ask to allow or run tools
 

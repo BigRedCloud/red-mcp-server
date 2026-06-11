@@ -36,7 +36,7 @@ export interface ReferencePreflightOptions {
 }
 
 export const QUOTE_REFERENCE_UNKNOWN_MESSAGE =
-  "Red Connect could not confirm whether quote references are auto-generated or manual for this company. Please provide a quote reference, or confirm that quotes are auto-generated in Big Red Cloud before I prepare this quote for posting.";
+  "Red could not confirm whether quote references are auto-generated or manual for this company. Please provide a quote reference, or confirm that quotes are auto-generated in Big Red Cloud before I prepare this quote for posting.";
 
 const PLACEHOLDER_REFERENCES = new Set(
   ["MCP_TEST", "MCP_TEST_CN", "MCP_TEST_QUOTE", "MCP_TEST_PO", "MCP_TEST_DD"].map(
@@ -45,7 +45,7 @@ const PLACEHOLDER_REFERENCES = new Set(
 );
 
 const REFERENCE_STOP_PREFIX =
-  "Red Connect stopped before posting because reference settings need attention.";
+  "Red stopped before posting because reference settings need attention.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -349,7 +349,7 @@ export function enforceReferenceSettingsOrThrow(
     }
 
     throw preflightError(
-      `Red Connect could not confirm whether this company uses auto-generated or manual ${label} references. Please confirm whether you want to provide a manual reference or use an auto-generated reference before posting.`
+      `Red could not confirm whether this company uses auto-generated or manual ${label} references. Please confirm whether you want to provide a manual reference or use an auto-generated reference before posting.`
     );
   }
 
@@ -371,13 +371,13 @@ export function enforceReferenceSettingsOrThrow(
 
   if (endpointKind === "generated") {
     throw preflightError(
-      `Red Connect stopped before posting because this company is configured for manual ${label} references. Please provide the reference number on the standard create workflow, or enable auto-generate references in Big Red Cloud.`
+      `Red stopped before posting because this company is configured for manual ${label} references. Please provide the reference number on the standard create workflow, or enable auto-generate references in Big Red Cloud.`
     );
   }
 
   if (!hasManualReference) {
     throw preflightError(
-      `Red Connect stopped before posting because this company is configured for manual ${label} references. Please provide the reference number, or enable auto-generate references in Big Red Cloud.`
+      `Red stopped before posting because this company is configured for manual ${label} references. Please provide the reference number, or enable auto-generate references in Big Red Cloud.`
     );
   }
 

@@ -65,7 +65,7 @@ export interface SalesAnalysisPreflightOptions {
 }
 
 const SALES_ANALYSIS_STOP_PREFIX =
-  "Red Connect stopped before posting because sales analysis details need attention.";
+  "Red stopped before posting because sales analysis details need attention.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -162,14 +162,14 @@ export function enforceSalesProductLineAnalysisOrThrow(
 
   if (lines.length === 0) {
     throw salesAnalysisPreflightError(
-      `Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not use Customer (CR) categories unless the user confirms that choice.`
+      `Red needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not use Customer (CR) categories unless the user confirms that choice.`
     );
   }
 
   for (const line of lines) {
     if (!isValidAnalysisCategoryId(line.analysisCategoryId) || !line.accountCode) {
       throw salesAnalysisPreflightError(
-        `Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not default to CR01, Customer, or the first listed analysis category.`
+        `Red needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not default to CR01, Customer, or the first listed analysis category.`
       );
     }
 
@@ -178,7 +178,7 @@ export function enforceSalesProductLineAnalysisOrThrow(
       options?.confirmCrAnalysisCategory !== true
     ) {
       throw salesAnalysisPreflightError(
-        `The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red Connect blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`
+        `The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`
       );
     }
   }

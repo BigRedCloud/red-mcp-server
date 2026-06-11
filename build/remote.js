@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { runWithSessionKeyStore } from "./shared.js";
-import { redConnectServerConfig } from "./server_config.js";
+import { redServerConfig } from "./server_config.js";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -15,7 +15,7 @@ function createMcpServer() {
 }
 const sessions = new Map();
 function getSessionTtlMs() {
-    return redConnectServerConfig.sessionTtlMinutes * 60 * 1000;
+    return redServerConfig.sessionTtlMinutes * 60 * 1000;
 }
 function touchSession(session) {
     session.lastSeenAt = Date.now();
@@ -48,7 +48,7 @@ function getClientIp(req) {
     return req.ip || req.socket.remoteAddress || "unknown";
 }
 function rateLimitMiddleware(req, res, next) {
-    const limit = redConnectServerConfig.rateLimitRequestsPerMinute;
+    const limit = redServerConfig.rateLimitRequestsPerMinute;
     if (!limit || limit <= 0) {
         next();
         return;

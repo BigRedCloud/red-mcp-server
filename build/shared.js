@@ -110,8 +110,8 @@ function parseRequestBody(init) {
         return body;
     }
 }
-const redConnectAuditLog = [];
-let redConnectAuditCounter = 1;
+const redAuditLog = [];
+let redAuditCounter = 1;
 const RESOURCE_LABELS = {
     accounts: "Account",
     analysisCategories: "Analysis category",
@@ -315,11 +315,11 @@ function buildAuditSummary(args) {
         summary,
     };
 }
-export function recordRedConnectAuditEntry(args) {
+export function recordRedAuditEntry(args) {
     const meta = buildAuditSummary(args);
     const pathname = args.path.split("?")[0] ?? args.path;
     const entry = {
-        id: redConnectAuditCounter++,
+        id: redAuditCounter++,
         timestamp: new Date().toISOString(),
         companyName: args.companyName,
         method: args.method,
@@ -331,10 +331,10 @@ export function recordRedConnectAuditEntry(args) {
         requestBody: args.requestBody,
         responseBody: args.responseBody,
     };
-    redConnectAuditLog.push(entry);
+    redAuditLog.push(entry);
     const maxAuditEntries = getMaxAuditEntries();
-    if (redConnectAuditLog.length > maxAuditEntries) {
-        redConnectAuditLog.splice(0, redConnectAuditLog.length - maxAuditEntries);
+    if (redAuditLog.length > maxAuditEntries) {
+        redAuditLog.splice(0, redAuditLog.length - maxAuditEntries);
     }
     return entry;
 }
@@ -373,7 +373,7 @@ export async function brcFetch(companyName, path, init = {}) {
         }
     }
     if (isWriteHttpMethod(method)) {
-        recordRedConnectAuditEntry({
+        recordRedAuditEntry({
             companyName,
             method,
             path: safePath,
@@ -444,15 +444,15 @@ function redactSensitiveValues(value) {
     }
     return value;
 }
-export function getRedConnectAuditLog(options) {
+export function getRedAuditLog(options) {
     if (options?.includeTechnicalDetails) {
-        return redConnectAuditLog.map((entry) => ({
+        return redAuditLog.map((entry) => ({
             ...entry,
             requestBody: redactSensitiveValues(entry.requestBody),
             responseBody: redactSensitiveValues(entry.responseBody),
         }));
     }
-    return redConnectAuditLog.map((entry) => ({
+    return redAuditLog.map((entry) => ({
         id: entry.id,
         timestamp: entry.timestamp,
         companyName: entry.companyName,
@@ -464,9 +464,9 @@ export function getRedConnectAuditLog(options) {
         path: entry.path,
     }));
 }
-export function clearRedConnectAuditLog() {
-    const clearedCount = redConnectAuditLog.length;
-    redConnectAuditLog.length = 0;
+export function clearRedAuditLog() {
+    const clearedCount = redAuditLog.length;
+    redAuditLog.length = 0;
     return clearedCount;
 }
 //requested by SM

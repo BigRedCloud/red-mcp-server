@@ -1,15 +1,15 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  clearRedConnectAuditLog,
-  getRedConnectAuditLog,
+  clearRedAuditLog,
+  getRedAuditLog,
   textResponse,
 } from "../shared.js";
 
 export function registerAuditTools(server: McpServer) {
   server.tool(
     "brc_list_audit_log",
-    "Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red Connect MCP server session. Read-only API calls are not logged.",
+    "Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red MCP server session. Read-only API calls are not logged.",
     {
       includeTechnicalDetails: z
         .boolean()
@@ -17,18 +17,18 @@ export function registerAuditTools(server: McpServer) {
         .describe("Only set this to true if the user asks for technical details. Sensitive values are still redacted."),
     },
     async ({ includeTechnicalDetails }) => {
-      const entries = getRedConnectAuditLog({ includeTechnicalDetails });
+      const entries = getRedAuditLog({ includeTechnicalDetails });
 
       if (entries.length === 0) {
         return textResponse(
-          "No company changes have been recorded in this Red Connect session yet."
+          "No company changes have been recorded in this Red session yet."
         );
       }
 
       return textResponse(
         JSON.stringify(
           {
-            message: "Here is the Red Connect audit log for this MCP server session.",
+            message: "Here is the Red audit log for this MCP server session.",
             count: entries.length,
             entries,
           },
@@ -41,7 +41,7 @@ export function registerAuditTools(server: McpServer) {
 
   server.tool(
     "brc_clear_audit_log",
-    "Clear the Red Connect audit log for this MCP server session.",
+    "Clear the Red audit log for this MCP server session.",
     {
       confirmClear: z
         .boolean()
@@ -51,14 +51,14 @@ export function registerAuditTools(server: McpServer) {
     async ({ confirmClear }) => {
       if (!confirmClear) {
         return textResponse(
-          "Please confirm you want to clear the Red Connect audit log for this session."
+          "Please confirm you want to clear the Red audit log for this session."
         );
       }
 
-      const clearedCount = clearRedConnectAuditLog();
+      const clearedCount = clearRedAuditLog();
 
       return textResponse(
-        `Cleared ${clearedCount} Red Connect audit log entr${
+        `Cleared ${clearedCount} Red audit log entr${
           clearedCount === 1 ? "y" : "ies"
         } from this session.`
       );

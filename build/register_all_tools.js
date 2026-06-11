@@ -24,7 +24,7 @@ function createFilteredServer(server) {
     const filteredServer = Object.create(server);
     filteredServer.tool = (toolName, ...args) => {
         if (!isToolEnabled(toolName)) {
-            console.warn(`Red Connect: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`);
+            console.warn(`Red: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`);
             return undefined;
         }
         if (args.length < 3) {

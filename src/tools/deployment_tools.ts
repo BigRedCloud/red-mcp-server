@@ -18,7 +18,7 @@ import {
 } from "../shared.js";
 import {
   getCustomerDeploymentCapabilities,
-  redConnectServerConfig,
+  redServerConfig,
 } from "../server_config.js";
 
 function asNumber(value: unknown): number | null {
@@ -178,8 +178,8 @@ function deploymentPolicy() {
   return {
     mcpSession: {
       sessionStorage: "MCP server session memory",
-      sessionTtlMinutes: redConnectServerConfig.sessionTtlMinutes,
-      apiKeyTtlMinutes: redConnectServerConfig.apiKeyTtlMinutes,
+      sessionTtlMinutes: redServerConfig.sessionTtlMinutes,
+      apiKeyTtlMinutes: redServerConfig.apiKeyTtlMinutes,
       apiKeyStorage: "session-memory-only",
       apiKeysReturnedInResponses: false,
       apiKeysMustNotBeRepeatedInChat: true,
@@ -188,43 +188,43 @@ function deploymentPolicy() {
     rateLimiting: {
       enabled: true,
       requestsPerMinutePerIp:
-        redConnectServerConfig.rateLimitRequestsPerMinute,
+        redServerConfig.rateLimitRequestsPerMinute,
     },
 
     apiKeyBlacklist: {
-      enabled: redConnectServerConfig.apiKeyBlacklistSha256.length > 0,
+      enabled: redServerConfig.apiKeyBlacklistSha256.length > 0,
       storage: "fixed server configuration for beta",
       rawApiKeysStored: false,
       format: "SHA-256 hashes only",
     },
 
     limits: {
-      maxBatchItems: redConnectServerConfig.maxBatchItems,
-      maxAuditEntries: redConnectServerConfig.maxAuditEntries,
+      maxBatchItems: redServerConfig.maxBatchItems,
+      maxAuditEntries: redServerConfig.maxAuditEntries,
     },
 
     skillConfiguration: {
-      allowReadSkills: redConnectServerConfig.allowReadSkills,
-      allowUpdateSkills: redConnectServerConfig.allowUpdateSkills,
-      allowDeleteSkills: redConnectServerConfig.allowDeleteSkills,
-      allowEmailSkills: redConnectServerConfig.allowEmailSkills,
-      allowBatchSkills: redConnectServerConfig.allowBatchSkills,
-      allowDevMode: redConnectServerConfig.allowDevMode,
+      allowReadSkills: redServerConfig.allowReadSkills,
+      allowUpdateSkills: redServerConfig.allowUpdateSkills,
+      allowDeleteSkills: redServerConfig.allowDeleteSkills,
+      allowEmailSkills: redServerConfig.allowEmailSkills,
+      allowBatchSkills: redServerConfig.allowBatchSkills,
+      allowDevMode: redServerConfig.allowDevMode,
       disabledSkillsHiddenFromMcpClients: true,
       cachedDisabledSkillRequestsRejected: true,
       environmentVariables: {
-        BRC_MCP_SESSION_TTL_MINUTES: redConnectServerConfig.sessionTtlMinutes,
-        BRC_API_KEY_TTL_MINUTES: redConnectServerConfig.apiKeyTtlMinutes,
+        BRC_MCP_SESSION_TTL_MINUTES: redServerConfig.sessionTtlMinutes,
+        BRC_API_KEY_TTL_MINUTES: redServerConfig.apiKeyTtlMinutes,
         BRC_RATE_LIMIT_REQUESTS_PER_MINUTE:
-          redConnectServerConfig.rateLimitRequestsPerMinute,
-        BRC_MAX_BATCH_ITEMS: redConnectServerConfig.maxBatchItems,
-        BRC_MAX_AUDIT_ENTRIES: redConnectServerConfig.maxAuditEntries,
-        BRC_ALLOW_READ_SKILLS: redConnectServerConfig.allowReadSkills,
-        BRC_ALLOW_UPDATE_SKILLS: redConnectServerConfig.allowUpdateSkills,
-        BRC_ALLOW_DELETE_SKILLS: redConnectServerConfig.allowDeleteSkills,
-        BRC_ALLOW_EMAIL_SKILLS: redConnectServerConfig.allowEmailSkills,
-        BRC_ALLOW_BATCH_SKILLS: redConnectServerConfig.allowBatchSkills,
-        BRC_ALLOW_DEV_MODE: redConnectServerConfig.allowDevMode,
+          redServerConfig.rateLimitRequestsPerMinute,
+        BRC_MAX_BATCH_ITEMS: redServerConfig.maxBatchItems,
+        BRC_MAX_AUDIT_ENTRIES: redServerConfig.maxAuditEntries,
+        BRC_ALLOW_READ_SKILLS: redServerConfig.allowReadSkills,
+        BRC_ALLOW_UPDATE_SKILLS: redServerConfig.allowUpdateSkills,
+        BRC_ALLOW_DELETE_SKILLS: redServerConfig.allowDeleteSkills,
+        BRC_ALLOW_EMAIL_SKILLS: redServerConfig.allowEmailSkills,
+        BRC_ALLOW_BATCH_SKILLS: redServerConfig.allowBatchSkills,
+        BRC_ALLOW_DEV_MODE: redServerConfig.allowDevMode,
       },
     },
 
@@ -251,7 +251,7 @@ function customerDeploymentPolicyText() {
   const availability = (enabled: boolean) =>
     enabled ? "available" : "not available";
 
-  return `Current capabilities in this Red Connect session:
+  return `Current capabilities in this Red session:
 
 - Development / operator mode: ${capabilities.devModeActive ? "enabled" : "not enabled (customer/staff mode)"}
 - Reading company data: ${availability(capabilities.canReadCompanyData)}
@@ -265,7 +265,7 @@ function customerDeploymentPolicyText() {
   }
 
 Customer output policy:
-- Red Connect may perform internal analysis where needed to answer business questions.
+- Red may perform internal analysis where needed to answer business questions.
 - Customer-facing responses should not show code, scripts, JSON, MCP tool names, endpoint names, schemas, terminal commands, local file paths, temporary files, raw payloads, or implementation details.${
     capabilities.devModeActive
       ? ""
@@ -273,12 +273,12 @@ Customer output policy:
   }
 - Financial answers should be shown in plain business language.
 - Where figures are calculated, responses should explain the calculation method, evidence used, period covered, assumptions, uncertainty and limitations.
-- If data is missing, incomplete, ambiguous, or not comparable, Red Connect should say so clearly rather than guessing.
+- If data is missing, incomplete, ambiguous, or not comparable, Red should say so clearly rather than guessing.
 - Analytical answers should explain where the information came from using plain-English source categories, such as sales invoices, sales entries, purchases, customer balances, supplier balances, nominal ledger reports, VAT rates, company settings, or financial year settings.
 - Where practical, analytical answers should be structured as: Data accessed, Calculations / assumptions, Interpretation of data, and Limitations / checks recommended.
 - If the user asks for profit but only sales and purchases are available, call it a rough margin or estimate, not final profit.
 - If the user asks for evidence, show the source record categories and calculation method first. Only show detailed record lists if useful or requested.
-- Big Red Cloud company setup: Red Connect can explain which setting needs to be reviewed, but it cannot change company setup options itself or guide the user step-by-step through the Big Red Cloud interface. Any changes must be made directly in Big Red Cloud by the user or their BRC administrator. If they need help finding or changing the setting, recommend referencing Big Red Cloud webinars or contacting support. Do not use a standalone sentence such as "Red Connect does not provide step-by-step guidance". Never claim Red Connect can change company processing settings.
+- Big Red Cloud company setup: Red can explain which setting needs to be reviewed, but it cannot change company setup options itself or guide the user step-by-step through the Big Red Cloud interface. Any changes must be made directly in Big Red Cloud by the user or their BRC administrator. If they need help finding or changing the setting, recommend referencing Big Red Cloud webinars or contacting support. Do not use a standalone sentence such as "Red does not provide step-by-step guidance". Never claim Red can change company processing settings.
 
 Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
@@ -297,13 +297,13 @@ Recommended safe workflow:
 5. Only then confirm create, update, delete or batch actions in plain English — when this session allows them.`;
 }
 
-const gettingStartedText = `Welcome to the RED Connect. Big Red Cloud's conversational assistant.
+const gettingStartedText = `Welcome to Red. Big Red Cloud's conversational assistant.
 
 You can use this chat to ask questions about your company's data and, where enabled, prepare or carry out accounting actions.
 
-WARNING: Red Connect is currently in beta. Please double-check all information before relying on it. If create, update or delete actions are enabled, review all details carefully before confirming. Any graphs, summaries or analysis generated by Cursor/Claude should also be checked against Big Red Cloud.
+WARNING: Red is currently in beta. Please double-check all information before relying on it. If create, update or delete actions are enabled, review all details carefully before confirming. Any graphs, summaries or analysis generated by Cursor/Claude should also be checked against Big Red Cloud.
 
-Red Connect may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
+Red may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
 
 1. Connect your company
 Tell the chat which company you want to connect and provide the connection details requested by your administrator.
@@ -415,7 +415,7 @@ Safety:
 - "Clear my connected company sessions."
 `;
 
-const safetyText = `RED Connect assistant safety guide:
+const safetyText = `Red assistant safety guide:
 
 This assistant can help read company data and, if enabled, prepare or carry out accounting actions.
 
@@ -470,7 +470,7 @@ export function registerDeploymentTools(server: ServerType) {
   server.tool(
     "brc_get_deployment_policy",
     [
-      "Authoritative customer-facing permission and output policy summary for this Red Connect session.",
+      "Authoritative customer-facing permission and output policy summary for this Red session.",
       "Use when the user asks what they can do, what tools they have, what permissions are enabled, or whether technical details/code should be shown.",
       "Summarise only whether reading company data, creating/changing records, deleting records, and customer-facing technical output are available.",
       "Do not list MCP tool names, endpoint names, tool counts, JSON, schemas, local file paths, terminal commands, environment variables, or a full capability catalogue.",
@@ -487,7 +487,7 @@ export function registerDeploymentTools(server: ServerType) {
     {},
     async () =>
       jsonResponse({
-        devModeActive: redConnectServerConfig.allowDevMode,
+        devModeActive: redServerConfig.allowDevMode,
         deploymentPolicy: deploymentPolicy(),
         operatorNote:
           "For authorised deployment operators only. Do not paste this response into customer chat.",
@@ -567,62 +567,62 @@ export function registerDeploymentTools(server: ServerType) {
       } else if (processingSettings.vatOnCashReceiptsEnabled === true) {
         if (processingSettings.cashReceiptVatMode === "manual") {
           warnings.push(
-            "VAT on Cash Receipts is enabled with manual cash receipt VAT mode. Red Connect will require VAT details before posting VAT-sensitive cash receipts."
+            "VAT on Cash Receipts is enabled with manual cash receipt VAT mode. Red will require VAT details before posting VAT-sensitive cash receipts."
           );
         } else if (processingSettings.cashReceiptVatMode === "allocation") {
           warnings.push(
-            "VAT on Cash Receipts is enabled with allocation cash receipt VAT mode. Red Connect may require allocation details before posting VAT-sensitive cash receipts."
+            "VAT on Cash Receipts is enabled with allocation cash receipt VAT mode. Red may require allocation details before posting VAT-sensitive cash receipts."
           );
         } else if (processingSettings.cashReceiptVatMode === "unknown") {
           warnings.push(
-            "VAT on Cash Receipts is enabled, but Red Connect could not determine the cash receipt VAT mode from company options."
+            "VAT on Cash Receipts is enabled, but Red could not determine the cash receipt VAT mode from company options."
           );
         }
       } else {
         warnings.push(
-          "Red Connect could not confirm the VAT on Cash Receipts setting from company options."
+          "Red could not confirm the VAT on Cash Receipts setting from company options."
         );
       }
 
       if (referenceSettings.salesAutoGenerateReference === undefined) {
         warnings.push(
-          "Red Connect could not confirm whether sales references are auto-generated or manual."
+          "Red could not confirm whether sales references are auto-generated or manual."
         );
       } else if (referenceSettings.salesAutoGenerateReference === false) {
         warnings.push(
-          "Sales references are configured as manual. Red Connect will require a reference before posting sales invoices or sales credit notes."
+          "Sales references are configured as manual. Red will require a reference before posting sales invoices or sales credit notes."
         );
       }
 
       if (referenceSettings.purchasesAutoGenerateReference === undefined) {
         warnings.push(
-          "Red Connect could not confirm whether purchase references are auto-generated or manual."
+          "Red could not confirm whether purchase references are auto-generated or manual."
         );
       } else if (referenceSettings.purchasesAutoGenerateReference === false) {
         warnings.push(
-          "Purchase references are configured as manual. Red Connect will require a reference before posting purchases."
+          "Purchase references are configured as manual. Red will require a reference before posting purchases."
         );
       }
 
       if (referenceSettings.quotesAutoGenerateReference === undefined) {
         warnings.push(
-          "Red Connect could not confirm whether quote references are auto-generated or manual. Do not assume auto-generate for quotes; ask for a quote reference or user confirmation before preparing a postable quote."
+          "Red could not confirm whether quote references are auto-generated or manual. Do not assume auto-generate for quotes; ask for a quote reference or user confirmation before preparing a postable quote."
         );
       } else if (referenceSettings.quotesAutoGenerateReference === false) {
         warnings.push(
-          "Quote references are configured as manual. Red Connect will require a reference before posting quotes."
+          "Quote references are configured as manual. Red will require a reference before posting quotes."
         );
       }
 
       if (referenceSettings.debtorsJournalAutoGenerateReference === undefined) {
         warnings.push(
-          "Red Connect could not confirm whether debtors journal references are auto-generated or manual."
+          "Red could not confirm whether debtors journal references are auto-generated or manual."
         );
       }
 
       if (referenceSettings.creditorsJournalAutoGenerateReference === undefined) {
         warnings.push(
-          "Red Connect could not confirm whether creditors journal references are auto-generated or manual."
+          "Red could not confirm whether creditors journal references are auto-generated or manual."
         );
       }
 
@@ -747,7 +747,7 @@ description: "Simple getting-started guide for using Big Red Cloud in chat.",
           content: {
             type: "text",
             text: [
-              `Help me connect ${companyName || "a company"} to this RED Connect session.`,
+              `Help me connect ${companyName || "a company"} to this Red session.`,
               "Ask me for the company display name and connection details if they are not already provided.",
               "After connecting, show me the connected company and check whether it is ready to use.",
               "Do not create, update, delete or batch process until I explicitly confirm.",

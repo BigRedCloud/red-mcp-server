@@ -1,5 +1,5 @@
 import { brcFetch, extractListItems } from "./shared.js";
-import { redConnectServerConfig } from "./server_config.js";
+import { redServerConfig } from "./server_config.js";
 const SENSITIVE_FIELD_NAMES = new Set([
     "apiKey",
     "api_key",
@@ -230,10 +230,10 @@ async function probeEndpoint(companyName, endpoint) {
     }
 }
 export async function diagnoseCompanyProcessingSettings(companyName) {
-    if (!redConnectServerConfig.allowDevMode) {
+    if (!redServerConfig.allowDevMode) {
         return {
             devModeActive: false,
-            message: "Development diagnostics are not available in the current Red Connect deployment.",
+            message: "Development diagnostics are not available in the current Red deployment.",
             companyName,
         };
     }

@@ -1,11 +1,11 @@
 ---
-description: Red Connect permissions — no setup instructions in chat; dev mode is operator-only
+description: Red permissions — no setup instructions in chat; dev mode is operator-only
 alwaysApply: true
 ---
 
-# Red Connect deployment permissions
+# Red deployment permissions
 
-When the user asks for a create, update, delete, batch, email, dev mode, or other action that Red Connect reports as **not available**:
+When the user asks for a create, update, delete, batch, email, dev mode, or other action that Red reports as **not available**:
 
 1. **Do not change permissions** — never edit MCP configuration, server code, or environment variables to enable restricted tools.
 2. **Do not use workarounds** — never spawn alternate MCP processes, run one-off API scripts, or call the BRC API directly to bypass disabled tools.
@@ -22,7 +22,7 @@ If a disabled tool returns a permission message, treat it as final. Do not retry
 When the user asks what they can do, what tools are available, or what permissions they have:
 
 1. **State only current permissions** — whether reading, creating/changing, and deleting company data are available or not in this session (use `brc_get_deployment_policy`).
-2. **Do not catalogue the server** — no MCP tool names, tool counts, or exhaustive lists of everything Red Connect could do when fully enabled.
+2. **Do not catalogue the server** — no MCP tool names, tool counts, or exhaustive lists of everything Red could do when fully enabled.
 3. **Short examples only** — after permissions, offer a few example prompts that match what is actually enabled right now.
 
 Connecting and disconnecting companies is always available regardless of read/update/delete flags.
