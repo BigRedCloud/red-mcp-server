@@ -565,27 +565,6 @@ export async function fetchAllNominalAccounts(companyName: string): Promise<Json
   return all;
 }
 
-export function requireWriteConfirmation(args: {
-  confirmWrite?: boolean;
-  companyName: string;
-  action: string;
-  endpoint: string;
-  payload?: unknown;
-}) {
-  if (args.confirmWrite === true) return null;
-
-  return jsonResponse({
-    status: "confirmation_required",
-    message:
-      "This action will write data to Big Red Cloud. Review the details and call the tool again with confirmWrite: true to proceed.",
-    companyName: args.companyName,
-    action: args.action,
-    endpoint: args.endpoint,
-    payloadPreview: args.payload,
-    confirmationField: "confirmWrite",
-  });
-}
-
 const SENSITIVE_FIELD_NAMES = [
   "apiKey",
   "api_key",

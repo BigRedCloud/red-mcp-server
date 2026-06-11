@@ -9,7 +9,13 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../shared.js";
-  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, requireSalesRepInPayload} from "./general/payloads_tools.js";
+  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload} from "./general/payloads_tools.js";
+
+  import {
+    getTransactionSafetyWarnings,
+    loadAndEnforceTransactionSettings,
+  } from "../company_processing_settings.js";
+  import { loadAndEnforceReferenceSettings } from "../company_reference_settings.js";
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
 // Sales entry tools ----------------------------------------------------------
@@ -82,7 +88,7 @@ server.tool(
   
   server.tool(
     "brc_create_sales_invoice",
-    `Creates a BRC sales invoice using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
+    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       customerId: z.number().int().positive(),
@@ -92,7 +98,7 @@ server.tool(
       procDate: z.string(),
       bookTranTypeId: z.number().int().positive(),
       analysisCategoryId: z.number().int().positive(),
-      accountCode: z.string(),
+      accountCode: z.string().min(1),
       description: z.string(),
       netAmount: z.number().positive(),
       vatRateId: z.number().int().positive(),
@@ -104,39 +110,115 @@ server.tool(
       saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
       saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
       reference: z.string().optional(),
+      confirmCrAnalysisCategory: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
+        ),
     },
-    async ({ companyName, ...args }) => {
+    async ({ companyName, confirmCrAnalysisCategory, ...args }) => {
       let payload: unknown;
+    
       try {
         payload = buildSalesInvoicePayload(args);
-        const createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesInvoices", payload);
-        return jsonResponse({ message: "Sales invoice created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
+        enforceSalesProductLineAnalysisOrThrow(payload, "sales_invoice", {
+          confirmCrAnalysisCategory,
+        });
+        const processingSettings = await loadAndEnforceTransactionSettings(
+          String(companyName),
+          "sales_invoice",
+          payload
+        );
+        const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+          String(companyName),
+          "sales_invoice",
+          payload,
+          "manual"
+        );
+    
+        const settingsWarnings = [
+          ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
+          ...referenceWarnings,
+        ];
+    
+        const createResponse = await brcJsonRequest(
+          companyName,
+          "POST",
+          "/v1/salesInvoices",
+          payload
+        );
+    
+        return jsonResponse({
+          message: "Sales invoice created using structured MCP fields.",
+          companyName,
+          payloadSent: payload,
+          settingsWarnings:
+            settingsWarnings.length > 0 ? settingsWarnings : undefined,
+          createResponse,
+        });
       } catch (error) {
-        return jsonResponse({ message: "Error creating sales invoice.", companyName, endpoint: "POST /v1/salesInvoices", inputArgs: args, payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
+        return jsonResponse({
+          message: "Error creating sales invoice.",
+          companyName,
+          endpoint: "POST /v1/salesInvoices",
+          inputArgs: args,
+          payloadSent: payload ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   );
   server.tool(
     "brc_create_sales_invoice_gen_ref",
-    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
+    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       payload: z.record(z.string(),z.unknown()),
+      confirmCrAnalysisCategory: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
+        ),
     },
-    async ({ companyName, payload }) => {
+    async ({ companyName, payload, confirmCrAnalysisCategory }) => {
       const finalPayload = payload as Record<string, unknown>;
       requireSalesRepInPayload(finalPayload);
+      enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
+        confirmCrAnalysisCategory,
+      });
+
+      const processingSettings = await loadAndEnforceTransactionSettings(
+        String(companyName),
+        "sales_invoice",
+        finalPayload
+      );
+      const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+        String(companyName),
+        "sales_invoice",
+        finalPayload,
+        "generated"
+      );
+    
+      const settingsWarnings = [
+        ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
+        ...referenceWarnings,
+      ];
+    
       const response = await brcJsonRequest(
         companyName,
         "POST",
         "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
         finalPayload
       );
-  
+    
       return jsonResponse({
         message: "Sales invoice created with generated reference.",
         companyName,
         payloadSent: finalPayload,
+        settingsWarnings:
+          settingsWarnings.length > 0 ? settingsWarnings : undefined,
         response,
       });
     }

@@ -11,6 +11,8 @@ import {
     type JsonRecord,
   }  from "../shared.js";
   import{buildPurchasePayload} from "./general/payloads_tools.js";
+  import { loadAndEnforceTransactionSettings } from "../company_processing_settings.js";
+  import { loadAndEnforceReferenceSettings } from "../company_reference_settings.js";
 
 export function registerPurchaseTools(server: ServerType){
 
@@ -18,7 +20,7 @@ export function registerPurchaseTools(server: ServerType){
 
 server.tool(
     "brc_create_purchase",
-    "Creates a BRC purchase using structured MCP fields with manual reference support.",
+    "Creates a BRC purchase using structured MCP fields. Requires a reference when the company is configured for manual purchase references; otherwise prefer brc_create_purchase_gen_ref.",
     {
       companyName: companyNameSchema,
       supplierId: z.string().describe("Supplier id, for example 26180406."),
@@ -33,20 +35,28 @@ server.tool(
       netAmount: z.number().describe("Net amount before VAT."),
       vatRateId: z.number().int().describe("VAT rate id."),
       vatPercentage: z.number().describe("VAT percentage."),
-      reference: z.string().optional().describe("Optional manual purchase reference."),
+      reference: z.string().optional().describe("Required when the company is configured for manual purchase references."),
     },
     async ({ companyName, ...args }) => {
       const payload = buildPurchasePayload(args);
       if (args.reference !== undefined) (payload as JsonRecord).reference = args.reference;
+
+      await loadAndEnforceTransactionSettings(String(companyName), "purchase", payload);
+      const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+        String(companyName),
+        "purchase",
+        payload,
+        "manual"
+      );
   
       const createResponse = await brcJsonRequest(companyName, "POST", "/v1/purchases", payload);
-      return jsonResponse({ message: "Purchase created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
+      return jsonResponse({ message: "Purchase created using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
     }
   );
   
   server.tool(
     "brc_create_purchase_gen_ref",
-    "Creates a Purchases Book purchase with a generated reference using structured fields.",
+    "Creates a Purchases Book purchase with a generated reference using structured fields. Use when the company is configured for auto-generated purchase references.",
     {
       companyName: companyNameSchema,
       supplierId: z.number().int().positive(),
@@ -64,8 +74,15 @@ server.tool(
     },
     async ({ companyName, ...args }) => {
       const payload = buildPurchasePayload({ ...args, supplierId: String(args.supplierId) });
+      await loadAndEnforceTransactionSettings(String(companyName), "purchase", payload);
+      const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+        String(companyName),
+        "purchase",
+        payload,
+        "generated"
+      );
       const createResponse = await brcJsonRequest(companyName, "POST", "/v1/purchases/createPurchaseWithGeneratingReference", payload);
-      return jsonResponse({ message: "Purchase created through BRC API.", companyName, payloadSent: payload, createResponse });
+      return jsonResponse({ message: "Purchase created through BRC API.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
     }
   );
   

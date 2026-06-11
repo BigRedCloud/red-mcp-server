@@ -1,6 +1,3 @@
-import { sanitizeCashReceiptInput } from "../../cash_receipt_settings.js";
-import {z} from "zod";
-import type {ServerType} from "../../server.js"
 import {
     round2,
     type JsonRecord
@@ -54,6 +51,138 @@ function requireQuoteCompanyId(companyId: number | undefined): number {
 
 export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION =
   "Requires saleRepId and saleRepCode. Do not use default or demo sales rep values. If missing, list sales reps or ask the user to choose one before creating.";
+
+export const SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION =
+  "Requires analysisCategoryId and accountCode from a Sales Analysis category on each product line. Do not default to CR01/Customer or the first listed category. Set confirmCrAnalysisCategory=true only after the user confirms a CR account code is intentional.";
+
+export type SalesDocumentAnalysisWorkflow =
+  | "sales_invoice"
+  | "sales_credit_note"
+  | "quote";
+
+export interface SalesAnalysisPreflightOptions {
+  confirmCrAnalysisCategory?: boolean;
+}
+
+const SALES_ANALYSIS_STOP_PREFIX =
+  "Red Connect stopped before posting because sales analysis details need attention.";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function salesAnalysisPreflightError(detail: string): Error {
+  return new Error(`${SALES_ANALYSIS_STOP_PREFIX}\n\n${detail}`);
+}
+
+function normaliseAnalysisAccountCode(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed !== "" ? trimmed : undefined;
+}
+
+function isValidAnalysisCategoryId(value: unknown): boolean {
+  const id = Number(value);
+  return Number.isFinite(id) && id > 0;
+}
+
+function salesDocumentLabel(workflow: SalesDocumentAnalysisWorkflow): string {
+  switch (workflow) {
+    case "sales_invoice":
+      return "sales invoice";
+    case "sales_credit_note":
+      return "sales credit note";
+    case "quote":
+      return "quote";
+    default:
+      return workflow;
+  }
+}
+
+function collectProductLineAnalysis(
+  payload: unknown
+): Array<{ accountCode?: string; analysisCategoryId?: unknown }> {
+  if (!isRecord(payload)) {
+    return [];
+  }
+
+  const fromProductTrans: Array<{
+    accountCode?: string;
+    analysisCategoryId?: unknown;
+  }> = [];
+
+  if (Array.isArray(payload.productTrans)) {
+    for (const productTran of payload.productTrans) {
+      if (!isRecord(productTran) || !Array.isArray(productTran.acEntries)) {
+        continue;
+      }
+
+      for (const acEntry of productTran.acEntries) {
+        if (!isRecord(acEntry)) {
+          continue;
+        }
+
+        fromProductTrans.push({
+          accountCode: normaliseAnalysisAccountCode(acEntry.accountCode),
+          analysisCategoryId: acEntry.analysisCategoryId,
+        });
+      }
+    }
+  }
+
+  if (fromProductTrans.length > 0) {
+    return fromProductTrans;
+  }
+
+  if (
+    payload.analysisCategoryId !== undefined ||
+    payload.accountCode !== undefined
+  ) {
+    return [
+      {
+        accountCode: normaliseAnalysisAccountCode(payload.accountCode),
+        analysisCategoryId: payload.analysisCategoryId,
+      },
+    ];
+  }
+
+  return [];
+}
+
+export function enforceSalesProductLineAnalysisOrThrow(
+  payload: unknown,
+  workflow: SalesDocumentAnalysisWorkflow,
+  options?: SalesAnalysisPreflightOptions
+): void {
+  const documentLabel = salesDocumentLabel(workflow);
+  const lines = collectProductLineAnalysis(payload);
+
+  if (lines.length === 0) {
+    throw salesAnalysisPreflightError(
+      `Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not use Customer (CR) categories unless the user confirms that choice.`
+    );
+  }
+
+  for (const line of lines) {
+    if (!isValidAnalysisCategoryId(line.analysisCategoryId) || !line.accountCode) {
+      throw salesAnalysisPreflightError(
+        `Red Connect needs a Sales Analysis category for this ${documentLabel} product line. Provide analysisCategoryId and accountCode from the Sales book. Do not default to CR01, Customer, or the first listed analysis category.`
+      );
+    }
+
+    if (
+      line.accountCode.toUpperCase().startsWith("CR") &&
+      options?.confirmCrAnalysisCategory !== true
+    ) {
+      throw salesAnalysisPreflightError(
+        `The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red Connect blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`
+      );
+    }
+  }
+}
 
 export function requireSalesRepFields(
   saleRepId: number | undefined,
@@ -134,6 +263,40 @@ export function buildCustomerLikePayload(args: Record<string, unknown>, ownerTyp
     internationalBankAccountNumber: asString(args.internationalBankAccountNumber),
   };
 }
+
+function sanitizeCashReceiptInput(
+  args: Record<string, unknown>,
+  vatOnCashEnabled: boolean
+): Record<string, unknown> {
+  if (vatOnCashEnabled) return args;
+
+  const next: Record<string, unknown> = { ...args };
+
+  delete next.vatRateId;
+  delete next.vatPercentage;
+  delete next.percentage;
+  delete next.vatTypeId;
+  delete next.totalNet;
+  delete next.totalVat;
+  delete next.totalVAT;
+  delete next.vatEntries;
+
+  if (Array.isArray(next.acEntries) && next.acEntries.length > 0) {
+    next.acEntries = [];
+  }
+
+  const total = round2(asNumber(next.total));
+  if (total > 0) {
+    if (next.customerId !== undefined || next.acCode !== undefined) {
+      const ledger = asNumber(next.ledger);
+      next.ledger = round2(ledger > 0 ? ledger : total);
+      next.unallocated = round2(asNumber(next.unallocated));
+    }
+  }
+
+  return next;
+}
+
 export function buildCashReceiptPayload(
   args: Record<string, unknown>,
   options?: { vatOnCashEnabled?: boolean }
@@ -503,9 +666,10 @@ export function buildPurchasePayload(args: {
     const total = round2(calculatedNet + vat);
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
   
-    return {
-      ourReference: args.ourReference ?? args.reference ?? "MCP_TEST",
-      yourReference: args.yourReference ?? args.reference ?? "MCP_TEST",
+    const resolvedReference =
+      args.reference ?? args.ourReference ?? args.yourReference;
+
+    const payload: Record<string, unknown> = {
       deliveryTo: ["MCP Test"],
       productTrans: [
         {
@@ -538,7 +702,6 @@ export function buildPurchasePayload(args: {
       saleRepCode,
       useTaxInclusiveUnitPrice: false,
       customerId: args.customerId,
-      reference: args.reference ?? "MCP_TEST",
       details: null,
       unpaid: total,
       netGoods: 0,
@@ -555,6 +718,14 @@ export function buildPurchasePayload(args: {
       total,
       customFields: [],
     };
+
+    if (resolvedReference !== undefined) {
+      payload.reference = resolvedReference;
+      payload.ourReference = args.ourReference ?? resolvedReference;
+      payload.yourReference = args.yourReference ?? resolvedReference;
+    }
+
+    return payload;
   }
   
 
@@ -589,9 +760,15 @@ export function buildSalesCreditNotePayload(args: {
   base.total = total;
   base.unpaid = total;
   base.bookTranTypeId = args.bookTranTypeId;
-  base.reference = args.reference ?? "MCP_TEST_CN";
-  base.ourReference = args.reference ?? "MCP_TEST_CN";
-  base.yourReference = args.reference ?? "MCP_TEST_CN";
+  if (args.reference !== undefined) {
+    base.reference = args.reference;
+    base.ourReference = args.reference;
+    base.yourReference = args.reference;
+  } else {
+    delete base.reference;
+    delete base.ourReference;
+    delete base.yourReference;
+  }
   base.loType = "1";
   const pts = Array.isArray(base.productTrans) ? base.productTrans as Record<string, unknown>[] : [];
   if (pts[0]) {
@@ -688,7 +865,7 @@ export function buildSalesCreditNotePayload(args: {
     vatPercentage: number;
     tranNote: string;
     analysisCategoryId: number;
-    accountCode?: string;
+    accountCode: string;
   }) {
     const net = round2(args.quantity * args.unitPrice);
     const vat = round2(net * (args.vatPercentage / 100));
@@ -696,7 +873,7 @@ export function buildSalesCreditNotePayload(args: {
     const companyId = requireQuoteCompanyId(args.companyId);
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
   
-    return {
+    const payload: Record<string, unknown> = {
       companyId,
       customerOwnerId: args.customerOwnerId,
       vatTypeId: args.vatTypeId ?? 1,
@@ -706,9 +883,6 @@ export function buildSalesCreditNotePayload(args: {
       entryDate: args.entryDate,
       procDate: args.procDate,
       closedDate: null,
-      reference: args.reference ?? args.poNumber ?? args.ddNumber ?? `MCP_QUOTE_${Date.now()}`,
-      poNumber: args.poNumber ?? args.reference ?? `MCP_PO_${Date.now()}`,
-      ddNumber: args.ddNumber ?? args.reference ?? `MCP_DD_${Date.now()}`,
       customerOwnerName: args.customerOwnerName,
       deliveryList: "\"MCP Test\"",
       comments: args.comments,
@@ -735,7 +909,7 @@ export function buildSalesCreditNotePayload(args: {
             {
               id: 0,
               companyId,
-              accountCode: args.accountCode ?? null,
+              accountCode: args.accountCode,
               analysisCategoryId: args.analysisCategoryId,
               quoteProductTranId: 0,
               value: net,
@@ -747,6 +921,18 @@ export function buildSalesCreditNotePayload(args: {
       deliveryTo: ["MCP Test"],
       customFields: [],
     };
+
+    if (args.reference !== undefined) {
+      payload.reference = args.reference;
+    }
+    if (args.poNumber !== undefined) {
+      payload.poNumber = args.poNumber;
+    }
+    if (args.ddNumber !== undefined) {
+      payload.ddNumber = args.ddNumber;
+    }
+
+    return payload;
   }
   
   export function buildBankAccountPayload(args: Record<string, unknown>) {

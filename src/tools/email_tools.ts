@@ -6,7 +6,10 @@ import {
   jsonResponse,
   textResponse,
 } from "../shared.js";
-
+import {
+  enforceTransactionSettingsOrThrow,
+  getCompanyProcessingSettings,
+} from "../company_processing_settings.js";
 type SendMode = "single_with_bcc" | "separate";
 
 const optionalEmailFields = {
@@ -206,6 +209,31 @@ async function sendEmail(
   });
 }
 
+function buildStatementPreflightPayload(
+  rest: Record<string, unknown>
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+
+  for (const key of ["minBalance", "fromPeriod", "toPeriod", "customerId"]) {
+    if (rest[key] !== undefined) {
+      payload[key] = rest[key];
+    }
+  }
+
+  return payload;
+}
+
+function enforceStatementEmailSettings(
+  settings: Awaited<ReturnType<typeof getCompanyProcessingSettings>>,
+  rest: Record<string, unknown>
+) {
+  enforceTransactionSettingsOrThrow(
+    settings,
+    "statement",
+    buildStatementPreflightPayload(rest)
+  );
+}
+
 function registerEmailSendTool(
   server: ServerType,
   toolName: string,
@@ -238,6 +266,18 @@ function registerEmailSendTool(
         confirmSend,
         ...rest
       } = args;
+
+      //minimal balance from setup/options
+      const statementSettings =
+        path === "/v1/email/sendEmailStatement"
+          ? await getCompanyProcessingSettings(String(companyName))
+          : undefined;
+
+      if (path === "/v1/email/sendEmailStatement" && rest.minBalance === undefined) {
+        if (statementSettings?.defaultDebtorStatementMinimumBalance !== undefined) {
+          rest.minBalance = statementSettings.defaultDebtorStatementMinimumBalance;
+        }
+      }
 
       const documentLabel = `${idField} ${String(rest[idField])}`;
       //normalise the email list to an array of unique email addresses
@@ -291,6 +331,10 @@ function registerEmailSendTool(
 
       //if the user has confirmed the email and the send mode is separate, send the email to each recipient separately
       if (parsedSendMode === "separate" && recipients.length > 1) {
+        if (path === "/v1/email/sendEmailStatement" && statementSettings) {
+          enforceStatementEmailSettings(statementSettings, rest);
+        }
+
         const results = [];
 
         for (const recipient of recipients) {
@@ -356,6 +400,10 @@ function registerEmailSendTool(
         bccAddresses: combinedBcc,
         messageBody: messageBody as string | undefined,
       });
+
+      if (path === "/v1/email/sendEmailStatement" && statementSettings) {
+        enforceStatementEmailSettings(statementSettings, rest);
+      }
 
       return sendEmail(String(companyName), path, payload);
     }

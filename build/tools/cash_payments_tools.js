@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isVatOnCashReceiptEnabled } from "../cash_receipt_settings.js";
+import { loadAndEnforceTransactionSettings } from "../company_processing_settings.js";
 import { brcJsonRequest, companyNameSchema, jsonResponse } from "../shared.js";
 import { registerListTool, registerGetTool } from "./general/list_tools.js";
 import { registerRawUpdateTool, registerRawDeleteTool, registerRawBatchTool, } from "./general/crud_tools.js";
@@ -86,7 +86,8 @@ export function registerCashPaymentTools(server) {
         detailCollection: z.array(z.unknown()).optional(),
     }, async ({ companyName, ...args }) => {
         const merged = unwrapPayload(args);
-        const vatOnCashEnabled = await isVatOnCashReceiptEnabled(companyName);
+        const processingSettings = await loadAndEnforceTransactionSettings(companyName, "cash_receipt", merged);
+        const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
         const payload = buildCashReceiptPayload(merged, { vatOnCashEnabled });
         const response = await brcJsonRequest(companyName, "POST", "/v1/cashReceipts", payload);
         return jsonResponse({

@@ -9,7 +9,7 @@ export function registerCompanySetupTools(server:ServerType){
 
 server.tool(
     "brc_get_company_setup_config",
-    "Gets BRC company setup configuration.",
+    "Gets full BRC company setup configuration, including general details, financial year, reference settings, and processing options.",
     { companyName: companyNameSchema },
     async ({ companyName }) => {
       const data = await brcFetch(companyName, "/v1/companySetupConfig");
@@ -45,7 +45,7 @@ server.tool(
   
   server.tool(
     "brc_get_company_options",
-    "Gets BRC company options.",
+    "Gets raw BRC company processing/options settings, including nominal ledger, VAT on cash receipts, gross price entry, margin VAT, reverse charge VAT, VAT discrepancy tolerance, and ageing options. Read-only in Red Connect; changes must be made in Big Red Cloud.",
     { companyName: companyNameSchema },
     async ({ companyName }) => {
       const data = await brcFetch(companyName, "/v1/companySetupConfig/getCompanyOptions");

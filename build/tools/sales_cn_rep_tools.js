@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../shared.js";
-import { buildSalesCreditNotePayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, requireSalesRepInPayload } from "./general/payloads_tools.js";
+import { buildSalesCreditNotePayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload } from "./general/payloads_tools.js";
+import { loadAndEnforceTransactionSettings } from "../company_processing_settings.js";
+import { loadAndEnforceReferenceSettings } from "../company_reference_settings.js";
 export function registerSalesCreditNoteAndRepTools(server) {
     // Sales credit note tools ----------------------------------------------------
-    server.tool("brc_create_sales_credit_note", `Creates a BRC sales credit note using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
+    server.tool("brc_create_sales_credit_note", `Creates a BRC sales credit note using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_credit_note_gen_ref. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
         acCode: z.string(),
@@ -12,7 +14,7 @@ export function registerSalesCreditNoteAndRepTools(server) {
         procDate: z.string(),
         bookTranTypeId: z.number().int().positive(),
         analysisCategoryId: z.number().int().positive(),
-        accountCode: z.string(),
+        accountCode: z.string().min(1),
         description: z.string(),
         netAmount: z.number().positive(),
         vatRateId: z.number().int().positive(),
@@ -24,28 +26,47 @@ export function registerSalesCreditNoteAndRepTools(server) {
         saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
         saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
         reference: z.string().optional(),
-    }, async ({ companyName, ...args }) => {
+        confirmCrAnalysisCategory: z
+            .boolean()
+            .optional()
+            .describe("Set true only after the user confirms a CR sales analysis account code is intentional for this product line."),
+    }, async ({ companyName, confirmCrAnalysisCategory, ...args }) => {
         let payload;
         try {
             payload = buildSalesCreditNotePayload(args);
+            enforceSalesProductLineAnalysisOrThrow(payload, "sales_credit_note", {
+                confirmCrAnalysisCategory,
+            });
+            await loadAndEnforceTransactionSettings(String(companyName), "sales_credit_note", payload);
+            const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "sales_credit_note", payload, "manual");
             const createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesCreditNotes", payload);
-            return jsonResponse({ message: "Sales credit note created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
+            return jsonResponse({ message: "Sales credit note created using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
         }
         catch (error) {
             return jsonResponse({ message: "Error creating sales credit note.", companyName, endpoint: "POST /v1/salesCreditNotes", inputArgs: args, payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_create_sales_credit_note_gen_ref", `Creates a BRC sales credit note with an auto-generated reference using a raw BRC payload. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`, {
+    server.tool("brc_create_sales_credit_note_gen_ref", `Creates a BRC sales credit note with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
-    }, async ({ companyName, payload }) => {
+        confirmCrAnalysisCategory: z
+            .boolean()
+            .optional()
+            .describe("Set true only after the user confirms a CR sales analysis account code is intentional for this product line."),
+    }, async ({ companyName, payload, confirmCrAnalysisCategory }) => {
         const finalPayload = payload;
         requireSalesRepInPayload(finalPayload);
+        enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_credit_note", {
+            confirmCrAnalysisCategory,
+        });
+        await loadAndEnforceTransactionSettings(String(companyName), "sales_credit_note", finalPayload);
+        const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "sales_credit_note", finalPayload, "generated");
         const response = await brcJsonRequest(companyName, "POST", "/v1/salesCreditNotes/createCreditNoteWithGeneratingReference", finalPayload);
         return jsonResponse({
             message: "Sales credit note created with generated reference.",
             companyName,
             payloadSent: finalPayload,
+            referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined,
             response,
         });
     });

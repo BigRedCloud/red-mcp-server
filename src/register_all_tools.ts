@@ -17,14 +17,23 @@ import { registerSupplierTools } from "./tools/supplier_tools.js";
 import { registerSalesVatTools } from "./tools/vat_sales_tools.js";
 import { registerBankTools } from "./tools/bank_tools.js";
 import { registerEmailTools } from "./tools/email_tools.js";
+import { registerCompanyProcessingSettingsTools } from "./tools/company_processing_settings_tools.js";
 
-import { getDisabledSkillMessage,getToolSkillGroup, isToolEnabled } from "./server_config.js";
+import { getToolSkillGroup, isToolEnabled } from "./server_config.js";
+import {
+  appendWriteConfirmationDescription,
+  confirmCounterpartyExplicitSchema,
+  confirmWriteSchema,
+  requiresCounterpartyConfirmation,
+  requiresWriteConfirmation,
+  wrapWriteToolHandler,
+} from "./write_confirmation.js";
 
 function createFilteredServer(server: McpServer): McpServer {
-  const originalTool = server.tool.bind(server) as any;
+  const originalTool = server.tool.bind(server) as (...args: any[]) => any;
 
   const filteredServer = Object.create(server) as McpServer & {
-    tool: (...args: any[]) => unknown;
+    tool: (...args: any[]) => any;
   };
 
   filteredServer.tool = (toolName: string, ...args: any[]) => {
@@ -32,11 +41,46 @@ function createFilteredServer(server: McpServer): McpServer {
       console.warn(
         `Red Connect: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`
       );
-    
+
       return undefined as unknown;
     }
 
-    return originalTool(toolName, ...args);
+    if (args.length < 3) {
+      return originalTool(
+        toolName,
+        ...(args as [string, Record<string, unknown>, (args: Record<string, unknown>) => Promise<unknown> | unknown])
+      );
+    }
+
+    const [description, schema, handler] = args as [
+      string,
+      Record<string, unknown>,
+      (args: Record<string, unknown>) => Promise<unknown> | unknown,
+    ];
+
+    if (!requiresWriteConfirmation(toolName)) {
+      return originalTool(toolName, description, schema, handler);
+    }
+
+    const wrappedSchema = {
+      ...schema,
+      confirmWrite: schema.confirmWrite ?? confirmWriteSchema,
+      ...(requiresCounterpartyConfirmation(toolName)
+        ? {
+            confirmCounterpartyExplicit:
+              schema.confirmCounterpartyExplicit ?? confirmCounterpartyExplicitSchema,
+          }
+        : {}),
+    };
+
+    const wrappedHandler = wrapWriteToolHandler(toolName, handler);
+
+    return originalTool(
+      toolName,
+      appendWriteConfirmationDescription(description, toolName),
+      wrappedSchema,
+      wrappedHandler
+    );
   };
 
   return filteredServer as McpServer;
@@ -62,4 +106,5 @@ export function registerAllTools(server: McpServer): void {
   registerDeploymentTools(filteredServer);
   registerAuditTools(filteredServer);
   registerEmailTools(filteredServer);
+  registerCompanyProcessingSettingsTools(filteredServer);
 }

@@ -9,15 +9,27 @@ import {
   jsonResponse,
   type JsonRecord,
 } from "../../shared.js";
-import { isVatOnCashReceiptEnabled } from "../../cash_receipt_settings.js";
+import {
+  enforceTransactionSettingsOrThrow,
+  getCompanyProcessingSettings,
+  loadAndEnforceTransactionSettings,
+  type TransactionWorkflow,
+} from "../../company_processing_settings.js";
+import {
+  enforceReferenceSettingsOrThrow,
+  getCompanyReferenceSettings,
+  type ReferenceWorkflow,
+} from "../../company_reference_settings.js";
 import {
   buildBankAccountPayload,
   buildCashReceiptPayload,
   mergeCashReceiptUpdateFromCurrent,
   buildCustomerLikePayload,
   buildProductPayload,
+  enforceSalesProductLineAnalysisOrThrow,
   normalizeBatchItems,
   unwrapPayload,
+  type SalesDocumentAnalysisWorkflow,
 } from "./payloads_tools.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
 import { getMaxBatchItems } from "../../server_config.js";
@@ -46,6 +58,35 @@ function removeOpeningBalanceFields<T extends Record<string, unknown>>(value: T)
   }
 
   return cleaned as T;
+}
+
+const REFERENCE_BATCH_WORKFLOWS: Partial<Record<string, ReferenceWorkflow>> = {
+  "/v1/salesInvoices": "sales_invoice",
+  "/v1/salesCreditNotes": "sales_credit_note",
+  "/v1/purchases": "purchase",
+  "/v1/quotes": "quote",
+};
+
+const SALES_ANALYSIS_BATCH_WORKFLOWS: Partial<
+  Record<string, SalesDocumentAnalysisWorkflow>
+> = {
+  "/v1/salesInvoices": "sales_invoice",
+  "/v1/salesCreditNotes": "sales_credit_note",
+  "/v1/quotes": "quote",
+};
+
+const TRANSACTION_BATCH_WORKFLOWS: Partial<Record<string, TransactionWorkflow>> = {
+  "/v1/salesInvoices": "sales_invoice",
+  "/v1/salesEntries": "sales_invoice",
+  "/v1/salesCreditNotes": "sales_credit_note",
+  "/v1/purchases": "purchase",
+  "/v1/cashReceipts": "cash_receipt",
+};
+
+function extractBatchItemPayload(
+  entry: Record<string, unknown>
+): Record<string, unknown> {
+  return (entry.item ?? entry.Item ?? entry) as Record<string, unknown>;
 }
 export function registerRawCreateTool(
   server: ServerType,
@@ -78,7 +119,12 @@ export function registerRawCreateTool(
 
       if (path === "/v1/bankAccounts") finalPayload = buildBankAccountPayload(finalPayload);
       if (path === "/v1/cashReceipts") {
-        const vatOnCashEnabled = await isVatOnCashReceiptEnabled(companyName);
+        const processingSettings = await loadAndEnforceTransactionSettings(
+          companyName,
+          "cash_receipt",
+          finalPayload
+        );
+        const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
         finalPayload = buildCashReceiptPayload(finalPayload, { vatOnCashEnabled });
       }
 
@@ -154,7 +200,15 @@ export function registerRawUpdateTool(
       if (path === "/v1/suppliers") payload = { ...payload, ...buildCustomerLikePayload(payload, 3) };
       if (path === "/v1/bankAccounts") payload = { ...payload, ...buildBankAccountPayload(payload) };
       if (path === "/v1/cashReceipts") {
-        const vatOnCashEnabled = await isVatOnCashReceiptEnabled(companyName);
+        const processingSettings = await loadAndEnforceTransactionSettings(
+          companyName,
+          "cash_receipt",
+          {
+            ...(current as JsonRecord),
+            ...mergeUpdates,
+          }
+        );
+        const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
         const currentRecord = current as JsonRecord;
         payload = mergeCashReceiptUpdateFromCurrent(
           buildCashReceiptPayload(payload, { vatOnCashEnabled }),
@@ -265,8 +319,94 @@ export function registerRawBatchTool(
           `Batch limit exceeded. Red Connect allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`
         );
       }
-      const vatOnCashReceiptEnabled =
-        path === "/v1/cashReceipts" ? await isVatOnCashReceiptEnabled(companyName) : true;
+      let vatOnCashReceiptEnabled = true;
+      const transactionWorkflow = TRANSACTION_BATCH_WORKFLOWS[path];
+      if (transactionWorkflow) {
+        const processingSettings = await getCompanyProcessingSettings(companyName);
+        if (path === "/v1/cashReceipts") {
+          vatOnCashReceiptEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
+        }
+
+        const preflightFailures: string[] = [];
+        for (let index = 0; index < items.length; index++) {
+          const raw = extractBatchItemPayload(items[index] as Record<string, unknown>);
+          try {
+            enforceTransactionSettingsOrThrow(
+              processingSettings,
+              transactionWorkflow,
+              raw
+            );
+          } catch (error) {
+            preflightFailures.push(
+              `Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+
+        if (preflightFailures.length > 0) {
+          throw new Error(
+            `Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed transaction settings preflight checks:\n${preflightFailures.join("\n")}`
+          );
+        }
+      }
+
+      const referenceWorkflow = REFERENCE_BATCH_WORKFLOWS[path];
+      if (referenceWorkflow) {
+        const referenceSettings = await getCompanyReferenceSettings(companyName);
+        const preflightFailures: string[] = [];
+
+        for (let index = 0; index < items.length; index++) {
+          const raw = extractBatchItemPayload(items[index] as Record<string, unknown>);
+          try {
+            enforceReferenceSettingsOrThrow(
+              referenceSettings,
+              referenceWorkflow,
+              raw,
+              "manual"
+            );
+          } catch (error) {
+            preflightFailures.push(
+              `Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+
+        if (preflightFailures.length > 0) {
+          throw new Error(
+            `Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed reference preflight checks:\n${preflightFailures.join("\n")}`
+          );
+        }
+      }
+
+      const salesAnalysisWorkflow = SALES_ANALYSIS_BATCH_WORKFLOWS[path];
+      if (salesAnalysisWorkflow) {
+        const preflightFailures: string[] = [];
+
+        for (let index = 0; index < items.length; index++) {
+          const entry = items[index] as Record<string, unknown>;
+          const raw = extractBatchItemPayload(entry);
+          const confirmCrAnalysisCategory =
+            entry.confirmCrAnalysisCategory === true ||
+            raw.confirmCrAnalysisCategory === true;
+
+          try {
+            enforceSalesProductLineAnalysisOrThrow(raw, salesAnalysisWorkflow, {
+              confirmCrAnalysisCategory,
+            });
+          } catch (error) {
+            preflightFailures.push(
+              `Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+
+        if (preflightFailures.length > 0) {
+          throw new Error(
+            `Red Connect stopped before posting the batch because ${preflightFailures.length} item(s) failed sales analysis preflight checks:\n${preflightFailures.join("\n")}`
+          );
+        }
+      }
+
       const normalizedItems = normalizeBatchItems(path, items as Record<string, unknown>[], {
         vatOnCashReceiptEnabled,
       });

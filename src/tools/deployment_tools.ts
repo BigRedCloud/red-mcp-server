@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isVatOnCashReceiptEnabled } from "../cash_receipt_settings.js";
+import { getCompanyProcessingSettings, type CompanyProcessingSettings } from "../company_processing_settings.js";
+import {
+  formatReferenceMode,
+  getCompanyReferenceSettings,
+  type CompanyReferenceSettings,
+} from "../company_reference_settings.js";
 import type { ServerType } from "../server.js";
 import {
   brcFetch,
@@ -63,6 +68,39 @@ function findDateByLikelyKeys(obj: unknown, keys: string[]): string | null {
   }
 
   return null;
+}
+
+function transactionNeedsPreflightChecks(
+  settings: CompanyProcessingSettings,
+  referenceSettings?: CompanyReferenceSettings
+): boolean {
+  if (referenceSettings) {
+    const referenceModes = [
+      referenceSettings.salesAutoGenerateReference,
+      referenceSettings.purchasesAutoGenerateReference,
+      referenceSettings.quotesAutoGenerateReference,
+      referenceSettings.debtorsJournalAutoGenerateReference,
+      referenceSettings.creditorsJournalAutoGenerateReference,
+    ];
+
+    if (referenceModes.some((mode) => mode === undefined)) {
+      return true;
+    }
+  }
+
+  if (settings.vatOnCashReceiptsEnabled === undefined) {
+    return true;
+  }
+
+  if (settings.vatOnCashReceiptsEnabled === false) {
+    return false;
+  }
+
+  return (
+    settings.cashReceiptVatMode === "manual" ||
+    settings.cashReceiptVatMode === "allocation" ||
+    settings.cashReceiptVatMode === "unknown"
+  );
 }
 
 function deriveFinancialYear(financialYearData: unknown, setupData?: unknown) {
@@ -240,6 +278,7 @@ Customer output policy:
 - Where practical, analytical answers should be structured as: Data accessed, Calculations / assumptions, Interpretation of data, and Limitations / checks recommended.
 - If the user asks for profit but only sales and purchases are available, call it a rough margin or estimate, not final profit.
 - If the user asks for evidence, show the source record categories and calculation method first. Only show detailed record lists if useful or requested.
+- Big Red Cloud company setup: Red Connect can explain which setting needs to be reviewed, but it cannot change company setup options itself or guide the user step-by-step through the Big Red Cloud interface. Any changes must be made directly in Big Red Cloud by the user or their BRC administrator. If they need help finding or changing the setting, recommend referencing Big Red Cloud webinars or contacting support. Do not use a standalone sentence such as "Red Connect does not provide step-by-step guidance". Never claim Red Connect can change company processing settings.
 
 Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
@@ -508,7 +547,8 @@ export function registerDeploymentTools(server: ServerType) {
       const suppliers = extractListItems(suppliersData);
       const vatRates = extractListItems(vatRatesData);
 
-      const vatOnCashReceiptEnabled = await isVatOnCashReceiptEnabled(companyName);
+      const processingSettings = await getCompanyProcessingSettings(companyName);
+      const referenceSettings = await getCompanyReferenceSettings(companyName);
 
       const warnings: string[] = [];
       if (todayInFinancialYear === false) {
@@ -519,17 +559,95 @@ export function registerDeploymentTools(server: ServerType) {
       if (customers.length === 0) warnings.push("No customers were returned on page 1; customer workflows may need setup data.");
       if (products.length === 0) warnings.push("No products were returned on page 1; product-based invoice/quote workflows may need setup data.");
       if (vatRates.length === 0) warnings.push("No VAT rates were returned; VAT-bearing transactions may fail.");
-      if (!vatOnCashReceiptEnabled) {
+
+      if (processingSettings.vatOnCashReceiptsEnabled === false) {
         warnings.push(
-          "VOCR (VAT on Cash Receipt, vocrSettingValue) appears disabled. Cash receipt tools will post without VAT rate fields."
+          "VAT on Cash Receipts is not enabled in BRC. Cash receipt tools should not treat receipts as receipt-basis VAT unless the user confirms otherwise."
+        );
+      } else if (processingSettings.vatOnCashReceiptsEnabled === true) {
+        if (processingSettings.cashReceiptVatMode === "manual") {
+          warnings.push(
+            "VAT on Cash Receipts is enabled with manual cash receipt VAT mode. Red Connect will require VAT details before posting VAT-sensitive cash receipts."
+          );
+        } else if (processingSettings.cashReceiptVatMode === "allocation") {
+          warnings.push(
+            "VAT on Cash Receipts is enabled with allocation cash receipt VAT mode. Red Connect may require allocation details before posting VAT-sensitive cash receipts."
+          );
+        } else if (processingSettings.cashReceiptVatMode === "unknown") {
+          warnings.push(
+            "VAT on Cash Receipts is enabled, but Red Connect could not determine the cash receipt VAT mode from company options."
+          );
+        }
+      } else {
+        warnings.push(
+          "Red Connect could not confirm the VAT on Cash Receipts setting from company options."
         );
       }
+
+      if (referenceSettings.salesAutoGenerateReference === undefined) {
+        warnings.push(
+          "Red Connect could not confirm whether sales references are auto-generated or manual."
+        );
+      } else if (referenceSettings.salesAutoGenerateReference === false) {
+        warnings.push(
+          "Sales references are configured as manual. Red Connect will require a reference before posting sales invoices or sales credit notes."
+        );
+      }
+
+      if (referenceSettings.purchasesAutoGenerateReference === undefined) {
+        warnings.push(
+          "Red Connect could not confirm whether purchase references are auto-generated or manual."
+        );
+      } else if (referenceSettings.purchasesAutoGenerateReference === false) {
+        warnings.push(
+          "Purchase references are configured as manual. Red Connect will require a reference before posting purchases."
+        );
+      }
+
+      if (referenceSettings.quotesAutoGenerateReference === undefined) {
+        warnings.push(
+          "Red Connect could not confirm whether quote references are auto-generated or manual. Do not assume auto-generate for quotes; ask for a quote reference or user confirmation before preparing a postable quote."
+        );
+      } else if (referenceSettings.quotesAutoGenerateReference === false) {
+        warnings.push(
+          "Quote references are configured as manual. Red Connect will require a reference before posting quotes."
+        );
+      }
+
+      if (referenceSettings.debtorsJournalAutoGenerateReference === undefined) {
+        warnings.push(
+          "Red Connect could not confirm whether debtors journal references are auto-generated or manual."
+        );
+      }
+
+      if (referenceSettings.creditorsJournalAutoGenerateReference === undefined) {
+        warnings.push(
+          "Red Connect could not confirm whether creditors journal references are auto-generated or manual."
+        );
+      }
+
+      const transactionReadyBase = Boolean(financialYear.start && vatRates.length > 0);
+      const needsPreflight = transactionNeedsPreflightChecks(
+        processingSettings,
+        referenceSettings
+      );
+
       const readiness = {
         readOnlyReady: true,
         createCustomerSupplierProductReady: true,
-        transactionReady: Boolean(financialYear.start && vatRates.length > 0),
+        transactionReady: transactionReadyBase,
+        transactionReadyStatus: !transactionReadyBase
+          ? "Not ready"
+          : needsPreflight
+            ? "Ready with preflight checks"
+            : "Ready",
         generatedDocumentReady: todayInFinancialYear !== false,
       };
+
+      const readinessNote =
+        transactionReadyBase && needsPreflight
+          ? "Some transaction workflows may be blocked until required VAT/allocation details or reference numbers are supplied."
+          : undefined;
 
       return jsonResponse({
         companyName,
@@ -537,7 +655,21 @@ export function registerDeploymentTools(server: ServerType) {
         today,
         financialYear,
         todayInFinancialYear,
-        vatOnCashReceiptEnabled,
+        vatOnCashReceiptsEnabled: processingSettings.vatOnCashReceiptsEnabled,
+        cashReceiptVatMode: processingSettings.cashReceiptVatMode,
+        referenceSettings: {
+          salesReferences: formatReferenceMode(referenceSettings.salesAutoGenerateReference),
+          purchasesReferences: formatReferenceMode(
+            referenceSettings.purchasesAutoGenerateReference
+          ),
+          quotesReferences: formatReferenceMode(referenceSettings.quotesAutoGenerateReference),
+          debtorsJournalReferences: formatReferenceMode(
+            referenceSettings.debtorsJournalAutoGenerateReference
+          ),
+          creditorsJournalReferences: formatReferenceMode(
+            referenceSettings.creditorsJournalAutoGenerateReference
+          ),
+        },
         referenceDataSampleCounts: {
           customersOnFirstPage: customers.length,
           productsOnFirstPage: products.length,
@@ -545,6 +677,7 @@ export function registerDeploymentTools(server: ServerType) {
           vatRatesOnFirstPage: vatRates.length,
         },
         readiness,
+        readinessNote,
         warnings,
         deploymentCapabilities: getCustomerDeploymentCapabilities(),
         recommendedNextPrompts: [

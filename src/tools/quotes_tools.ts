@@ -9,7 +9,8 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../shared.js";
-  import{buildQuotePayload, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} from "./general/payloads_tools.js";
+  import{buildQuotePayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow} from "./general/payloads_tools.js";
+  import { loadAndEnforceReferenceSettings } from "../company_reference_settings.js";
 
   export function registerQuoteTools(server:ServerType){
 
@@ -27,9 +28,15 @@ const quoteSchemaBase = {
     vatTypeId: z.number().int().positive().optional(),
     saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
     saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
-    reference: z.string().optional(),
+    reference: z.string().optional().describe("Required when quote references are manual, or when the quote reference setting is unknown."),
     poNumber: z.string().optional(),
     ddNumber: z.string().optional(),
+    confirmQuotesAutoGenerateInBrc: z
+      .boolean()
+      .optional()
+      .describe(
+        "Set true only after the user confirms quotes are auto-generated in Big Red Cloud. Required for brc_create_quote_gen_ref when Quotes reference setting is Unknown."
+      ),
     layoutType: z.number().int().positive().optional(),
     productId: z.number().int().positive(),
     productCode: z.string(),
@@ -39,35 +46,70 @@ const quoteSchemaBase = {
     vatPercentage: z.number(),
     tranNote: z.string(),
     analysisCategoryId: z.number().int().positive(),
-    accountCode: z.string().optional(),
+    accountCode: z.string().min(1).describe("Sales Analysis account code for the quote product line, for example SA01."),
+    confirmCrAnalysisCategory: z
+      .boolean()
+      .optional()
+      .describe(
+        "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
+      ),
   };
   
   server.tool(
     "brc_create_quote",
-    `Creates a BRC quote using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
+    `Creates a BRC quote using structured MCP fields. Requires a quote reference when quote references are manual or unknown. Do not use when Quotes reference setting is Unknown unless the user has provided a quote reference. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
     quoteSchemaBase,
-    async ({ companyName, ...args }) => {
-      const payload = buildQuotePayload(args);
+    async ({ companyName, confirmQuotesAutoGenerateInBrc: _confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
+      let payload: unknown;
       try {
+        const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+          String(companyName),
+          "quote",
+          {
+            reference: args.reference,
+            poNumber: args.poNumber,
+            ddNumber: args.ddNumber,
+          },
+          "manual"
+        );
+        payload = buildQuotePayload(args);
+        enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
+          confirmCrAnalysisCategory,
+        });
         const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes", payload);
-        return jsonResponse({ message: "Quote created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
+        return jsonResponse({ message: "Quote created using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
       } catch (error) {
-        return jsonResponse({ message: "Error creating quote.", companyName, endpoint: "POST /v1/quotes", payloadSent: payload, error: error instanceof Error ? error.message : String(error) });
+        return jsonResponse({ message: "Error creating quote.", companyName, endpoint: "POST /v1/quotes", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
       }
     }
   );
   
   server.tool(
     "brc_create_quote_gen_ref",
-    `Creates a BRC quote with a generated reference using structured MCP fields. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION}`,
+    `Creates a BRC quote with a generated reference using structured MCP fields. Use only when quote references are auto-generated in Big Red Cloud, or when the user has confirmed auto-generate after Quotes reference setting was Unknown. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
     quoteSchemaBase,
-    async ({ companyName, ...args }) => {
-      const payload = buildQuotePayload(args);
+    async ({ companyName, confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
+      let payload: unknown;
       try {
+        const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
+          String(companyName),
+          "quote",
+          {
+            reference: args.reference,
+            poNumber: args.poNumber,
+            ddNumber: args.ddNumber,
+          },
+          "generated",
+          { userConfirmedAutoGenerate: confirmQuotesAutoGenerateInBrc }
+        );
+        payload = buildQuotePayload(args);
+        enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
+          confirmCrAnalysisCategory,
+        });
         const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes/createQuoteWithGeneratingReference", payload);
-        return jsonResponse({ message: "Quote created with a generated reference using structured MCP fields.", companyName, payloadSent: payload, createResponse });
+        return jsonResponse({ message: "Quote created with a generated reference using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
       } catch (error) {
-        return jsonResponse({ message: "Error creating quote with a generated reference.", companyName, endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference", payloadSent: payload, error: error instanceof Error ? error.message : String(error) });
+        return jsonResponse({ message: "Error creating quote with a generated reference.", companyName, endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
       }
     }
   );

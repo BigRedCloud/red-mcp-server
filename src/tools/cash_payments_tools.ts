@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isVatOnCashReceiptEnabled } from "../cash_receipt_settings.js";
+import { loadAndEnforceTransactionSettings } from "../company_processing_settings.js";
 import type { ServerType } from "../server.js";
 import { brcJsonRequest, companyNameSchema, jsonResponse } from "../shared.js";
 import { registerListTool, registerGetTool } from "./general/list_tools.js";
@@ -131,7 +131,12 @@ server.tool(
   },
   async ({ companyName, ...args }) => {
     const merged = unwrapPayload(args as Record<string, unknown>);
-    const vatOnCashEnabled = await isVatOnCashReceiptEnabled(companyName);
+    const processingSettings = await loadAndEnforceTransactionSettings(
+      companyName,
+      "cash_receipt",
+      merged
+    );
+    const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
     const payload = buildCashReceiptPayload(merged, { vatOnCashEnabled });
 
     const response = await brcJsonRequest(

@@ -59,12 +59,23 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_getting_started",
     "brc_get_deployment_policy",
 ]);
-const DEV_TOOL_NAMES = new Set(["brc_get_dev_mode_details"]);
+const DEV_TOOL_NAMES = new Set([
+    "brc_get_dev_mode_details",
+    "brc_dev_diagnose_company_processing_settings",
+]);
+/** Read-only tools that must not match broader update/write name patterns. */
+const READ_ONLY_TOOL_NAMES = new Set([
+    "brc_get_company_processing_settings",
+    "brc_get_company_reference_settings",
+    "brc_check_transaction_settings",
+]);
 function classifyTool(toolName) {
     if (SESSION_TOOL_NAMES.has(toolName))
         return "session";
     if (DEV_TOOL_NAMES.has(toolName))
         return "dev";
+    if (READ_ONLY_TOOL_NAMES.has(toolName))
+        return "read";
     if (toolName.startsWith("brc_delete_"))
         return "delete";
     if (toolName.startsWith("brc_batch_"))
@@ -73,9 +84,9 @@ function classifyTool(toolName) {
         return "email";
     if (toolName.startsWith("brc_create_") ||
         toolName.startsWith("brc_update_") ||
+        toolName.startsWith("brc_process_") ||
         toolName.includes("_gen_ref") ||
         toolName.includes("generate") ||
-        toolName.includes("process") ||
         toolName.includes("close") ||
         toolName.includes("reopen")) {
         return "update";

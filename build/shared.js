@@ -42,11 +42,15 @@ export function getApiKeyForCompany(companyName) {
         throw new Error([
             `No API key is currently stored for "${companyName}" in MCP server memory.`,
             "",
-            "To continue, ask the user to connect the company again and provide the API key (do not display or repeat any key value in chat).",
+            "To continue, ask the user to connect by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt (do not display or repeat any key value in chat).",
         ].join("\n"));
     }
     if (context.expiresAt < Date.now()) {
-        throw new Error(`API key for "${companyName}" has expired. Please provide it again in order to continue this session.`);
+        throw new Error([
+            `API key for "${companyName}" has expired.`,
+            "",
+            "To continue, ask the user to connect again by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt.",
+        ].join("\n"));
     }
     assertApiKeyAllowed(context.apiKey);
     return context.apiKey;
@@ -410,19 +414,6 @@ export async function fetchAllNominalAccounts(companyName) {
         }
     }
     return all;
-}
-export function requireWriteConfirmation(args) {
-    if (args.confirmWrite === true)
-        return null;
-    return jsonResponse({
-        status: "confirmation_required",
-        message: "This action will write data to Big Red Cloud. Review the details and call the tool again with confirmWrite: true to proceed.",
-        companyName: args.companyName,
-        action: args.action,
-        endpoint: args.endpoint,
-        payloadPreview: args.payload,
-        confirmationField: "confirmWrite",
-    });
 }
 const SENSITIVE_FIELD_NAMES = [
     "apiKey",
