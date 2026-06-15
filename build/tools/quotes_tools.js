@@ -38,7 +38,7 @@ export function registerQuoteTools(server) {
             .optional()
             .describe("Set true only after the user confirms a CR sales analysis account code is intentional for this product line."),
     };
-    server.tool("brc_create_quote", `Creates a BRC quote using structured MCP fields. Requires a quote reference when quote references are manual or unknown. Do not use when Quotes reference setting is Unknown unless the user has provided a quote reference. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, confirmQuotesAutoGenerateInBrc: _confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
+    server.tool("brc_create_quote", `Creates a BRC quote using structured MCP fields. Requires a quote reference when quote references are manual or unknown. Do not use when Quotes reference setting is Unknown unless the user has provided a quote reference. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, confirmQuotesAutoGenerateInBrc: _confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
         let payload;
         try {
             const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "quote", {
@@ -57,7 +57,7 @@ export function registerQuoteTools(server) {
             return jsonResponse({ message: "Error creating quote.", companyName, endpoint: "POST /v1/quotes", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_create_quote_gen_ref", `Creates a BRC quote with a generated reference using structured MCP fields. Use only when quote references are auto-generated in Big Red Cloud, or when the user has confirmed auto-generate after Quotes reference setting was Unknown. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
+    server.tool("brc_create_quote_gen_ref", `Creates a BRC quote with a generated reference using structured MCP fields. Use only when quote references are auto-generated in Big Red Cloud, or when the user has confirmed auto-generate after Quotes reference setting was Unknown. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, quoteSchemaBase, async ({ companyName, confirmQuotesAutoGenerateInBrc, confirmCrAnalysisCategory, ...args }) => {
         let payload;
         try {
             const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "quote", {

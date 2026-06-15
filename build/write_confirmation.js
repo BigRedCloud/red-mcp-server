@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getToolSkillGroup } from "./server_config.js";
+import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "./shared.js";
 const WRITE_CONFIRMATION_SKILL_GROUPS = new Set([
     "update",
@@ -219,7 +220,7 @@ export function isCounterpartyExplicitlyConfirmed(args) {
         args.confirmSend === true ||
         args.confirmProcess === true);
 }
-function validateCounterpartyForWrite(args) {
+async function validateCounterpartyForWrite(args) {
     const kind = getCounterpartyKind(args.toolName);
     if (!kind) {
         return null;
@@ -256,7 +257,7 @@ function validateCounterpartyForWrite(args) {
     const exampleQuestion = hint
         ? `I need the ${label} before I can prepare this draft for posting. Did you want to use ${hint} from the previous draft, or choose another ${label}?`
         : `I need the ${label} before I can prepare this draft for posting. Which ${label} should be used?`;
-    return jsonResponse({
+    return jsonResponse(await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
         status: "counterparty_confirmation_required",
         message: [
             `Red stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
@@ -277,7 +278,7 @@ function validateCounterpartyForWrite(args) {
         payloadPreview: buildWritePayloadPreview(args.payload),
         confirmationField: "confirmCounterpartyExplicit",
         confirmWriteRequiresExplicitCounterparty: true,
-    });
+    }));
 }
 function writeActionLabel(toolName) {
     const group = getToolSkillGroup(toolName);
@@ -348,6 +349,7 @@ function draftFieldsForTool(toolName) {
             "customer",
             "sales rep",
             "analysis category and account code",
+            "Missing or not provided section for blank customer phone or customer email when applicable",
         ];
     }
     if (toolName.includes("sales_invoice") ||
@@ -358,6 +360,11 @@ function draftFieldsForTool(toolName) {
             "customer",
             "sales rep",
             "analysis category and account code",
+            ...(toolName.includes("sales_invoice")
+                ? [
+                    "Missing or not provided section for blank customer phone or customer email when applicable",
+                ]
+                : []),
         ];
     }
     if (toolName.includes("cash_receipt") || toolName.includes("cash_payment")) {
@@ -382,6 +389,28 @@ function draftFieldsForTool(toolName) {
     }
     return [...WRITE_DRAFT_FIELDS_COMMON];
 }
+async function enrichWriteConfirmationResponse(toolName, companyName, payload, response) {
+    const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payload);
+    if (!draftDetails.documentDraftDetails) {
+        return response;
+    }
+    const nextMessage = typeof response.message === "string" && draftDetails.missingOrNotProvidedSection
+        ? [
+            response.message,
+            "",
+            draftDetails.missingOrNotProvidedSection,
+            "",
+            "Missing customer phone and email are warnings only for create/post. Do not invent contact values.",
+        ].join("\n")
+        : response.message;
+    return {
+        ...response,
+        message: nextMessage,
+        documentDraftDetails: draftDetails.documentDraftDetails,
+        missingOrNotProvidedSection: draftDetails.missingOrNotProvidedSection,
+        draftWarnings: draftDetails.draftWarnings,
+    };
+}
 function buildWritePayloadPreview(input) {
     const preview = { ...input };
     for (const key of Object.keys(preview)) {
@@ -391,10 +420,11 @@ function buildWritePayloadPreview(input) {
     }
     return preview;
 }
-export function requireWriteConfirmation(args) {
+export async function requireWriteConfirmation(args) {
     const action = writeActionLabel(args.toolName);
     const draftFields = draftFieldsForTool(args.toolName);
-    return jsonResponse({
+    const payload = buildWritePayloadPreview((args.payload ?? {}));
+    const response = await enrichWriteConfirmationResponse(args.toolName, args.companyName, payload, {
         status: "confirmation_required",
         message: [
             `Red stopped before ${action} because explicit user confirmation is required.`,
@@ -409,6 +439,8 @@ export function requireWriteConfirmation(args) {
             "",
             "The customer or supplier must be explicitly named or confirmed in the current conversation before any postable draft. Do not reuse a counterparty from an earlier draft without that confirmation.",
             "",
+            "Red Connect must not invent missing customer phone or customer email values.",
+            "",
             "Only call this tool again with confirmWrite: true after the draft has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
             "When confirmWrite: true is used, confirmCounterpartyExplicit: true must also be true if this tool requires a customer or supplier.",
             "Do not pass confirmWrite: true in the same turn as the initial create request.",
@@ -417,11 +449,12 @@ export function requireWriteConfirmation(args) {
         companyName: args.companyName,
         proposedAction: action,
         draftFieldsToShow: draftFields,
-        payloadPreview: args.payload,
+        payloadPreview: payload,
         confirmationField: "confirmWrite",
         preflightPassedIsNotConfirmation: true,
         initialCreateRequestIsNotConfirmation: true,
     });
+    return jsonResponse(response);
 }
 export function wrapWriteToolHandler(toolName, handler) {
     if (!requiresWriteConfirmation(toolName)) {
@@ -429,7 +462,7 @@ export function wrapWriteToolHandler(toolName, handler) {
     }
     return async (args) => {
         const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
-        const counterpartyBlock = validateCounterpartyForWrite({
+        const counterpartyBlock = await validateCounterpartyForWrite({
             toolName,
             companyName,
             payload: args,

@@ -57,7 +57,7 @@ export function registerSalesEntryInvoiceTools(server) {
         return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
     });
     // Sales invoice tools --------------------------------------------------------
-    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
         acCode: z.string(),
@@ -115,7 +115,7 @@ export function registerSalesEntryInvoiceTools(server) {
             });
         }
     });
-    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
         confirmCrAnalysisCategory: z

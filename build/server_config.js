@@ -28,8 +28,8 @@ function envList(name) {
 }
 const MAX_BATCH_ITEMS_CAP = 10;
 export const redServerConfig = {
-    sessionTtlMinutes: envNumber("BRC_MCP_SESSION_TTL_MINUTES", 10),
-    apiKeyTtlMinutes: envNumber("BRC_API_KEY_TTL_MINUTES", 10),
+    sessionTtlMinutes: envNumber("BRC_MCP_SESSION_TTL_MINUTES", 60),
+    apiKeyTtlMinutes: envNumber("BRC_API_KEY_TTL_MINUTES", 60),
     rateLimitRequestsPerMinute: envNumber("BRC_RATE_LIMIT_REQUESTS_PER_MINUTE", 100),
     maxBatchItems: envNumberCapped("BRC_MAX_BATCH_ITEMS", 5, MAX_BATCH_ITEMS_CAP),
     maxAuditEntries: envNumber("BRC_MAX_AUDIT_ENTRIES", 500),

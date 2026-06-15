@@ -38,7 +38,7 @@ Users interact with BRC company data through natural language in MCP clients suc
 Example:
 
 ```text
-Show me all open quotes for Company C.
+Show me all open quotes for [your company name].
 ```
 
 The MCP server performs the structured API calls in the background.
@@ -272,8 +272,10 @@ Example `.env` (see `.env.example`):
 BRC_API_BASE_URL=https://app.bigredcloud.com/api
 PORT=3000
 
-# MCP session lifetime (minutes)
-BRC_MCP_SESSION_TTL_MINUTES=20
+# MCP session lifetime (minutes; default about 1 hour)
+BRC_MCP_SESSION_TTL_MINUTES=60
+# Company API key lifetime in MCP session memory (minutes; default about 1 hour)
+BRC_API_KEY_TTL_MINUTES=60
 
 # Rate limiting (requests per minute per IP)
 BRC_RATE_LIMIT_REQUESTS_PER_MINUTE=300
@@ -300,7 +302,7 @@ $env:BRC_ALLOW_DEV_MODE="false"
 
 ## Company API keys
 
-Connect in chat (assistant uses `brc_set_company_api_key`). Keys stay in MCP session memory and are never returned in tool output.
+Connect in chat (assistant uses `brc_set_company_api_key`). Keys stay in MCP session memory for about 1 hour and are never returned in tool output. They are not persisted to disk.
 
 - List contexts: `brc_list_company_contexts`
 - Clear one: `brc_clear_company_api_key`
@@ -608,11 +610,11 @@ MCP prompts: `brc_setup_company`, `brc_safe_company_review`, `brc_create_quote_w
 ## Example customer-facing prompts
 
 ```text
-Show me all customers in <Company Name>.
-Show me all open quotes in <Company Name>.
-Create a quote for <Company Name> using product <Product Code>.
+Show me all customers in [your company name].
+Show me all open quotes in [your company name].
+Create a quote for [your company name] using product [product code].
 Turn that quote into a sales invoice.
-Show me the nominal accounts for <Company Name> grouped by account group.
+Show me the nominal accounts for [your company name] grouped by account group.
 Show me the Red audit log for this session.
 Clear all connected company API keys from this session.
 ```

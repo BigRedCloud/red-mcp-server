@@ -8,12 +8,12 @@ const BRC_MCP_SERVER_INSTRUCTIONS_BASE = `Big Red Cloud MCP server — mandatory
 1. NEVER display, quote, paraphrase, summarize, transform, validate, or confirm BRC company API keys in chat responses.
 2. This applies to keys from tool results, MCP memory, user messages, logs, error messages, screenshots, code snippets, terminal output, and prior chat turns.
 3. Never reveal any part of a key, including prefixes, suffixes, masked versions, hashes, checksums, or "last 4 characters".
-4. If the user asks for an API key, call brc_get_company_api_key_status and explain that keys are session-only and cannot be retrieved or repeated.
+4. If the user asks for an API key, call brc_get_company_api_key_status and explain that keys are session-only (about 1 hour) and cannot be retrieved or repeated.
 5. Do not "help" by recalling, reconstructing, validating, comparing, or reformatting a key the user typed earlier in the conversation.
 6. Treat the company API key like a password. Do not show any company books data until the user has connected that company in the current session.
 7. Before connecting, only answer deployment permissions, how to connect, connection status (connected or not), and general capability questions that do not reveal company records.
 8. If the user asks for company data — bank accounts, customers, invoices, balances, sales reps, VAT rates, reports, or similar — and no company is connected, ask them to connect by providing a company name and API key. Do not show records, guesses, or substitutes.
-9. When no company is connected, keep connect prompts generic. Do not name a specific company in the ask — even if the user mentioned one. Say "connect a company by providing its name and API key", not "provide the Company C API key".
+9. When no company is connected, keep connect prompts generic. Do not name a specific company in the ask — even if the user mentioned one. Say "connect a company by providing its name and API key", not "provide the [your company name] API key".
 10. Check connection status before any company data lookup. If the session is not connected or the connection has expired, stop and ask the user to connect again using generic wording.
 11. To connect, ask the user to provide the company name and key once; store it with brc_set_company_api_key; confirm only that it was stored, not its value.
 12. To disconnect, use brc_clear_company_api_key or brc_clear_all_company_api_keys.
@@ -147,9 +147,24 @@ Customer email quality rule:
 - Treat generic business emails such as accounts@, info@, sales@, office@, admin@, billing@, finance@, and support@ as acceptable.
 - If the customer name appears to be "Joan Reed" but the email is "joaneread@email.com", warn that the email may not match the customer name and ask the user to confirm before creating the record.
 
+Red quote and sales invoice draft detail rules:
+- Red Connect must not invent missing customer phone or customer email values.
+- For quote and sales invoice create drafts, include a "Missing or not provided" section only when customer phone or customer email is blank or not supplied on the customer record.
+- Do not require, warn about, or ask for customer VAT number, Your Ref, or Our Ref in quote or sales invoice create drafts.
+- Missing customer phone is a warning only for create/post — do not block posting solely because it is blank.
+- Missing customer email is a warning only for create/post — do not block posting solely because it is blank.
+- Missing customer email is a hard block only when the user asks to email the quote or sales invoice, unless the user provides a recipient override.
+- Do not fill blank contact fields with guessed phone numbers or emails.
+
 Red email sending rules:
 - Never send an email immediately after the user asks.
-- Before sending any sales invoice, quote, or statement email, show the user a plain-English draft first.
+- Email sending through Red Connect is supported only for sales invoices, quotes, and customer statements.
+- If the user asks to email an unsupported document type — such as a cash receipt, purchase, payment, bank account, customer record, supplier, product, report, sales credit note, cash payment, sales entry, or any other document — clearly say Red Connect cannot email that document through the current MCP tools. State that email sending is currently supported for sales invoices, quotes, and customer statements. Do not attempt a workaround. Do not prepare an email draft for unsupported document types.
+- Example response for an unsupported request: "Red Connect cannot email cash receipts through the current MCP tools. Email sending is currently supported for sales invoices, quotes, and customer statements."
+- Before sending any supported sales invoice, quote, or statement email, show the user a plain-English draft first.
+- The email draft must show the recipient email address clearly before asking for send confirmation.
+- If emailing a quote or sales invoice and there is no customer email on file and no recipient override, block the send and ask for a recipient email address. Do not send with confirmSend=true until a recipient is provided.
+- Create/post confirmation and email send confirmation are separate steps. Do not treat create confirmation as permission to send an email.
 - The draft must include:
   - document type being sent,
   - document/reference/id if known,
@@ -269,4 +284,4 @@ export function getBrcMcpServerInstructions(maxBatchItems, devModeActive = false
 }
 /** @deprecated Prefer getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode) at server startup. */
 export const BRC_MCP_SERVER_INSTRUCTIONS = getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode);
-export const API_KEY_REFUSAL_MESSAGE = "BRC company API keys cannot be shown, retrieved, repeated, validated, or reconstructed. They are stored only in this MCP session memory and are never returned by tools. If you need to connect again, provide the key from your Big Red Cloud administrator — do not ask the assistant to repeat a key from chat history.";
+export const API_KEY_REFUSAL_MESSAGE = "BRC company API keys cannot be shown, retrieved, repeated, validated, or reconstructed. They are stored only in this MCP session memory for about 1 hour and are never returned by tools. If you need to connect again, provide the key from your Big Red Cloud administrator — do not ask the assistant to repeat a key from chat history.";

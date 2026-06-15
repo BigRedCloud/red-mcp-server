@@ -10,6 +10,10 @@ import {
   enforceTransactionSettingsOrThrow,
   getCompanyProcessingSettings,
 } from "../company_processing_settings.js";
+import {
+  buildRecipientEmailRequiredResponse,
+  resolveCustomerEmailForEmailDocument,
+} from "../document_draft_details.js";
 type SendMode = "single_with_bcc" | "separate";
 
 const optionalEmailFields = {
@@ -146,10 +150,10 @@ function buildEmailDraftText(args: {
           ...args.separateRecipients.map((email) => `- ${email}`),
         ]
       : [
-          `To: ${
+          `Recipient email: ${
             args.toAddress && args.toAddress.trim()
-              ? args.toAddress
-              : "Customer email address on file"
+              ? args.toAddress.trim()
+              : "Not provided"
           }`,
           ...bccLine,
         ];
@@ -172,8 +176,53 @@ function buildEmailDraftText(args: {
         : "Default Big Red Cloud email message.",
       "",
       'Reply with "Yes, send it" to send this email, or tell me what to change.',
+      "",
+      "Create/post confirmation and email send confirmation are separate steps.",
     ].join("\n")
   );
+}
+
+function documentTypeLabelForPath(path: string): string {
+  if (path === "/v1/email/sendSalesInvoice") {
+    return "sales invoice";
+  }
+
+  if (path === "/v1/email/sendQuote") {
+    return "quote";
+  }
+
+  if (path === "/v1/email/sendEmailStatement") {
+    return "customer statement";
+  }
+
+  return "document";
+}
+
+async function resolveRecipientsForEmailSend(args: {
+  companyName: string;
+  path: string;
+  documentArgs: Record<string, unknown>;
+  toAddress?: unknown;
+  toAddresses?: unknown;
+}): Promise<string[]> {
+  let recipients = normaliseEmailList({
+    toAddress: args.toAddress,
+    toAddresses: args.toAddresses,
+  });
+
+  if (recipients.length === 0) {
+    const customerEmail = await resolveCustomerEmailForEmailDocument({
+      companyName: args.companyName,
+      path: args.path,
+      documentArgs: args.documentArgs,
+    });
+
+    if (customerEmail) {
+      recipients = [customerEmail];
+    }
+  }
+
+  return recipients;
 }
 
 function applyOptionalEmailFields(
@@ -280,10 +329,38 @@ function registerEmailSendTool(
       }
 
       const documentLabel = `${idField} ${String(rest[idField])}`;
-      //normalise the email list to an array of unique email addresses
-      const recipients = normaliseEmailList({ toAddress, toAddresses });
+      const documentTypeLabel = documentTypeLabelForPath(path);
+      let recipients = await resolveRecipientsForEmailSend({
+        companyName: String(companyName),
+        path,
+        documentArgs: rest,
+        toAddress,
+        toAddresses,
+      });
+
+      if (
+        recipients.length === 0 &&
+        (path === "/v1/email/sendSalesInvoice" || path === "/v1/email/sendQuote")
+      ) {
+        return jsonResponse(
+          buildRecipientEmailRequiredResponse({
+            documentLabel,
+            documentTypeLabel,
+          })
+        );
+      }
+
       //parse the send mode
       const parsedSendMode = sendMode as SendMode | undefined;
+
+      if (recipients.length === 0 && path === "/v1/email/sendEmailStatement") {
+        return jsonResponse(
+          buildRecipientEmailRequiredResponse({
+            documentLabel,
+            documentTypeLabel,
+          })
+        );
+      }
 
       //if the user has provided multiple recipient addresses and no send mode, build the text for the multi-recipient choice
       if (recipients.length > 1 && !parsedSendMode) {
@@ -315,9 +392,11 @@ function registerEmailSendTool(
           toAddress:
             parsedSendMode === "single_with_bcc" && recipients.length
               ? recipients[0]
-              : typeof toAddress === "string"
-                ? toAddress
-                : undefined,
+              : recipients.length === 1
+                ? recipients[0]
+                : typeof toAddress === "string"
+                  ? toAddress
+                  : undefined,
           fromAddress:
             typeof fromAddress === "string" ? fromAddress : undefined,
           bccAddresses: combinedBcc,
@@ -327,6 +406,15 @@ function registerEmailSendTool(
           separateRecipients:
             parsedSendMode === "separate" ? recipients : undefined,
         });
+      }
+
+      if (recipients.length === 0) {
+        return jsonResponse(
+          buildRecipientEmailRequiredResponse({
+            documentLabel,
+            documentTypeLabel,
+          })
+        );
       }
 
       //if the user has confirmed the email and the send mode is separate, send the email to each recipient separately
@@ -411,14 +499,17 @@ function registerEmailSendTool(
 }
 
 export function registerEmailTools(server: ServerType) {
+  const supportedEmailTypesNote =
+    "Supported document type only. Red Connect email sending is available for sales invoices, quotes, and customer statements — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types. If the user asks to email an unsupported document type, say Red Connect cannot email it through the current MCP tools, list the supported types, and stop without preparing a draft or attempting a workaround.";
+
   //common email rules
   const commonEmailRule =
-    "Do not call this tool with confirmSend=true until the user has reviewed a plain-English email draft and explicitly confirmed they want to send it. If the user provides multiple recipient addresses, ask whether to send one email using BCC or separate individual emails. Only use sendMode='separate' when the user explicitly chooses separate emails. Do not ask about BCC unless the user provides multiple recipients or asks to copy another address.";
+    "Do not call this tool with confirmSend=true until the user has reviewed a plain-English email draft and explicitly confirmed they want to send it. The email draft must show the recipient email address clearly before asking for send confirmation. If there is no customer email on file and no recipient override, stop and ask for a recipient email address — do not send. Create/post confirmation and email send confirmation are separate steps. If the user provides multiple recipient addresses, ask whether to send one email using BCC or separate individual emails. Only use sendMode='separate' when the user explicitly chooses separate emails. Do not ask about BCC unless the user provides multiple recipients or asks to copy another address.";
 
   registerEmailSendTool(
     server,
     "brc_send_sales_invoice_email",
-    `Sends a sales invoice email. ${commonEmailRule}`,
+    `Sends a sales invoice email. ${supportedEmailTypesNote} ${commonEmailRule}`,
     "/v1/email/sendSalesInvoice",
     "salesInvoiceId",
     z.number().int().positive()
@@ -427,7 +518,7 @@ export function registerEmailTools(server: ServerType) {
   registerEmailSendTool(
     server,
     "brc_send_email_statement",
-    `Sends a customer statement email. ${commonEmailRule}`,
+    `Sends a customer statement email. ${supportedEmailTypesNote} ${commonEmailRule}`,
     "/v1/email/sendEmailStatement",
     "customerId",
     z.number().int().positive(),
@@ -456,7 +547,7 @@ export function registerEmailTools(server: ServerType) {
   registerEmailSendTool(
     server,
     "brc_send_quote_email",
-    `Sends a quote email. ${commonEmailRule}`,
+    `Sends a quote email. ${supportedEmailTypesNote} ${commonEmailRule}`,
     "/v1/email/sendQuote",
     "quoteId",
     z.number().int().positive()

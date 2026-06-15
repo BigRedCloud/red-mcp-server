@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getToolSkillGroup, type RedSkillGroup } from "./server_config.js";
+import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "./shared.js";
 
 const WRITE_CONFIRMATION_SKILL_GROUPS = new Set<RedSkillGroup>([
@@ -305,7 +306,7 @@ export function isCounterpartyExplicitlyConfirmed(
   );
 }
 
-function validateCounterpartyForWrite(args: {
+async function validateCounterpartyForWrite(args: {
   toolName: string;
   companyName?: string;
   payload: Record<string, unknown>;
@@ -353,28 +354,30 @@ function validateCounterpartyForWrite(args: {
     ? `I need the ${label} before I can prepare this draft for posting. Did you want to use ${hint} from the previous draft, or choose another ${label}?`
     : `I need the ${label} before I can prepare this draft for posting. Which ${label} should be used?`;
 
-  return jsonResponse({
-    status: "counterparty_confirmation_required",
-    message: [
-      `Red stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
-      "",
-      "Do not silently carry over a customer or supplier from an earlier draft.",
-      "Do not pass confirmWrite: true until the counterparty has been explicitly confirmed.",
-      "",
-      `Ask the user in plain English, for example: "${exampleQuestion}"`,
-      "",
-      "Only retry this tool with confirmCounterpartyExplicit: true after the user explicitly names or confirms the counterparty in the current conversation.",
-    ].join("\n"),
-    toolName: args.toolName,
-    companyName: args.companyName,
-    counterpartyKind: kind,
-    counterpartyLabel: label,
-    suggestedCounterpartyName: hint,
-    exampleUserQuestion: exampleQuestion,
-    payloadPreview: buildWritePayloadPreview(args.payload),
-    confirmationField: "confirmCounterpartyExplicit",
-    confirmWriteRequiresExplicitCounterparty: true,
-  });
+  return jsonResponse(
+    await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
+      status: "counterparty_confirmation_required",
+      message: [
+        `Red stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
+        "",
+        "Do not silently carry over a customer or supplier from an earlier draft.",
+        "Do not pass confirmWrite: true until the counterparty has been explicitly confirmed.",
+        "",
+        `Ask the user in plain English, for example: "${exampleQuestion}"`,
+        "",
+        "Only retry this tool with confirmCounterpartyExplicit: true after the user explicitly names or confirms the counterparty in the current conversation.",
+      ].join("\n"),
+      toolName: args.toolName,
+      companyName: args.companyName,
+      counterpartyKind: kind,
+      counterpartyLabel: label,
+      suggestedCounterpartyName: hint,
+      exampleUserQuestion: exampleQuestion,
+      payloadPreview: buildWritePayloadPreview(args.payload),
+      confirmationField: "confirmCounterpartyExplicit",
+      confirmWriteRequiresExplicitCounterparty: true,
+    })
+  );
 }
 
 function writeActionLabel(toolName: string): string {
@@ -463,6 +466,7 @@ function draftFieldsForTool(toolName: string): string[] {
       "customer",
       "sales rep",
       "analysis category and account code",
+      "Missing or not provided section for blank customer phone or customer email when applicable",
     ];
   }
 
@@ -476,6 +480,11 @@ function draftFieldsForTool(toolName: string): string[] {
       "customer",
       "sales rep",
       "analysis category and account code",
+      ...(toolName.includes("sales_invoice")
+        ? [
+            "Missing or not provided section for blank customer phone or customer email when applicable",
+          ]
+        : []),
     ];
   }
 
@@ -504,6 +513,42 @@ function draftFieldsForTool(toolName: string): string[] {
   return [...WRITE_DRAFT_FIELDS_COMMON];
 }
 
+async function enrichWriteConfirmationResponse(
+  toolName: string,
+  companyName: string | undefined,
+  payload: Record<string, unknown>,
+  response: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(
+    toolName,
+    companyName,
+    payload
+  );
+
+  if (!draftDetails.documentDraftDetails) {
+    return response;
+  }
+
+  const nextMessage =
+    typeof response.message === "string" && draftDetails.missingOrNotProvidedSection
+      ? [
+          response.message,
+          "",
+          draftDetails.missingOrNotProvidedSection,
+          "",
+          "Missing customer phone and email are warnings only for create/post. Do not invent contact values.",
+        ].join("\n")
+      : response.message;
+
+  return {
+    ...response,
+    message: nextMessage,
+    documentDraftDetails: draftDetails.documentDraftDetails,
+    missingOrNotProvidedSection: draftDetails.missingOrNotProvidedSection,
+    draftWarnings: draftDetails.draftWarnings,
+  };
+}
+
 function buildWritePayloadPreview(
   input: Record<string, unknown>
 ): Record<string, unknown> {
@@ -518,42 +563,54 @@ function buildWritePayloadPreview(
   return preview;
 }
 
-export function requireWriteConfirmation(args: {
+export async function requireWriteConfirmation(args: {
   toolName: string;
   companyName?: string;
   payload?: unknown;
 }) {
   const action = writeActionLabel(args.toolName);
   const draftFields = draftFieldsForTool(args.toolName);
+  const payload = buildWritePayloadPreview(
+    (args.payload ?? {}) as Record<string, unknown>
+  );
 
-  return jsonResponse({
-    status: "confirmation_required",
-    message: [
-      `Red stopped before ${action} because explicit user confirmation is required.`,
-      "",
-      "This is a draft/preview step only. Nothing has been posted to Big Red Cloud.",
-      "",
-      "Show the user a clear plain-English draft in chat before posting. Include:",
-      ...draftFields.map((field) => `- ${field}`),
-      "",
-      "Treat requests such as \"create a sales invoice...\" as permission to prepare a draft, not to post.",
-      "Passing preflight checks is not confirmation.",
-      "",
-      "The customer or supplier must be explicitly named or confirmed in the current conversation before any postable draft. Do not reuse a counterparty from an earlier draft without that confirmation.",
-      "",
-      "Only call this tool again with confirmWrite: true after the draft has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
-      "When confirmWrite: true is used, confirmCounterpartyExplicit: true must also be true if this tool requires a customer or supplier.",
-      "Do not pass confirmWrite: true in the same turn as the initial create request.",
-    ].join("\n"),
-    toolName: args.toolName,
-    companyName: args.companyName,
-    proposedAction: action,
-    draftFieldsToShow: draftFields,
-    payloadPreview: args.payload,
-    confirmationField: "confirmWrite",
-    preflightPassedIsNotConfirmation: true,
-    initialCreateRequestIsNotConfirmation: true,
-  });
+  const response = await enrichWriteConfirmationResponse(
+    args.toolName,
+    args.companyName,
+    payload,
+    {
+      status: "confirmation_required",
+      message: [
+        `Red stopped before ${action} because explicit user confirmation is required.`,
+        "",
+        "This is a draft/preview step only. Nothing has been posted to Big Red Cloud.",
+        "",
+        "Show the user a clear plain-English draft in chat before posting. Include:",
+        ...draftFields.map((field) => `- ${field}`),
+        "",
+        "Treat requests such as \"create a sales invoice...\" as permission to prepare a draft, not to post.",
+        "Passing preflight checks is not confirmation.",
+        "",
+        "The customer or supplier must be explicitly named or confirmed in the current conversation before any postable draft. Do not reuse a counterparty from an earlier draft without that confirmation.",
+        "",
+        "Red Connect must not invent missing customer phone or customer email values.",
+        "",
+        "Only call this tool again with confirmWrite: true after the draft has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
+        "When confirmWrite: true is used, confirmCounterpartyExplicit: true must also be true if this tool requires a customer or supplier.",
+        "Do not pass confirmWrite: true in the same turn as the initial create request.",
+      ].join("\n"),
+      toolName: args.toolName,
+      companyName: args.companyName,
+      proposedAction: action,
+      draftFieldsToShow: draftFields,
+      payloadPreview: payload,
+      confirmationField: "confirmWrite",
+      preflightPassedIsNotConfirmation: true,
+      initialCreateRequestIsNotConfirmation: true,
+    }
+  );
+
+  return jsonResponse(response);
 }
 
 export function wrapWriteToolHandler<T extends Record<string, unknown>>(
@@ -568,7 +625,7 @@ export function wrapWriteToolHandler<T extends Record<string, unknown>>(
     const companyName =
       typeof args.companyName === "string" ? args.companyName : undefined;
 
-    const counterpartyBlock = validateCounterpartyForWrite({
+    const counterpartyBlock = await validateCounterpartyForWrite({
       toolName,
       companyName,
       payload: args as Record<string, unknown>,

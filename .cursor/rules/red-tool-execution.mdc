@@ -18,7 +18,7 @@ This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP al
 - Treat the company API key like a password.
 - Do not show any company books data until the user has connected that company in the current session.
 - If they ask for records (bank accounts, customers, invoices, balances, etc.) and no company is connected, ask them to connect by providing a company name and API key — do not show data from memory, prior runs, test reports, or cached results.
-- When no company is connected, keep connect prompts generic. Do not echo a company name from their question (e.g. not "provide the Company C API key").
+- When no company is connected, keep connect prompts generic. Do not echo a company name from their question (e.g. not "provide the [your company name] API key").
 - Only show company records retrieved live in the current connected session.
 
 ## When to proceed vs confirm
@@ -32,8 +32,8 @@ This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP al
 ## Wording examples
 
 - Good: "To continue, please connect a company by providing its name and API key."
-- Bad: "Please provide the Company C API key to connect."
-- Good: "Shall I create customer **TESTRO** with code **TESTRO**?"
+- Bad: "Please provide the [your company name] API key to connect."
+- Good: "Shall I create customer **[your customer name]** with code **[your customer code]**?"
 - Bad: "Can I run brc_create_customer?"
 - Bad: "Please allow this tool to proceed."
 

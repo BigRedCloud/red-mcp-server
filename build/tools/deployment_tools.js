@@ -201,7 +201,9 @@ function customerDeploymentPolicyText() {
 - Reading company data: ${availability(capabilities.canReadCompanyData)}
 - Creating or changing records: ${availability(capabilities.canCreateOrUpdateRecords)}
 - Deleting records: ${availability(capabilities.canDeleteRecords)}
-- Sending invoice, quote, or statement emails: ${availability(capabilities.canSendEmails)}
+- Sending invoice, quote, or statement emails: ${availability(capabilities.canSendEmails)}${capabilities.canSendEmails
+        ? "\n- Email sending is supported for sales invoices, quotes, and customer statements only — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types."
+        : ""}
 - Batch processing records: ${availability(capabilities.canBatchProcessRecords)}${capabilities.canBatchProcessRecords
         ? `\n- Maximum records per batch request: ${capabilities.maxBatchItems}`
         : ""}
@@ -224,9 +226,10 @@ Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
 - When no company is connected, ask generically for a company name and API key — do not name a specific company in the connect prompt.
 - Never show company data from prior test runs, saved reports, or cached results — only live data from the current connected session.
-- Company connection details are kept only for the active server session and are not shown back in chat.
+- Company connection details are kept in server session memory for about 1 hour and are not shown back in chat.
 - Assistants must never repeat API keys from chat history.
 - Deleting or changing records should only happen after you confirm the details.
+- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red Connect cannot email it through the current MCP tools, list the supported types, and stop — do not prepare a draft or use a workaround.
 - If something you need is not available here, you can still review data in chat or work in Big Red Cloud directly.
 
 Recommended safe workflow:
@@ -245,11 +248,11 @@ WARNING: Red is currently in beta. Please double-check all information before re
 Red may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
 
 1. Connect your company
-Tell the chat which company you want to connect and provide the connection details requested by your administrator.
+Tell the chat which company you want to connect and provide the connection details requested by your administrator. Connection details stay in server session memory for about 1 hour and are never shown back in chat.
 
 Example:
-"Connect my company <Company Name> using the API key <API Key>  provided by my Big Red Cloud."
-"<Company Name>: <API Key>"
+"Connect my company [your company name] using the API key [your API key] provided by my Big Red Cloud."
+"[your company name]: [your API key]"
 
 2. Check that the company is ready
 Ask the chat to check whether the company is ready before creating any records.
@@ -284,8 +287,8 @@ You can connect to multiple companies and compare data across them. To get start
 Large multi-company analysis may be slower than single-company analysis, and may be limited in this beta deployment.
 
 Example:
-"Connect these two companies and compare their data. Company A: <API key>, Company B: <API key>."
-"Compare the data for my companies. Company A: <API key>, Company B: <API key>."
+"Connect these two companies and compare their data. [your first company name]: [your API key], [your second company name]: [your API key]."
+"Compare the data for my companies. [your first company name]: [your API key], [your second company name]: [your API key]."
 
 Good starter prompts:
 - "Start"
@@ -340,6 +343,12 @@ Purchases and payments:
 - "Show me recent payments."
 - "Prepare a payment and ask me to confirm before posting it."
 
+Email (supported document types only):
+- "Email this sales invoice to the customer."
+- "Send this quote by email."
+- "Email a customer statement for last month."
+- Red Connect cannot email cash receipts, purchases, payments, bank accounts, or other unsupported document types through the current MCP tools.
+
 Reports:
 - "Show nominal account groups."
 - "Summarise monthly nominal account totals."
@@ -375,12 +384,16 @@ Some accounting actions only work inside the company's current financial year. I
 Some generated documents, such as creating an invoice from a quote, may use Big Red Cloud's internal transaction date. If the company financial year is not current, this may fail.
 
 6. Do not share connection details unnecessarily
-Only provide company connection details when you intend to connect a company for the current session.
+Only provide company connection details when you intend to connect a company for the current session. Connections stay in server session memory for about 1 hour.
 
 7. API keys must never appear in assistant replies
 - MCP tools never return API key values.
 - Assistants must not repeat, quote, or confirm keys from user messages or earlier chat turns.
 - If asked for a key, use brc_get_company_api_key_status and tell the user to get it from their BRC administrator.
+
+8. Email sending is limited to supported document types
+- Red Connect can email sales invoices, quotes, and customer statements only.
+- If you ask to email a cash receipt, purchase, payment, bank account, or other unsupported document, Red Connect will explain that it cannot email that document through the current MCP tools.
 
 Useful prompts:
 - "Check if my company is ready."
@@ -574,7 +587,7 @@ export function registerDeploymentTools(server) {
         title: "Connect a BRC company",
         description: "Guides the user through connecting a BRC company context and checking readiness.",
         argsSchema: {
-            companyName: z.string().optional().describe("Display name for the company context, for example Company A."),
+            companyName: z.string().optional().describe("Display name for the company context, for example YOUR-COMPANY-NAME."),
         },
     }, async ({ companyName }) => ({
         description: "Connect a Big Red Cloud company and run a safe readiness check.",

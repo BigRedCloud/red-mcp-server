@@ -30,7 +30,7 @@ export function runWithSessionKeyStore(store, fn) {
 export const companyNameSchema = z
     .string()
     .min(1)
-    .describe("Company context name, for example Company A.");
+    .describe("Company context name, for example YOUR-COMPANY-NAME.");
 export function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
 }
