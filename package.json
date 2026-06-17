@@ -22,8 +22,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "latest",
     "cors": "^2.8.6",
+    "csv-parse": "^7.0.0",
     "dotenv": "latest",
     "express": "^5.2.1",
+    "multer": "^2.2.0",
     "readline-sync": "^1.4.10",
     "typescript": "latest",
     "zod": "latest"
@@ -31,6 +33,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "latest",
     "@types/readline-sync": "^1.4.8",
     "tsx": "latest"

@@ -2,12 +2,17 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import cors from "cors";
+import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
-import { runWithSessionKeyStore } from "./shared.js";
-import { redServerConfig } from "./server_config.js";
+import { runWithSessionKeyStore, setApiKeyForCompany, } from "./shared.js";
+import { consumeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
+import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
+import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./config/server_config.js";
+import multer from "multer";
+import { parse } from "csv-parse/sync";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -39,6 +44,12 @@ setInterval(() => {
 }, 60 * 1000).unref();
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 app.set("trust proxy", true);
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 1024 * 1024, // 1 MB
+    },
+});
 const rateLimitBuckets = new Map();
 function getClientIp(req) {
     const forwardedFor = req.headers["x-forwarded-for"];
@@ -86,12 +97,94 @@ setInterval(() => {
 }, 60 * 1000).unref();
 app.use(rateLimitMiddleware);
 app.use(cors());
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 function isInitializeRequest(body) {
     if (Array.isArray(body)) {
         return body.some((msg) => msg?.method === "initialize");
     }
     return body?.method === "initialize";
 }
+function toStringArray(value) {
+    if (Array.isArray(value)) {
+        return value.map((item) => String(item).trim()).filter(Boolean);
+    }
+    if (value === undefined || value === null || value === "") {
+        return [];
+    }
+    return [String(value).trim()];
+}
+function parseCompanyCsv(buffer) {
+    const rows = parse(buffer, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+    });
+    return rows
+        .map((row) => ({
+        companyName: String(row.companyName ??
+            row.CompanyName ??
+            row.company ??
+            row.Company ??
+            row["Company Name"] ??
+            "").trim(),
+        apiKey: String(row.apiKey ??
+            row.ApiKey ??
+            row.api_key ??
+            row.APIKey ??
+            row["API Key"] ??
+            "").trim(),
+    }))
+        .filter((row) => row.companyName && row.apiKey);
+}
+app.post("/connect", upload.single("companyFile"), async (req, res) => {
+    const code = String(req.body.code ?? "");
+    let companies = [];
+    if (req.file?.buffer) {
+        companies = parseCompanyCsv(req.file.buffer);
+    }
+    else {
+        const companyNames = toStringArray(req.body.companyName);
+        const apiKeys = toStringArray(req.body.apiKey);
+        if (companyNames.length !== apiKeys.length) {
+            res.status(400).send("Each company name must have a matching API key.");
+            return;
+        }
+        companies = companyNames.map((companyName, index) => ({
+            companyName,
+            apiKey: apiKeys[index],
+        }));
+    }
+    if (!code || companies.length === 0) {
+        res
+            .status(400)
+            .send("Missing connection code or no valid companies were provided.");
+        return;
+    }
+    const pending = consumeConnectionCode(code);
+    if (!pending) {
+        res.status(400).send(renderExpiredLinkPage());
+        return;
+    }
+    try {
+        runWithSessionKeyStore(pending.sessionStore, () => {
+            for (const company of companies) {
+                assertApiKeyAllowed(company.apiKey);
+                setApiKeyForCompany({
+                    companyName: company.companyName,
+                    apiKey: company.apiKey,
+                    expiresAt: Date.now() + getApiKeyExpirationMs(),
+                });
+            }
+        });
+        const connectedNames = companies.map((company) => company.companyName);
+        res.send(renderSuccessPage(connectedNames));
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        res.status(400).send(renderConnectionFailedPage(message));
+    }
+});
 app.post("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
     if (sessionId && sessions.has(sessionId)) {
@@ -124,6 +217,15 @@ app.post("/mcp", async (req, res) => {
     if (sid) {
         sessions.set(sid, { server, transport, keyStore, createdAt: Date.now(), lastSeenAt: Date.now() });
     }
+});
+app.get("/connect", (req, res) => {
+    const code = String(req.query.code ?? "");
+    const pending = getPendingConnection(code);
+    if (!pending) {
+        res.status(400).send(renderExpiredLinkPage());
+        return;
+    }
+    res.send(renderConnectPage(code));
 });
 app.get("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];

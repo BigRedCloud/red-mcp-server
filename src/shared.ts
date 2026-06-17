@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
-import { assertApiKeyAllowed, getMaxAuditEntries } from "./server_config.js";
+import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -9,10 +9,35 @@ export type CompanyApiContext = {
   apiKey: string;
   expiresAt: number;
 };
+export type BrcCredential =
+  | {
+      kind: "apiKey";
+      companyName: string;
+      apiKey: string;
+      expiresAt: number;
+    }
+  | {
+      kind: "oauth";
+      companyName: string;
+      accessToken: string;
+      expiresAt: number;
+      refreshToken?: string;
+    };
+
+export interface CompanyCredentialProvider {
+  getCredential(companyName: string): BrcCredential | null;
+  setApiKeyCredential(args: {
+    companyName: string;
+    apiKey: string;
+    expiresAt: number;
+  }): void;
+  listCompanyNames(): string[];
+  clearCredential(companyName: string): boolean;
+  clearAllCredentials(): number;
+}
 
 export const BRC_API_BASE_URL = (
-  process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api"
-).replace(/\/$/, "");
+  process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api" ).replace(/\/$/, "");
 
 const sessionKeyStorage = new AsyncLocalStorage<Map<string, CompanyApiContext>>();
 const globalContexts = new Map<string, CompanyApiContext>();
@@ -25,6 +50,71 @@ const globalContexts = new Map<string, CompanyApiContext>();
 export function getCompanyApiContexts(): Map<string, CompanyApiContext> {
   return sessionKeyStorage.getStore() ?? globalContexts;
 }
+
+/* class to get the credentials provider for the current session
+* FUTURE DEV: Replace AzureSessionCredentialProvider with an OAuthCredentialProvider
+*/
+class SessionMemoryCredentialProvider implements CompanyCredentialProvider {
+  getCredential(companyName: string): BrcCredential | null {
+    const key = normaliseCompanyName(companyName);
+    const context = getCompanyApiContexts().get(key);
+
+    if (!context?.apiKey) {
+      return null;
+    }
+
+    return {
+      kind: "apiKey",
+      companyName: context.companyName,
+      apiKey: context.apiKey,
+      expiresAt: context.expiresAt,
+    };
+  }
+
+  setApiKeyCredential(args: {
+    companyName: string;
+    apiKey: string;
+    expiresAt: number;
+  }): void {
+    const key = normaliseCompanyName(args.companyName);
+
+    assertApiKeyAllowed(args.apiKey);
+
+    getCompanyApiContexts().set(key, {
+      companyName: args.companyName.trim(),
+      apiKey: args.apiKey,
+      expiresAt: args.expiresAt,
+    });
+  }
+
+  listCompanyNames(): string[] {
+    return Array.from(getCompanyApiContexts().values()).map(
+      (context) => context.companyName
+    );
+  }
+
+  clearCredential(companyName: string): boolean {
+    const key = normaliseCompanyName(companyName);
+    return getCompanyApiContexts().delete(key);
+  }
+
+  clearAllCredentials(): number {
+    const store = getCompanyApiContexts();
+    const count = store.size;
+    store.clear();
+    return count;
+  }
+}
+
+let companyCredentialProvider: CompanyCredentialProvider =
+  new SessionMemoryCredentialProvider();
+
+export function setCompanyCredentialProvider(
+  provider: CompanyCredentialProvider
+): void {
+  companyCredentialProvider = provider;
+}
+
 
 /** @deprecated Use getCompanyApiContexts() — kept for backward compatibility */
 export const companyApiContexts = new Proxy(globalContexts, {
@@ -55,33 +145,82 @@ export function normaliseCompanyName(companyName: string): string {
   return companyName.trim().toLowerCase();
 }
 
+export function getCredentialForCompany(companyName: string): BrcCredential {
+  const credential = companyCredentialProvider.getCredential(companyName);
+
+  if (!credential) {
+    throw new Error(
+      [
+        `No company connection is currently stored for "${companyName}".`,
+        "",
+        "To continue, ask the user to connect the company using the secure Red Connect connection page.",
+      ].join("\n")
+    );
+  }
+
+  if (credential.expiresAt < Date.now()) {
+    throw new Error(
+      [
+        `The connection for "${companyName}" has expired.`,
+        "",
+        "To continue, ask the user to reconnect the company using the secure Red Connect connection page. Do not ask the user to paste an API key into chat.",
+      ].join("\n")
+    );
+  }
+
+  if (credential.kind === "apiKey") {
+    assertApiKeyAllowed(credential.apiKey);
+  }
+
+  return credential;
+}
+
+/**
+ * Backward-compatible helper.
+ * Keep this for any existing internal code that still expects a raw API key.
+ * New code should prefer getAuthorizationHeaderForCompany().
+ */
 export function getApiKeyForCompany(companyName: string): string {
-  const key = normaliseCompanyName(companyName);
-  const store = getCompanyApiContexts();
-  const context = store.get(key);
-  if (!context?.apiKey) {
+  const credential = getCredentialForCompany(companyName);
+
+  if (credential.kind !== "apiKey") {
     throw new Error(
-      [
-        `No API key is currently stored for "${companyName}" in MCP server memory.`,
-        "",
-        "To continue, ask the user to connect by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt (do not display or repeat any key value in chat).",
-      ].join("\n")
+      `The connection for "${companyName}" is not API-key based. Use getAuthorizationHeaderForCompany() instead.`
     );
   }
 
-  if (context.expiresAt < Date.now()) {
-    throw new Error(
-      [
-        `API key for "${companyName}" has expired.`,
-        "",
-        "To continue, ask the user to connect again by providing a company name and API key. Use generic wording — do not name a specific company in the connect prompt.",
-      ].join("\n")
-    );
-  }
-  
-  assertApiKeyAllowed(context.apiKey);  
+  return credential.apiKey;
+}
 
-  return context.apiKey;
+export function getAuthorizationHeaderForCompany(companyName: string): string {
+  const credential = getCredentialForCompany(companyName);
+
+  if (credential.kind === "apiKey") {
+    const auth = Buffer.from(`${credential.apiKey}:`, "utf8").toString("base64");
+    return `Basic ${auth}`;
+  }
+
+  return `Bearer ${credential.accessToken}`;
+}
+
+export function setApiKeyForCompany(args: {
+  companyName: string;
+  apiKey: string;
+  expiresAt: number;
+}): void {
+  companyCredentialProvider.setApiKeyCredential(args);
+}
+
+export function listConnectedCompanyNames(): string[] {
+  return companyCredentialProvider.listCompanyNames();
+}
+
+export function clearCredentialForCompany(companyName: string): boolean {
+  return companyCredentialProvider.clearCredential(companyName);
+}
+
+export function clearAllCompanyCredentials(): number {
+  return companyCredentialProvider.clearAllCredentials();
 }
 
 export function textResponse(text: string) {
@@ -169,6 +308,8 @@ let redAuditCounter = 1;
 
 const RESOURCE_LABELS: Record<string, string> = {
   accounts: "Account",
+  accruals: "Accrual",
+  allocationResolvers: "Allocation resolver",
   analysisCategories: "Analysis category",
   bankAccounts: "Bank account",
   bookTranTypes: "Book transaction type",
@@ -178,9 +319,11 @@ const RESOURCE_LABELS: Record<string, string> = {
   customers: "Customer",
   email: "Email",
   nominalAccounts: "Nominal account",
+  nominalJournalBatches: "Nominal journal batch",
   ownerTypeGroups: "Owner type group",
   ownerTypes: "Owner type",
   payments: "Payment",
+  prepayments: "Prepayment",
   products: "Product",
   productTypes: "Product type",
   purchases: "Purchase",
@@ -465,18 +608,17 @@ export async function brcFetch(
   path: string,
   init: RequestInit = {}
 ) {
-  const apiKey = getApiKeyForCompany(companyName);
   const safePath = path.startsWith("/") ? path : `/${path}`;
   const method = normalizeHttpMethod(init);
   const requestBody = parseRequestBody(init);
-  const auth = Buffer.from(`${apiKey}:`, "utf8").toString("base64");
+  const authorization = getAuthorizationHeaderForCompany(companyName);
 
   const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
     ...init,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Basic ${auth}`,
+      Authorization: authorization,
       ...(init.headers ?? {}),
     },
   });

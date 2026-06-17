@@ -14,12 +14,12 @@ import {
   getCompanyProcessingSettings,
   loadAndEnforceTransactionSettings,
   type TransactionWorkflow,
-} from "../../company_processing_settings.js";
+} from "../../guards/company_processing_settings.js";
 import {
   enforceReferenceSettingsOrThrow,
   getCompanyReferenceSettings,
   type ReferenceWorkflow,
-} from "../../company_reference_settings.js";
+} from "../../guards/company_reference_settings.js";
 import {
   buildBankAccountPayload,
   buildCashReceiptPayload,
@@ -32,7 +32,7 @@ import {
   type SalesDocumentAnalysisWorkflow,
 } from "./payloads_tools.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
-import { getMaxBatchItems } from "../../server_config.js";
+import { getMaxBatchItems } from "../../config/server_config.js";
 
 //Removed opening balance fields from payload --> don't prompt customer for customer opening balance because there is no API that will POST it
 const OPENING_BALANCE_FIELD_NAMES = [
