@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
-import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, hydrateCurrentSessionFromConnectionStore, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
+import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, reloadSessionCredentialsFromConnectionStore, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
-import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, } from "../../auth/connection_store.js";
+import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, runWithMcpSessionContext, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
     server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
         await ensureConnectionStoreInitialized();
@@ -45,19 +45,19 @@ export function registerCompanyContextTools(server) {
         }
         try {
             const result = await claimConnectionCodeForSession(code, sessionId);
-            await hydrateCurrentSessionFromConnectionStore(result.connectionId);
+            await reloadSessionCredentialsFromConnectionStore(sessionId, result.connectionId);
             const count = result.companyNames.length;
             const summary = count === 1
                 ? "1 company is now connected in this session:"
                 : `${count} companies are now connected in this session:`;
-            return textResponse([
+            return runWithMcpSessionContext({ sessionId, connectionId: result.connectionId }, () => textResponse([
                 "Connection confirmed.",
                 "",
                 summary,
                 ...result.companyNames.map((name) => `- ${name}`),
                 "",
                 "You can now ask for connected companies or work with your company records.",
-            ].join("\n"));
+            ].join("\n")));
         }
         catch (error) {
             if (error instanceof ClaimConnectionError) {

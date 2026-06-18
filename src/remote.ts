@@ -16,8 +16,11 @@ import { createBrcMcpServer } from "./server.js";
 import {
   CompanyApiContext,
   ensureMcpSessionReady,
+  registerHttpSessionKeyStore,
+  reloadSessionCredentialsFromConnectionStore,
   runWithMcpSessionContext,
   runWithSessionKeyStore,
+  unregisterHttpSessionKeyStore,
 } from "./shared.js";
 
 import {
@@ -28,7 +31,6 @@ import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
 } from "./auth/connection_store.js";
-import { hydrateSessionKeyStoreFromConnectionStore } from "./auth/connection_persistence.js";
 
 import {
   renderConnectPage,
@@ -68,7 +70,12 @@ function touchSession(session: Session): void {
 async function closeSession(sessionId: string, session: Session): Promise<void> {
   await session.transport.close().catch(() => {});
   await session.server.close().catch(() => {});
+  unregisterHttpSessionKeyStore(sessionId);
   sessions.delete(sessionId);
+}
+
+function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiContext>): void {
+  registerHttpSessionKeyStore(sessionId, keyStore);
 }
 
 async function cleanupExpiredSessions(): Promise<void> {
@@ -300,9 +307,9 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         await getConnectionStore().getConnectionIdForSession(sessionId);
 
       if (boundConnectionId === pending.connectionId) {
-        await hydrateSessionKeyStoreFromConnectionStore(
-          pending.connectionId,
-          session.keyStore
+        await reloadSessionCredentialsFromConnectionStore(
+          sessionId,
+          pending.connectionId
         );
       }
     }
@@ -346,7 +353,10 @@ app.post("/mcp", async (req: Request, res: Response) => {
 
   transport.onclose = () => {
     const sid = transport.sessionId;
-    if (sid) sessions.delete(sid);
+    if (sid) {
+      unregisterHttpSessionKeyStore(sid);
+      sessions.delete(sid);
+    }
   };
 
   await server.connect(transport);
@@ -362,6 +372,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   const sidAfterInit = transport.sessionId;
   if (sidAfterInit) {
     sessions.set(sidAfterInit, provisionalSession);
+    trackHttpSession(sidAfterInit, keyStore);
     await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
     return;
   }
@@ -373,6 +384,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   const sid = transport.sessionId;
   if (sid) {
     sessions.set(sid, provisionalSession);
+    trackHttpSession(sid, keyStore);
     await ensureMcpSessionReady(sid, keyStore);
   }
 });

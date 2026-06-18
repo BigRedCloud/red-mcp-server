@@ -12,6 +12,7 @@ import {
   ensureConnectionIdForSession,
   getCurrentConnectionId,
   getCurrentMcpSessionId,
+  getMcpSessionContext,
   runWithMcpSessionContext,
   type McpSessionContext,
 } from "./auth/connection_store.js";
@@ -55,6 +56,28 @@ export const BRC_API_BASE_URL = (
 
 const sessionKeyStorage = new AsyncLocalStorage<Map<string, CompanyApiContext>>();
 const globalContexts = new Map<string, CompanyApiContext>();
+const httpSessionKeyStores = new Map<string, Map<string, CompanyApiContext>>();
+
+/**
+ * Registers the in-memory credential map for an HTTP MCP session.
+ * Used when AsyncLocalStorage does not propagate into MCP tool handlers.
+ */
+export function registerHttpSessionKeyStore(
+  sessionId: string,
+  keyStore: Map<string, CompanyApiContext>
+): void {
+  httpSessionKeyStores.set(sessionId, keyStore);
+}
+
+export function unregisterHttpSessionKeyStore(sessionId: string): void {
+  httpSessionKeyStores.delete(sessionId);
+}
+
+export function getRegisteredHttpSessionKeyStore(
+  sessionId: string
+): Map<string, CompanyApiContext> | undefined {
+  return httpSessionKeyStores.get(sessionId);
+}
 
 /**
  * Returns the key store for the current session.
@@ -62,7 +85,20 @@ const globalContexts = new Map<string, CompanyApiContext>();
  * In stdio mode, falls back to a shared global store (single user).
  */
 export function getCompanyApiContexts(): Map<string, CompanyApiContext> {
-  return sessionKeyStorage.getStore() ?? globalContexts;
+  const fromAsyncLocal = sessionKeyStorage.getStore();
+  if (fromAsyncLocal) {
+    return fromAsyncLocal;
+  }
+
+  const sessionId = getMcpSessionContext()?.sessionId;
+  if (sessionId) {
+    const registered = httpSessionKeyStores.get(sessionId);
+    if (registered) {
+      return registered;
+    }
+  }
+
+  return globalContexts;
 }
 
 /* class to get the credentials provider for the current session
@@ -182,10 +218,26 @@ export type { McpSessionContext };
 export async function hydrateCurrentSessionFromConnectionStore(
   connectionId: string
 ): Promise<number> {
-  return hydrateSessionKeyStoreFromConnectionStore(
-    connectionId,
-    getCompanyApiContexts()
+  return reloadSessionCredentialsFromConnectionStore(
+    getCurrentMcpSessionId(),
+    connectionId
   );
+}
+
+/**
+ * Clears and reloads decoded company credentials for an HTTP MCP session
+ * from the active connection store (memory or Cosmos).
+ */
+export async function reloadSessionCredentialsFromConnectionStore(
+  sessionId: string | undefined,
+  connectionId: string
+): Promise<number> {
+  const keyStore =
+    (sessionId ? getRegisteredHttpSessionKeyStore(sessionId) : undefined) ??
+    getCompanyApiContexts();
+
+  keyStore.clear();
+  return hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
 }
 
 async function persistCurrentCompanyCredential(args: {
@@ -224,7 +276,8 @@ export async function ensureMcpSessionReady(
   const context = { sessionId, connectionId };
 
   if (keyStore) {
-    await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+    registerHttpSessionKeyStore(sessionId, keyStore);
+    await reloadSessionCredentialsFromConnectionStore(sessionId, connectionId);
   }
 
   return context;

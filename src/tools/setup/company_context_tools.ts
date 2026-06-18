@@ -11,7 +11,7 @@ import {
   jsonResponse,
   getCompanyApiContexts, 
   textResponse,
-  hydrateCurrentSessionFromConnectionStore,
+  reloadSessionCredentialsFromConnectionStore,
   getCurrentMcpSessionId,
   getCurrentConnectionId,
 } from "../../shared.js";
@@ -27,6 +27,7 @@ import {
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  runWithMcpSessionContext,
 } from "../../auth/connection_store.js";
 
 export function registerCompanyContextTools(server: ServerType) {
@@ -94,7 +95,10 @@ export function registerCompanyContextTools(server: ServerType) {
 
       try {
         const result = await claimConnectionCodeForSession(code, sessionId);
-        await hydrateCurrentSessionFromConnectionStore(result.connectionId);
+        await reloadSessionCredentialsFromConnectionStore(
+          sessionId,
+          result.connectionId
+        );
 
         const count = result.companyNames.length;
         const summary =
@@ -102,15 +106,19 @@ export function registerCompanyContextTools(server: ServerType) {
             ? "1 company is now connected in this session:"
             : `${count} companies are now connected in this session:`;
 
-        return textResponse(
-          [
-            "Connection confirmed.",
-            "",
-            summary,
-            ...result.companyNames.map((name) => `- ${name}`),
-            "",
-            "You can now ask for connected companies or work with your company records.",
-          ].join("\n")
+        return runWithMcpSessionContext(
+          { sessionId, connectionId: result.connectionId },
+          () =>
+            textResponse(
+              [
+                "Connection confirmed.",
+                "",
+                summary,
+                ...result.companyNames.map((name) => `- ${name}`),
+                "",
+                "You can now ask for connected companies or work with your company records.",
+              ].join("\n")
+            )
         );
       } catch (error) {
         if (error instanceof ClaimConnectionError) {

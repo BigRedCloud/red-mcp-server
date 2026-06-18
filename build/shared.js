@@ -2,17 +2,42 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
-import { ensureConnectionIdForSession, getCurrentConnectionId, getCurrentMcpSessionId, runWithMcpSessionContext, } from "./auth/connection_store.js";
+import { ensureConnectionIdForSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
 const globalContexts = new Map();
+const httpSessionKeyStores = new Map();
+/**
+ * Registers the in-memory credential map for an HTTP MCP session.
+ * Used when AsyncLocalStorage does not propagate into MCP tool handlers.
+ */
+export function registerHttpSessionKeyStore(sessionId, keyStore) {
+    httpSessionKeyStores.set(sessionId, keyStore);
+}
+export function unregisterHttpSessionKeyStore(sessionId) {
+    httpSessionKeyStores.delete(sessionId);
+}
+export function getRegisteredHttpSessionKeyStore(sessionId) {
+    return httpSessionKeyStores.get(sessionId);
+}
 /**
  * Returns the key store for the current session.
  * In remote (HTTP) mode, each session has its own isolated store.
  * In stdio mode, falls back to a shared global store (single user).
  */
 export function getCompanyApiContexts() {
-    return sessionKeyStorage.getStore() ?? globalContexts;
+    const fromAsyncLocal = sessionKeyStorage.getStore();
+    if (fromAsyncLocal) {
+        return fromAsyncLocal;
+    }
+    const sessionId = getMcpSessionContext()?.sessionId;
+    if (sessionId) {
+        const registered = httpSessionKeyStores.get(sessionId);
+        if (registered) {
+            return registered;
+        }
+    }
+    return globalContexts;
 }
 /* class to get the credentials provider for the current session
 * FUTURE DEV: Replace AzureSessionCredentialProvider with an OAuthCredentialProvider
@@ -87,7 +112,17 @@ export function runWithSessionKeyStore(store, fn) {
 }
 export { runWithMcpSessionContext, getCurrentConnectionId, getCurrentMcpSessionId };
 export async function hydrateCurrentSessionFromConnectionStore(connectionId) {
-    return hydrateSessionKeyStoreFromConnectionStore(connectionId, getCompanyApiContexts());
+    return reloadSessionCredentialsFromConnectionStore(getCurrentMcpSessionId(), connectionId);
+}
+/**
+ * Clears and reloads decoded company credentials for an HTTP MCP session
+ * from the active connection store (memory or Cosmos).
+ */
+export async function reloadSessionCredentialsFromConnectionStore(sessionId, connectionId) {
+    const keyStore = (sessionId ? getRegisteredHttpSessionKeyStore(sessionId) : undefined) ??
+        getCompanyApiContexts();
+    keyStore.clear();
+    return hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
 }
 async function persistCurrentCompanyCredential(args) {
     const connectionId = getCurrentConnectionId();
@@ -114,7 +149,8 @@ export async function ensureMcpSessionReady(sessionId, keyStore) {
     const connectionId = await ensureConnectionIdForSession(sessionId);
     const context = { sessionId, connectionId };
     if (keyStore) {
-        await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+        registerHttpSessionKeyStore(sessionId, keyStore);
+        await reloadSessionCredentialsFromConnectionStore(sessionId, connectionId);
     }
     return context;
 }

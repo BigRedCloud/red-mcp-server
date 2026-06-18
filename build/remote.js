@@ -8,10 +8,9 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
-import { ensureMcpSessionReady, runWithMcpSessionContext, runWithSessionKeyStore, } from "./shared.js";
+import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithMcpSessionContext, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
-import { hydrateSessionKeyStoreFromConnectionStore } from "./auth/connection_persistence.js";
 import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
 import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./config/server_config.js";
 import multer from "multer";
@@ -31,7 +30,11 @@ function touchSession(session) {
 async function closeSession(sessionId, session) {
     await session.transport.close().catch(() => { });
     await session.server.close().catch(() => { });
+    unregisterHttpSessionKeyStore(sessionId);
     sessions.delete(sessionId);
+}
+function trackHttpSession(sessionId, keyStore) {
+    registerHttpSessionKeyStore(sessionId, keyStore);
 }
 async function cleanupExpiredSessions() {
     const now = Date.now();
@@ -197,7 +200,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
                 continue;
             const boundConnectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
             if (boundConnectionId === pending.connectionId) {
-                await hydrateSessionKeyStoreFromConnectionStore(pending.connectionId, session.keyStore);
+                await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
             }
         }
         const connectedNames = companies.map((company) => company.companyName);
@@ -232,8 +235,10 @@ app.post("/mcp", async (req, res) => {
     });
     transport.onclose = () => {
         const sid = transport.sessionId;
-        if (sid)
+        if (sid) {
+            unregisterHttpSessionKeyStore(sid);
             sessions.delete(sid);
+        }
     };
     await server.connect(transport);
     const provisionalSession = {
@@ -246,6 +251,7 @@ app.post("/mcp", async (req, res) => {
     const sidAfterInit = transport.sessionId;
     if (sidAfterInit) {
         sessions.set(sidAfterInit, provisionalSession);
+        trackHttpSession(sidAfterInit, keyStore);
         await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
         return;
     }
@@ -255,6 +261,7 @@ app.post("/mcp", async (req, res) => {
     const sid = transport.sessionId;
     if (sid) {
         sessions.set(sid, provisionalSession);
+        trackHttpSession(sid, keyStore);
         await ensureMcpSessionReady(sid, keyStore);
     }
 });
