@@ -44,7 +44,7 @@ function buildMissingOrNotProvidedSection(missingLabels) {
         "Missing or not provided:",
         ...missingLabels.map((label) => `- ${label}`),
         "",
-        "These contact fields are warnings only for create/post. Red Connect must not invent missing phone or email values.",
+        "These contact fields are warnings only for create/post. Red must not invent missing phone or email values.",
         "Missing customer email does not block create/post, but email sending will require a recipient override unless a customer email is on file.",
     ].join("\n");
 }
@@ -52,11 +52,11 @@ function buildContactWarning(label) {
     if (label === "Customer email") {
         return [
             `${label} is missing or not provided.`,
-            "Red Connect will not invent this value.",
+            "Red will not invent this value.",
             "You can still create or post the document, but email sending will require a recipient override unless a customer email is added later.",
         ].join(" ");
     }
-    return `${label} is missing or not provided. Red Connect will not invent this value.`;
+    return `${label} is missing or not provided. Red will not invent this value.`;
 }
 export async function buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payload) {
     if (!companyName || !isQuoteOrSalesInvoiceCreateTool(toolName)) {
@@ -166,7 +166,7 @@ export function buildRecipientEmailRequiredResponse(args) {
     return {
         status: "recipient_email_required",
         message: [
-            `Red Connect cannot send this ${args.documentTypeLabel} email because no recipient email address is available.`,
+            `Red cannot send this ${args.documentTypeLabel} email because no recipient email address is available.`,
             "",
             "There is no customer email on file and no recipient override was provided.",
             "Please provide a recipient email address before sending.",

@@ -224,12 +224,12 @@ Customer output policy:
 
 Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
-- When no company is connected, use brc_start_company_connection and direct the user to the secure Red Connect connection page. Do not ask for credentials in chat.
+- When no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. Do not ask for credentials in chat.
 - Never show company data from prior test runs, saved reports, or cached results — only live data from the current connected session.
 - Company connection details are kept in server session memory for about 1 hour and are not shown back in chat.
 - Assistants must never repeat API keys from chat history.
 - Deleting or changing records should only happen after you confirm the details.
-- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red Connect cannot email it through the current MCP tools, list the supported types, and stop — do not prepare a draft or use a workaround.
+- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare a draft or use a workaround.
 - If something you need is not available here, you can still review data in chat or work in Big Red Cloud directly.
 
 Recommended safe workflow:
@@ -345,7 +345,7 @@ Email (supported document types only):
 - "Email this sales invoice to the customer."
 - "Send this quote by email."
 - "Email a customer statement for last month."
-- Red Connect cannot email cash receipts, purchases, payments, bank accounts, or other unsupported document types through the current MCP tools.
+- Red cannot email cash receipts, purchases, payments, bank accounts, or other unsupported document types through the current MCP tools.
 
 Reports:
 - "Show nominal account groups."
@@ -387,11 +387,11 @@ Never type company API keys into chat. Ask Red to start a secure company connect
 7. API keys must never appear in assistant replies
 - MCP tools never return API key values.
 - Assistants must not repeat, quote, or confirm keys from user messages or earlier chat turns.
-- If asked for a key, use brc_get_company_api_key_status and direct the user to the secure Red Connect connection page or their BRC administrator.
+- If asked for a key, use brc_get_company_api_key_status and direct the user to the secure Red connection page or their BRC administrator.
 
 8. Email sending is limited to supported document types
-- Red Connect can email sales invoices, quotes, and customer statements only.
-- If you ask to email a cash receipt, purchase, payment, bank account, or other unsupported document, Red Connect will explain that it cannot email that document through the current MCP tools.
+- Red can email sales invoices, quotes, and customer statements only.
+- If you ask to email a cash receipt, purchase, payment, bank account, or other unsupported document, Red will explain that it cannot email that document through the current MCP tools.
 
 Useful prompts:
 - "Check if my company is ready."
@@ -596,7 +596,7 @@ export function registerDeploymentTools(server) {
                     type: "text",
                     text: [
                         `Help me connect ${companyName || "a company"} to this Red session.`,
-                        "Use brc_start_company_connection and give me the secure Red Connect connection page link.",
+                        "Use brc_start_company_connection and give me the secure Red connection page link.",
                         "I will enter my company name and API key on that page — do not ask for credentials in chat.",
                         "After connecting, show me the connected company and check whether it is ready to use.",
                         "Do not create, update, delete or batch process until I explicitly confirm.",

@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerAuditTools } from "./tools/audit/audit_session_tools.js";
+import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { registerCompanyContextTools } from "./tools/setup/company_context_tools.js";
 import { registerCompanySetupTools } from "./tools/setup/company_setup_tools.js";
@@ -14,13 +14,14 @@ import { registerQuoteTools } from "./tools/sales-emails/quotes_tools.js";
 import { registerSalesCreditNoteAndRepTools } from "./tools/sales-emails/sales_cn_rep_tools.js";
 import { registerSalesEntryInvoiceTools } from "./tools/sales-emails/sales_entry_inv_tools.js";
 import { registerSupplierTools } from "./tools/purchases/supplier_tools.js";
-import { registerSalesVatTools } from "./tools/vat/vat_sales_tools.js";
+import { registerSalesVatTools } from "./tools/vat_sales_tools.js";
 import { registerBankTools } from "./tools/bank-payments/bank_tools.js";
 import { registerEmailTools } from "./tools/sales-emails/email_tools.js";
 import { registerCompanyProcessingSettingsTools } from "./tools/setup/company_processing_settings_tools.js";
-import { registerAllocationResolverTools } from "./tools/allocationResolvers/alloc_tools.js";
+import { registerAllocationResolverTools } from "./tools/alloc_tools.js";
 import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
-
+import { registerAccrualTools } from "./tools/accrual_tools.js";
+import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import {
   appendWriteConfirmationDescription,
@@ -111,4 +112,6 @@ export function registerAllTools(server: McpServer): void {
   registerCompanyProcessingSettingsTools(filteredServer);
   registerAllocationResolverTools(filteredServer);
   registerNominalJournalBatchTools(filteredServer);
+  registerAccrualTools(filteredServer);
+  registerPrepaymentTools(filteredServer);
 }

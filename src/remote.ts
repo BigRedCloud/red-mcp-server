@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import "dotenv/config";
+process.env.RED_CONNECT_HTTP_MODE = "true";
+
 import { randomUUID } from "node:crypto";
 import cors from "cors";
 import express from "express";
@@ -11,12 +13,22 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
-import { CompanyApiContext, runWithSessionKeyStore, setApiKeyForCompany, textResponse, } from "./shared.js";
+import {
+  CompanyApiContext,
+  ensureMcpSessionReady,
+  runWithMcpSessionContext,
+  runWithSessionKeyStore,
+} from "./shared.js";
 
 import {
   consumeConnectionCode,
   getPendingConnection,
 } from "./auth/connection_code.js";
+import {
+  ensureConnectionStoreInitialized,
+  getConnectionStore,
+} from "./auth/connection_store.js";
+import { hydrateSessionKeyStoreFromConnectionStore } from "./auth/connection_persistence.js";
 
 import {
   renderConnectPage,
@@ -73,6 +85,27 @@ async function cleanupExpiredSessions(): Promise<void> {
 setInterval(() => {
   cleanupExpiredSessions().catch(() => {});
 }, 60 * 1000).unref();
+
+async function handleMcpRequest(
+  session: Session,
+  sessionId: string,
+  req: Request,
+  res: Response,
+  body?: unknown
+): Promise<void> {
+  const context = await ensureMcpSessionReady(sessionId, session.keyStore);
+
+  await runWithMcpSessionContext(context, async () =>
+    runWithSessionKeyStore(session.keyStore, async () => {
+      if (body !== undefined) {
+        await session.transport.handleRequest(req, res, body);
+      } else {
+        await session.transport.handleRequest(req, res);
+      }
+    })
+  );
+}
+
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 app.set("trust proxy", true);
 
@@ -207,6 +240,8 @@ function parseCompanyCsv(buffer: Buffer): UploadedCompanyCredential[] {
 }
 
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
+  await ensureConnectionStoreInitialized();
+
   const code = String(req.body.code ?? "");
 
   let companies: UploadedCompanyCredential[] = [];
@@ -235,7 +270,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     return;
   }
 
-  const pending = consumeConnectionCode(code);
+  const pending = await consumeConnectionCode(code);
 
   if (!pending) {
     res.status(400).send(renderExpiredLinkPage());
@@ -243,17 +278,34 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   }
 
   try {
-    runWithSessionKeyStore(pending.sessionStore, () => {
-      for (const company of companies) {
-        assertApiKeyAllowed(company.apiKey);
+    for (const company of companies) {
+      assertApiKeyAllowed(company.apiKey);
+    }
 
-        setApiKeyForCompany({
-          companyName: company.companyName,
-          apiKey: company.apiKey,
-          expiresAt: Date.now() + getApiKeyExpirationMs(),
-        });
+    const expiresAt = Date.now() + getApiKeyExpirationMs();
+    await getConnectionStore().saveConnectedCompanies(
+      pending.connectionId,
+      companies.map((company) => ({
+        companyName: company.companyName,
+        apiKey: company.apiKey,
+        expiresAt,
+      }))
+    );
+
+    for (const session of sessions.values()) {
+      const sessionId = session.transport.sessionId;
+      if (!sessionId) continue;
+
+      const boundConnectionId =
+        await getConnectionStore().getConnectionIdForSession(sessionId);
+
+      if (boundConnectionId === pending.connectionId) {
+        await hydrateSessionKeyStoreFromConnectionStore(
+          pending.connectionId,
+          session.keyStore
+        );
       }
-    });
+    }
 
     const connectedNames = companies.map((company) => company.companyName);
 
@@ -266,15 +318,14 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
 });
 
 app.post("/mcp", async (req: Request, res: Response) => {
+  await ensureConnectionStoreInitialized();
+
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
     touchSession(session);
-  
-    await runWithSessionKeyStore(session.keyStore, () =>
-      session.transport.handleRequest(req, res, req.body)
-    );
-  
+
+    await handleMcpRequest(session, sessionId, req, res, req.body);
     return;
   }
 
@@ -299,21 +350,40 @@ app.post("/mcp", async (req: Request, res: Response) => {
   };
 
   await server.connect(transport);
-  await runWithSessionKeyStore(keyStore, () =>
-    transport.handleRequest(req, res, req.body)
-  );
+
+  const provisionalSession: Session = {
+    server,
+    transport,
+    keyStore,
+    createdAt: Date.now(),
+    lastSeenAt: Date.now(),
+  };
+
+  const sidAfterInit = transport.sessionId;
+  if (sidAfterInit) {
+    sessions.set(sidAfterInit, provisionalSession);
+    await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
+    return;
+  }
+
+  await runWithSessionKeyStore(keyStore, async () => {
+    await transport.handleRequest(req, res, req.body);
+  });
 
   const sid = transport.sessionId;
   if (sid) {
-    sessions.set(sid, { server, transport, keyStore, createdAt: Date.now(), lastSeenAt: Date.now() });
+    sessions.set(sid, provisionalSession);
+    await ensureMcpSessionReady(sid, keyStore);
   }
 });
 
 
-app.get("/connect", (req, res) => {
+app.get("/connect", async (req, res) => {
+  await ensureConnectionStoreInitialized();
+
   const code = String(req.query.code ?? "");
 
-  const pending = getPendingConnection(code);
+  const pending = await getPendingConnection(code);
 
   if (!pending) {
     res.status(400).send(renderExpiredLinkPage());
@@ -325,12 +395,13 @@ app.get("/connect", (req, res) => {
 
 
 app.get("/mcp", async (req: Request, res: Response) => {
+  await ensureConnectionStoreInitialized();
+
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
-    await runWithSessionKeyStore(session.keyStore, () =>
-      session.transport.handleRequest(req, res)
-    );
+    touchSession(session);
+    await handleMcpRequest(session, sessionId, req, res);
     return;
   }
   res.status(400).json({
@@ -359,8 +430,20 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-const httpServer = app.listen(PORT, () => {
-  console.log(`BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`);
+const httpServer = app.listen(PORT, async () => {
+  try {
+    await ensureConnectionStoreInitialized();
+    const storeType = getConnectionStore().getStoreType();
+    console.log(
+      `BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`
+    );
+    console.log(`Red connection store: ${storeType}`);
+  } catch (error) {
+    console.error(
+      "Red connection store failed to initialize:",
+      error instanceof Error ? error.message : error
+    );
+  }
 });
 
 const shutdown = () => {

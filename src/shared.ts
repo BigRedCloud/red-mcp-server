@@ -1,6 +1,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
+import {
+  clearAllCompaniesFromConnectionStore,
+  clearCompanyFromConnectionStore,
+  hydrateSessionKeyStoreFromConnectionStore,
+  persistCompanyCredentialToConnectionStore,
+} from "./auth/connection_persistence.js";
+import {
+  ensureConnectionIdForSession,
+  getCurrentConnectionId,
+  getCurrentMcpSessionId,
+  runWithMcpSessionContext,
+  type McpSessionContext,
+} from "./auth/connection_store.js";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -85,6 +99,13 @@ class SessionMemoryCredentialProvider implements CompanyCredentialProvider {
       apiKey: args.apiKey,
       expiresAt: args.expiresAt,
     });
+
+    void persistCurrentCompanyCredential(args).catch((error) => {
+      console.error(
+        "Red: failed to persist company credential to connection store:",
+        error instanceof Error ? error.message : error
+      );
+    });
   }
 
   listCompanyNames(): string[] {
@@ -95,13 +116,32 @@ class SessionMemoryCredentialProvider implements CompanyCredentialProvider {
 
   clearCredential(companyName: string): boolean {
     const key = normaliseCompanyName(companyName);
-    return getCompanyApiContexts().delete(key);
+    const deleted = getCompanyApiContexts().delete(key);
+
+    if (deleted) {
+      void clearPersistedCompanyCredential(companyName).catch((error) => {
+        console.error(
+          "Red: failed to clear company credential from connection store:",
+          error instanceof Error ? error.message : error
+        );
+      });
+    }
+
+    return deleted;
   }
 
   clearAllCredentials(): number {
     const store = getCompanyApiContexts();
     const count = store.size;
     store.clear();
+
+    void clearAllPersistedCompanyCredentials().catch((error) => {
+      console.error(
+        "Red: failed to clear all company credentials from connection store:",
+        error instanceof Error ? error.message : error
+      );
+    });
+
     return count;
   }
 }
@@ -136,6 +176,60 @@ export function runWithSessionKeyStore<T>(
   return sessionKeyStorage.run(store, fn);
 }
 
+export { runWithMcpSessionContext, getCurrentConnectionId, getCurrentMcpSessionId };
+export type { McpSessionContext };
+
+export async function hydrateCurrentSessionFromConnectionStore(
+  connectionId: string
+): Promise<number> {
+  return hydrateSessionKeyStoreFromConnectionStore(
+    connectionId,
+    getCompanyApiContexts()
+  );
+}
+
+async function persistCurrentCompanyCredential(args: {
+  companyName: string;
+  apiKey: string;
+  expiresAt: number;
+}): Promise<void> {
+  const connectionId = getCurrentConnectionId();
+  if (!connectionId) return;
+
+  await persistCompanyCredentialToConnectionStore({
+    connectionId,
+    ...args,
+  });
+}
+
+async function clearPersistedCompanyCredential(companyName: string): Promise<void> {
+  const connectionId = getCurrentConnectionId();
+  if (!connectionId) return;
+
+  await clearCompanyFromConnectionStore(connectionId, companyName);
+}
+
+async function clearAllPersistedCompanyCredentials(): Promise<void> {
+  const connectionId = getCurrentConnectionId();
+  if (!connectionId) return;
+
+  await clearAllCompaniesFromConnectionStore(connectionId);
+}
+
+export async function ensureMcpSessionReady(
+  sessionId: string,
+  keyStore?: Map<string, CompanyApiContext>
+): Promise<McpSessionContext> {
+  const connectionId = await ensureConnectionIdForSession(sessionId);
+  const context = { sessionId, connectionId };
+
+  if (keyStore) {
+    await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+  }
+
+  return context;
+}
+
 export const companyNameSchema = z
   .string()
   .min(1)
@@ -153,7 +247,7 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
       [
         `No company connection is currently stored for "${companyName}".`,
         "",
-        "To continue, ask the user to connect the company using the secure Red Connect connection page.",
+        "To continue, ask the user to connect the company using the secure Red connection page.",
       ].join("\n")
     );
   }
@@ -163,7 +257,7 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
       [
         `The connection for "${companyName}" has expired.`,
         "",
-        "To continue, ask the user to reconnect the company using the secure Red Connect connection page. Do not ask the user to paste an API key into chat.",
+        "To continue, ask the user to reconnect the company using the secure Red connection page. Do not ask the user to paste an API key into chat.",
       ].join("\n")
     );
   }

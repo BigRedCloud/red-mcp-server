@@ -593,7 +593,7 @@ export async function requireWriteConfirmation(args: {
         "",
         "The customer or supplier must be explicitly named or confirmed in the current conversation before any postable draft. Do not reuse a counterparty from an earlier draft without that confirmation.",
         "",
-        "Red Connect must not invent missing customer phone or customer email values.",
+        "Red must not invent missing customer phone or customer email values.",
         "",
         "Only call this tool again with confirmWrite: true after the draft has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
         "When confirmWrite: true is used, confirmCounterpartyExplicit: true must also be true if this tool requires a customer or supplier.",

@@ -64,7 +64,7 @@ export function getApiKeyExpirationMs(): number {
 }
 
 /**
- * Public base URL for the Red Connect connection page.
+ * Public base URL for the Red connection page.
  * Must match the MCP server instance Cursor is connected to (same host/port).
  * Set BRC_PUBLIC_BASE_URL in hosted deployments; defaults to localhost for local dev.
  */
@@ -108,6 +108,7 @@ const DEV_TOOL_NAMES = new Set<string>([
   "brc_set_company_api_key",
   "brc_get_dev_mode_details",
   "brc_dev_diagnose_company_processing_settings",
+  "brc_get_connection_store_diagnostics",
 ]);
 
 /** Read-only tools that must not match broader update/write name patterns. */

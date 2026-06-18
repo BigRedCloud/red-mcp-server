@@ -1,66 +1,52 @@
 import crypto from "node:crypto";
-import type { CompanyApiContext } from "../shared.js";
-
-type PendingConnection = {
-  code: string;
-  sessionStore: Map<string, CompanyApiContext>;
-  createdAt: number;
-  expiresAt: number;
-  used: boolean;
-};
-
-const pendingConnections = new Map<string, PendingConnection>();
+import {
+  createPendingConnection as createPendingConnectionRecord,
+  ensureConnectionStoreInitialized,
+  getConnectionStore,
+} from "./connection_store.js";
 
 const CONNECTION_CODE_TTL_MS = 10 * 60 * 1000;
 
-export function createConnectionCode(
-  sessionStore: Map<string, CompanyApiContext>
-): string {
-  cleanupExpiredConnectionCodes();
+/** @deprecated Use createPendingConnection(sessionId) from connection_store.js */
+export async function createConnectionCode(connectionId: string): Promise<string> {
+  await ensureConnectionStoreInitialized();
 
   const code = crypto.randomBytes(16).toString("hex");
-
-  pendingConnections.set(code, {
+  await getConnectionStore().createPendingConnection({
     code,
-    sessionStore,
-    createdAt: Date.now(),
+    connectionId,
     expiresAt: Date.now() + CONNECTION_CODE_TTL_MS,
-    used: false,
   });
 
   return code;
 }
 
-export function getPendingConnection(code: string): PendingConnection | null {
-  const pending = pendingConnections.get(code);
+export async function getPendingConnection(
+  code: string
+): Promise<{ code: string; connectionId: string } | null> {
+  await ensureConnectionStoreInitialized();
 
+  const pending = await getConnectionStore().getPendingConnection(code);
   if (!pending) return null;
 
-  if (pending.used || pending.expiresAt < Date.now()) {
-    pendingConnections.delete(code);
-    return null;
-  }
-
-  return pending;
+  return {
+    code: pending.code,
+    connectionId: pending.connectionId,
+  };
 }
 
-export function consumeConnectionCode(code: string): PendingConnection | null {
-  const pending = getPendingConnection(code);
+export async function consumeConnectionCode(
+  code: string
+): Promise<{ code: string; connectionId: string } | null> {
+  await ensureConnectionStoreInitialized();
 
+  const pending = await getConnectionStore().consumePendingConnection(code);
   if (!pending) return null;
 
-  pending.used = true;
-  pendingConnections.delete(code);
-
-  return pending;
+  return {
+    code: pending.code,
+    connectionId: pending.connectionId,
+  };
 }
 
-export function cleanupExpiredConnectionCodes(): void {
-  const now = Date.now();
-
-  for (const [code, pending] of pendingConnections.entries()) {
-    if (pending.used || pending.expiresAt < now) {
-      pendingConnections.delete(code);
-    }
-  }
-}
+export { createPendingConnectionRecord as createPendingConnection };

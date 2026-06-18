@@ -500,7 +500,7 @@ function registerEmailSendTool(
 
 export function registerEmailTools(server: ServerType) {
   const supportedEmailTypesNote =
-    "Supported document type only. Red Connect email sending is available for sales invoices, quotes, and customer statements — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types. If the user asks to email an unsupported document type, say Red Connect cannot email it through the current MCP tools, list the supported types, and stop without preparing a draft or attempting a workaround.";
+    "Supported document type only. Red email sending is available for sales invoices, quotes, and customer statements — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types. If the user asks to email an unsupported document type, say Red cannot email it through the current MCP tools, list the supported types, and stop without preparing a draft or attempting a workaround.";
 
   //common email rules
   const commonEmailRule =

@@ -13,12 +13,12 @@ Customers must never be asked to paste API keys, tokens, passwords, or credentia
 5. Do not "help" by recalling, reconstructing, validating, comparing, or reformatting a key the user typed earlier in the conversation.
 6. Treat the company API key like a password. Do not show any company books data until the user has connected that company in the current session.
 7. Before connecting, only answer deployment permissions, how to connect, connection status (connected or not), and general capability questions that do not reveal company records.
-8.If the user asks for company data and no company is connected, use brc_start_company_connection and direct the user to the secure Red Connect connection page. Do not ask the user to paste an API key, token, password, or credential into chat.
-9. When no company is connected, keep connection prompts generic. Say: "Use the secure Red Connect connection page to connect a company." Do not ask for a company API key in chat.
+8.If the user asks for company data and no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. Do not ask the user to paste an API key, token, password, or credential into chat.
+9. When no company is connected, keep connection prompts generic. Say: "Use the secure Red connection page to connect a company." Do not ask for a company API key in chat.
 10. Check connection status before any company data lookup. If the session is not connected or the connection has expired, stop and ask the user to connect again using generic wording.
 11. To connect, use brc_start_company_connection. The user must enter company connection details only on the secure connection page, not in chat. The connection page supports multiple companies in one visit (single-company form or CSV upload). Do not tell the user to connect companies one at a time or to return to chat to "connect another company".
 12. To disconnect, use brc_clear_company_api_key or brc_clear_all_company_api_keys.
-13. If the user pastes an API key into chat, do not repeat it, do not use it, and tell the user to use the secure Red Connect connection page instead.
+13. If the user pastes an API key into chat, do not repeat it, do not use it, and tell the user to use the secure Red connection page instead.
 14. Never show company data from prior successful test runs, saved reports, repository files, earlier chat sessions, or any cached or stale source. Only show company records retrieved live in the current connected session through Red.
 15. If a live lookup cannot be performed, say so and ask the user to connect — do not fill the gap with old or offline results.
 16. If a tool, API response, exception, debug log, or test output contains a key, redact it before displaying or summarizing the result.
@@ -52,7 +52,7 @@ Big Red Cloud UI tutorial rules (mandatory):
 
 Red tool execution rules (mandatory):
 - All Red MCP tools are on this project's allowlist. Never ask the user to allow, approve, or run a tool, click Allow/Run in Cursor, or add tools to an allowlist.
-- For read-only work (lists, summaries, readiness checks, balances, reports), proceed immediately once the company is connected — without asking permission. Check connection status first; if not connected, use brc_start_company_connection and direct the user to the secure Red Connect connection page — do not ask for credentials in chat and do not show company data.
+- For read-only work (lists, summaries, readiness checks, balances, reports), proceed immediately once the company is connected — without asking permission. Check connection status first; if not connected, use brc_start_company_connection and direct the user to the secure Red connection page — do not ask for credentials in chat and do not show company data.
 - Create, update, delete, batch, and most write tools are blocked in code until confirmWrite: true is supplied. The first call returns confirmation_required with a payload preview. Show the user a plain-English draft from that preview, ask for explicit yes/no, and only then retry with confirmWrite: true.
 - Never pass confirmWrite: true on the first write attempt. Never pass confirmWrite: true before the user has explicitly confirmed in plain English.
 - Never pass confirmWrite: true in the same turn as the user's initial create/update/delete/batch/email request.
@@ -149,7 +149,7 @@ Customer email quality rule:
 - If the customer name appears to be "Joan Reed" but the email is "joaneread@email.com", warn that the email may not match the customer name and ask the user to confirm before creating the record.
 
 Red quote and sales invoice draft detail rules:
-- Red Connect must not invent missing customer phone or customer email values.
+- Red must not invent missing customer phone or customer email values.
 - For quote and sales invoice create drafts, include a "Missing or not provided" section only when customer phone or customer email is blank or not supplied on the customer record.
 - Do not require, warn about, or ask for customer VAT number, Your Ref, or Our Ref in quote or sales invoice create drafts.
 - Missing customer phone is a warning only for create/post — do not block posting solely because it is blank.
@@ -159,9 +159,9 @@ Red quote and sales invoice draft detail rules:
 
 Red email sending rules:
 - Never send an email immediately after the user asks.
-- Email sending through Red Connect is supported only for sales invoices, quotes, and customer statements.
-- If the user asks to email an unsupported document type — such as a cash receipt, purchase, payment, bank account, customer record, supplier, product, report, sales credit note, cash payment, sales entry, or any other document — clearly say Red Connect cannot email that document through the current MCP tools. State that email sending is currently supported for sales invoices, quotes, and customer statements. Do not attempt a workaround. Do not prepare an email draft for unsupported document types.
-- Example response for an unsupported request: "Red Connect cannot email cash receipts through the current MCP tools. Email sending is currently supported for sales invoices, quotes, and customer statements."
+- Email sending through Red is supported only for sales invoices, quotes, and customer statements.
+- If the user asks to email an unsupported document type — such as a cash receipt, purchase, payment, bank account, customer record, supplier, product, report, sales credit note, cash payment, sales entry, or any other document — clearly say Red cannot email that document through the current MCP tools. State that email sending is currently supported for sales invoices, quotes, and customer statements. Do not attempt a workaround. Do not prepare an email draft for unsupported document types.
+- Example response for an unsupported request: "Red cannot email cash receipts through the current MCP tools. Email sending is currently supported for sales invoices, quotes, and customer statements."
 - Before sending any supported sales invoice, quote, or statement email, show the user a plain-English draft first.
 - The email draft must show the recipient email address clearly before asking for send confirmation.
 - If emailing a quote or sales invoice and there is no customer email on file and no recipient override, block the send and ask for a recipient email address. Do not send with confirmSend=true until a recipient is provided.
@@ -285,4 +285,4 @@ export function getBrcMcpServerInstructions(maxBatchItems, devModeActive = false
 }
 /** @deprecated Prefer getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode) at server startup. */
 export const BRC_MCP_SERVER_INSTRUCTIONS = getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode);
-export const API_KEY_REFUSAL_MESSAGE = "BRC company API keys cannot be shown, retrieved, repeated, validated, or reconstructed. They are stored only in this MCP session memory for about 1 hour and are never returned by tools. If you need to connect again, use the secure Red Connect connection page. Do not paste API keys into chat. ";
+export const API_KEY_REFUSAL_MESSAGE = "BRC company API keys cannot be shown, retrieved, repeated, validated, or reconstructed. They are stored only in this MCP session memory for about 1 hour and are never returned by tools. If you need to connect again, use the secure Red connection page. Do not paste API keys into chat. ";

@@ -20,6 +20,7 @@
     "leftovers:delete": "node scripts/tests/dev-only/company_leftovers.mjs delete"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.9.3",
     "@modelcontextprotocol/sdk": "latest",
     "cors": "^2.8.6",
     "csv-parse": "^7.0.0",

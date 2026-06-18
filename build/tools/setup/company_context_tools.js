@@ -1,15 +1,23 @@
 import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
-import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, getCompanyApiContexts, textResponse } from "../../shared.js";
+import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
-import { createConnectionCode } from "../../auth/connection_code.js";
+import { createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
-    server.tool("brc_start_company_connection", "Starts the secure Red Connect company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
-        const sessionStore = getCompanyApiContexts();
-        const code = createConnectionCode(sessionStore);
+    server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
+        await ensureConnectionStoreInitialized();
+        const sessionId = getCurrentMcpSessionId();
+        if (!sessionId) {
+            return textResponse([
+                "Red could not determine the current MCP session.",
+                "",
+                "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+            ].join("\n"));
+        }
+        const { code } = await createPendingConnection(sessionId);
         const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
         return textResponse([
-            "To connect your Big Red Cloud companies, open this secure Red Connect connection page:",
+            "To connect your Big Red Cloud companies, open this secure Red connection page:",
             "",
             url,
             "",
@@ -65,7 +73,7 @@ export function registerCompanyContextTools(server) {
     });
     /* FUTURE DEV: Remove this tool? once OAuth is implemented*/
     if (redServerConfig.allowDevMode) {
-        server.tool("brc_set_company_api_key", "Internal/dev-only fallback for storing a BRC API key in MCP server memory. Customer-facing deployments should use the secure Red Connect connection page instead.", {
+        server.tool("brc_set_company_api_key", "Internal/dev-only fallback for storing a BRC API key in MCP server memory. Customer-facing deployments should use the secure Red connection page instead.", {
             companyName: companyNameSchema,
             apiKey: z.string().min(1).describe("BRC API key for this company."),
         }, async ({ companyName, apiKey }) => {
@@ -86,7 +94,7 @@ export function registerCompanyContextTools(server) {
                 apiKeyReturned: false,
                 apiKeyMustNotBeRepeatedInChat: true,
                 expiresInMinutes: getApiKeyExpirationMs() / 60000,
-                warning: "This is an internal/dev fallback. Customer-facing deployments should use the secure Red Connect connection page so API keys are not typed into chat.",
+                warning: "This is an internal/dev fallback. Customer-facing deployments should use the secure Red connection page so API keys are not typed into chat.",
             });
         });
     }
@@ -126,4 +134,18 @@ export function registerCompanyContextTools(server) {
             connectedCompaniesStoredInMcpMemory: false,
         });
     });
+    if (redServerConfig.allowDevMode) {
+        server.tool("brc_get_connection_store_diagnostics", "Internal operator diagnostic for Red connection persistence. Returns store type, session/connection id presence, and connected company count. Never exposes API keys or secrets.", {}, async () => {
+            await ensureConnectionStoreInitialized();
+            const diagnostics = await getConnectionStore().getDiagnostics({
+                sessionId: getCurrentMcpSessionId(),
+                connectionId: getCurrentConnectionId(),
+            });
+            return jsonResponse({
+                message: "Red connection store diagnostics.",
+                ...diagnostics,
+                secretsReturned: false,
+            });
+        });
+    }
 }
