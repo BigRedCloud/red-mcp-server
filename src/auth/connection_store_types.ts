@@ -55,6 +55,17 @@ export interface ConnectionStore {
 
   getConnectionIdForSession(sessionId: string): Promise<string | null>;
 
+  recordClientClaim(args: {
+    clientKey: string;
+    connectionId: string;
+    claimedAt: number;
+  }): Promise<void>;
+
+  getRecentClientClaim(
+    clientKey: string,
+    maxAgeMs: number
+  ): Promise<string | null>;
+
   saveConnectedCompanies(
     connectionId: string,
     companies: CompanyCredentialInput[]

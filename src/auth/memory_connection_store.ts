@@ -24,6 +24,10 @@ type CompanyEntry = StoredCompanyCredential;
 const pendingConnections = new Map<string, PendingEntry>();
 const sessionBindings = new Map<string, SessionBinding>();
 const companiesByConnection = new Map<string, Map<string, CompanyEntry>>();
+const clientLastClaims = new Map<
+  string,
+  { connectionId: string; claimedAt: number }
+>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -123,6 +127,34 @@ export class MemoryConnectionStore implements ConnectionStore {
 
   async getConnectionIdForSession(sessionId: string): Promise<string | null> {
     return sessionBindings.get(sessionId.trim())?.connectionId ?? null;
+  }
+
+  async recordClientClaim(args: {
+    clientKey: string;
+    connectionId: string;
+    claimedAt: number;
+  }): Promise<void> {
+    clientLastClaims.set(args.clientKey, {
+      connectionId: args.connectionId,
+      claimedAt: args.claimedAt,
+    });
+  }
+
+  async getRecentClientClaim(
+    clientKey: string,
+    maxAgeMs: number
+  ): Promise<string | null> {
+    const entry = clientLastClaims.get(clientKey);
+    if (!entry) {
+      return null;
+    }
+
+    if (Date.now() - entry.claimedAt > maxAgeMs) {
+      clientLastClaims.delete(clientKey);
+      return null;
+    }
+
+    return entry.connectionId;
   }
 
   async saveConnectedCompanies(

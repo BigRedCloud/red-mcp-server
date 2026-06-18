@@ -14,6 +14,9 @@ function pendingPartitionKey(code) {
 function connectionPartitionKey(connectionId) {
     return `connection:${connectionId}`;
 }
+function clientPartitionKey(clientKey) {
+    return `client:${clientKey}`;
+}
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
 }
@@ -164,6 +167,39 @@ export class CosmosConnectionStore {
                 .item("binding", sessionPartitionKey(sessionId.trim()))
                 .read();
             return resource?.connectionId ?? null;
+        }
+        catch {
+            return null;
+        }
+    }
+    async recordClientClaim(args) {
+        const doc = {
+            pk: clientPartitionKey(args.clientKey),
+            id: "lastClaim",
+            type: "clientLastClaim",
+            clientKey: args.clientKey,
+            connectionId: args.connectionId,
+            claimedAt: args.claimedAt,
+            ttl: PENDING_TTL_SECONDS,
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getRecentClientClaim(clientKey, maxAgeMs) {
+        try {
+            const { resource } = await this.getContainer()
+                .item("lastClaim", clientPartitionKey(clientKey))
+                .read();
+            if (!resource || resource.type !== "clientLastClaim") {
+                return null;
+            }
+            if (Date.now() - resource.claimedAt > maxAgeMs) {
+                await this.getContainer()
+                    .item("lastClaim", clientPartitionKey(clientKey))
+                    .delete()
+                    .catch(() => { });
+                return null;
+            }
+            return resource.connectionId;
         }
         catch {
             return null;

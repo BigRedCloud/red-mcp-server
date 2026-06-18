@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
-import { ensureConnectionIdForSession, ensureConnectionStoreInitialized, getConnectionStore, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
+import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
 const httpRequestSessionIdStorage = new AsyncLocalStorage();
+const httpClientKeyStorage = new AsyncLocalStorage();
 const globalContexts = new Map();
 const httpSessionKeyStores = new Map();
 function credentialDebugEnabled() {
@@ -26,6 +28,15 @@ export function runWithHttpRequestSessionId(sessionId, fn) {
 }
 export function enterHttpRequestSessionId(sessionId) {
     httpRequestSessionIdStorage.enterWith(sessionId);
+}
+export function enterHttpClientKey(clientKey) {
+    httpClientKeyStorage.enterWith(clientKey);
+}
+export function resolveHttpClientKey() {
+    return httpClientKeyStorage.getStore();
+}
+export function buildHttpClientKey(clientIp) {
+    return createHash("sha256").update(clientIp.trim(), "utf8").digest("hex").slice(0, 16);
 }
 /**
  * Resolves the MCP session id for the current request.
@@ -193,12 +204,16 @@ export async function ensureCredentialsForCurrentSession(companyName) {
         return;
     }
     await ensureConnectionStoreInitialized();
-    const connectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
+    const connectionId = await resolveConnectionIdForActiveSession({
+        sessionId,
+        clientKey: resolveHttpClientKey(),
+    });
     if (!connectionId) {
         logCredentialDebug({
             step: "ensureCredentials",
             sessionId,
             connectionId: null,
+            clientKeyPresent: Boolean(resolveHttpClientKey()),
             reason: "no_bound_connection",
         });
         return;
@@ -279,10 +294,12 @@ export async function ensureMcpSessionReady(sessionId, keyStore) {
     if (keyStore) {
         registerHttpSessionKeyStore(sessionId, keyStore);
     }
-    const connectionId = await ensureConnectionIdForSession(sessionId);
-    const context = { sessionId, connectionId };
+    const connectionId = (await resolveConnectionIdForActiveSession({
+        sessionId,
+        clientKey: resolveHttpClientKey(),
+    })) ?? "";
     await ensureCredentialsForCurrentSession();
-    return context;
+    return { sessionId, connectionId };
 }
 export const companyNameSchema = z
     .string()

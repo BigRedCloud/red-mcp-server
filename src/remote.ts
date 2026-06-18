@@ -15,7 +15,9 @@ import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import {
   CompanyApiContext,
+  buildHttpClientKey,
   ensureMcpSessionReady,
+  enterHttpClientKey,
   enterHttpRequestSessionId,
   enterSessionKeyStore,
   registerHttpSessionKeyStore,
@@ -80,6 +82,29 @@ function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiCon
   registerHttpSessionKeyStore(sessionId, keyStore);
 }
 
+async function createResumedMcpSession(sessionId: string): Promise<Session> {
+  const keyStore = new Map<string, CompanyApiContext>();
+  const server = createMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => sessionId,
+  });
+
+  transport.onclose = () => {
+    unregisterHttpSessionKeyStore(sessionId);
+    sessions.delete(sessionId);
+  };
+
+  await server.connect(transport);
+
+  return {
+    server,
+    transport,
+    keyStore,
+    createdAt: Date.now(),
+    lastSeenAt: Date.now(),
+  };
+}
+
 async function cleanupExpiredSessions(): Promise<void> {
   const now = Date.now();
   const ttlMs = getSessionTtlMs();
@@ -103,8 +128,10 @@ async function handleMcpRequest(
   body?: unknown
 ): Promise<void> {
   const normalizedSessionId = sessionId.trim();
+  const clientKey = buildHttpClientKey(getClientIp(req));
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
   enterHttpRequestSessionId(normalizedSessionId);
+  enterHttpClientKey(clientKey);
   enterSessionKeyStore(session.keyStore);
 
   const context = await ensureMcpSessionReady(normalizedSessionId, session.keyStore);
@@ -340,6 +367,15 @@ app.post("/mcp", async (req: Request, res: Response) => {
     return;
   }
 
+  if (sessionId && !isInitializeRequest(req.body)) {
+    const resumed = await createResumedMcpSession(sessionId);
+    sessions.set(sessionId, resumed);
+    trackHttpSession(sessionId, resumed.keyStore);
+    touchSession(resumed);
+    await handleMcpRequest(resumed, sessionId, req, res, req.body);
+    return;
+  }
+
   if (!isInitializeRequest(req.body)) {
     res.status(400).json({
       jsonrpc: "2.0",
@@ -420,6 +456,16 @@ app.get("/mcp", async (req: Request, res: Response) => {
     await handleMcpRequest(session, sessionId, req, res);
     return;
   }
+
+  if (sessionId) {
+    const resumed = await createResumedMcpSession(sessionId);
+    sessions.set(sessionId, resumed);
+    trackHttpSession(sessionId, resumed.keyStore);
+    touchSession(resumed);
+    await handleMcpRequest(resumed, sessionId, req, res);
+    return;
+  }
+
   res.status(400).json({
     jsonrpc: "2.0",
     error: { code: -32000, message: "Bad Request: No valid session for GET." },

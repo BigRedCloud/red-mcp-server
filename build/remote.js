@@ -8,7 +8,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
-import { ensureMcpSessionReady, enterHttpRequestSessionId, enterSessionKeyStore, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
+import { buildHttpClientKey, ensureMcpSessionReady, enterHttpClientKey, enterHttpRequestSessionId, enterSessionKeyStore, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { enterMcpSessionContext } from "./auth/connection_store.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
@@ -37,6 +37,25 @@ async function closeSession(sessionId, session) {
 function trackHttpSession(sessionId, keyStore) {
     registerHttpSessionKeyStore(sessionId, keyStore);
 }
+async function createResumedMcpSession(sessionId) {
+    const keyStore = new Map();
+    const server = createMcpServer();
+    const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => sessionId,
+    });
+    transport.onclose = () => {
+        unregisterHttpSessionKeyStore(sessionId);
+        sessions.delete(sessionId);
+    };
+    await server.connect(transport);
+    return {
+        server,
+        transport,
+        keyStore,
+        createdAt: Date.now(),
+        lastSeenAt: Date.now(),
+    };
+}
 async function cleanupExpiredSessions() {
     const now = Date.now();
     const ttlMs = getSessionTtlMs();
@@ -51,8 +70,10 @@ setInterval(() => {
 }, 60 * 1000).unref();
 async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
+    const clientKey = buildHttpClientKey(getClientIp(req));
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
     enterHttpRequestSessionId(normalizedSessionId);
+    enterHttpClientKey(clientKey);
     enterSessionKeyStore(session.keyStore);
     const context = await ensureMcpSessionReady(normalizedSessionId, session.keyStore);
     enterMcpSessionContext(context);
@@ -224,6 +245,14 @@ app.post("/mcp", async (req, res) => {
         await handleMcpRequest(session, sessionId, req, res, req.body);
         return;
     }
+    if (sessionId && !isInitializeRequest(req.body)) {
+        const resumed = await createResumedMcpSession(sessionId);
+        sessions.set(sessionId, resumed);
+        trackHttpSession(sessionId, resumed.keyStore);
+        touchSession(resumed);
+        await handleMcpRequest(resumed, sessionId, req, res, req.body);
+        return;
+    }
     if (!isInitializeRequest(req.body)) {
         res.status(400).json({
             jsonrpc: "2.0",
@@ -286,6 +315,14 @@ app.get("/mcp", async (req, res) => {
         const session = sessions.get(sessionId);
         touchSession(session);
         await handleMcpRequest(session, sessionId, req, res);
+        return;
+    }
+    if (sessionId) {
+        const resumed = await createResumedMcpSession(sessionId);
+        sessions.set(sessionId, resumed);
+        trackHttpSession(sessionId, resumed.keyStore);
+        touchSession(resumed);
+        await handleMcpRequest(resumed, sessionId, req, res);
         return;
     }
     res.status(400).json({

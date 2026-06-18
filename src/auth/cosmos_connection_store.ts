@@ -27,6 +27,10 @@ function connectionPartitionKey(connectionId: string): string {
   return `connection:${connectionId}`;
 }
 
+function clientPartitionKey(clientKey: string): string {
+  return `client:${clientKey}`;
+}
+
 function companyDocumentId(normalisedName: string): string {
   return `company:${normalisedName}`;
 }
@@ -70,6 +74,14 @@ type CompanyCredentialDocument = CosmosRecord & {
   expiresAt: number;
   createdAt: number;
   updatedAt: number;
+  ttl: number;
+};
+
+type ClientLastClaimDocument = CosmosRecord & {
+  type: "clientLastClaim";
+  clientKey: string;
+  connectionId: string;
+  claimedAt: number;
   ttl: number;
 };
 
@@ -255,6 +267,51 @@ export class CosmosConnectionStore implements ConnectionStore {
         .read<SessionBindingRecord>();
 
       return resource?.connectionId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async recordClientClaim(args: {
+    clientKey: string;
+    connectionId: string;
+    claimedAt: number;
+  }): Promise<void> {
+    const doc: ClientLastClaimDocument = {
+      pk: clientPartitionKey(args.clientKey),
+      id: "lastClaim",
+      type: "clientLastClaim",
+      clientKey: args.clientKey,
+      connectionId: args.connectionId,
+      claimedAt: args.claimedAt,
+      ttl: PENDING_TTL_SECONDS,
+    };
+
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getRecentClientClaim(
+    clientKey: string,
+    maxAgeMs: number
+  ): Promise<string | null> {
+    try {
+      const { resource } = await this.getContainer()
+        .item("lastClaim", clientPartitionKey(clientKey))
+        .read<ClientLastClaimDocument>();
+
+      if (!resource || resource.type !== "clientLastClaim") {
+        return null;
+      }
+
+      if (Date.now() - resource.claimedAt > maxAgeMs) {
+        await this.getContainer()
+          .item("lastClaim", clientPartitionKey(clientKey))
+          .delete()
+          .catch(() => {});
+        return null;
+      }
+
+      return resource.connectionId;
     } catch {
       return null;
     }

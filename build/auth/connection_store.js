@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 const CONNECTION_CODE_TTL_MS = 10 * 60 * 1000;
+const CLIENT_CLAIM_INHERIT_TTL_MS = CONNECTION_CODE_TTL_MS;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
 let connectionStoreInitPromise = null;
@@ -83,6 +84,33 @@ export function getCurrentConnectionId() {
     }
     return undefined;
 }
+export async function getBoundConnectionIdForSession(sessionId) {
+    await ensureConnectionStoreInitialized();
+    return getConnectionStore().getConnectionIdForSession(sessionId.trim());
+}
+/**
+ * Resolves the connection id for credential loading. Uses the session binding
+ * first, then inherits a recent claim from the same client (scoped by IP hash)
+ * so hosted MCP clients that rotate MCP session ids can still access companies.
+ */
+export async function resolveConnectionIdForActiveSession(args) {
+    await ensureConnectionStoreInitialized();
+    const normalizedSessionId = args.sessionId.trim();
+    const store = getConnectionStore();
+    const bound = await store.getConnectionIdForSession(normalizedSessionId);
+    if (bound) {
+        return bound;
+    }
+    if (!args.clientKey) {
+        return null;
+    }
+    const inherited = await store.getRecentClientClaim(args.clientKey, CLIENT_CLAIM_INHERIT_TTL_MS);
+    if (!inherited) {
+        return null;
+    }
+    await store.bindSessionToConnection(normalizedSessionId, inherited);
+    return inherited;
+}
 export async function ensureConnectionIdForSession(sessionId) {
     await ensureConnectionStoreInitialized();
     const normalizedSessionId = sessionId.trim();
@@ -103,7 +131,7 @@ export class ClaimConnectionError extends Error {
         this.reason = reason;
     }
 }
-export async function claimConnectionCodeForSession(code, sessionId) {
+export async function claimConnectionCodeForSession(code, sessionId, options) {
     await ensureConnectionStoreInitialized();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
@@ -123,6 +151,14 @@ export async function claimConnectionCodeForSession(code, sessionId) {
     }
     const normalizedSessionId = sessionId.trim();
     await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);
+    const claimedAt = Date.now();
+    if (options?.clientKey) {
+        await store.recordClientClaim({
+            clientKey: options.clientKey,
+            connectionId: pending.connectionId,
+            claimedAt,
+        });
+    }
     return {
         connectionId: pending.connectionId,
         companyNames: companies.map((company) => company.companyName),

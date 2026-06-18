@@ -13,6 +13,7 @@ import {
   textResponse,
   ensureCredentialsForCurrentSession,
   resolveActiveMcpSessionId,
+  resolveHttpClientKey,
   getCurrentMcpSessionId,
   getCurrentConnectionId,
 } from "../../shared.js";
@@ -95,7 +96,9 @@ export function registerCompanyContextTools(server: ServerType) {
       }
 
       try {
-        const result = await claimConnectionCodeForSession(code, sessionId);
+        const result = await claimConnectionCodeForSession(code, sessionId, {
+          clientKey: resolveHttpClientKey(),
+        });
         await ensureCredentialsForCurrentSession();
 
         const count = result.companyNames.length;

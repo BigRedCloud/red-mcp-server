@@ -5,6 +5,7 @@ function normaliseCompanyName(companyName) {
 const pendingConnections = new Map();
 const sessionBindings = new Map();
 const companiesByConnection = new Map();
+const clientLastClaims = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -82,6 +83,23 @@ export class MemoryConnectionStore {
     }
     async getConnectionIdForSession(sessionId) {
         return sessionBindings.get(sessionId.trim())?.connectionId ?? null;
+    }
+    async recordClientClaim(args) {
+        clientLastClaims.set(args.clientKey, {
+            connectionId: args.connectionId,
+            claimedAt: args.claimedAt,
+        });
+    }
+    async getRecentClientClaim(clientKey, maxAgeMs) {
+        const entry = clientLastClaims.get(clientKey);
+        if (!entry) {
+            return null;
+        }
+        if (Date.now() - entry.claimedAt > maxAgeMs) {
+            clientLastClaims.delete(clientKey);
+            return null;
+        }
+        return entry.connectionId;
     }
     async saveConnectedCompanies(connectionId, companies) {
         const map = companyMapForConnection(connectionId);

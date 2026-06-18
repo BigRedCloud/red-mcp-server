@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
-import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
+import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
@@ -44,7 +44,9 @@ export function registerCompanyContextTools(server) {
             ].join("\n"));
         }
         try {
-            const result = await claimConnectionCodeForSession(code, sessionId);
+            const result = await claimConnectionCodeForSession(code, sessionId, {
+                clientKey: resolveHttpClientKey(),
+            });
             await ensureCredentialsForCurrentSession();
             const count = result.companyNames.length;
             const summary = count === 1
