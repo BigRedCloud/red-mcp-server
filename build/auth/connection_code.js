@@ -22,6 +22,27 @@ export async function getPendingConnection(code) {
         connectionId: pending.connectionId,
     };
 }
+export async function completeConnectionCode(code) {
+    await ensureConnectionStoreInitialized();
+    const pending = await getConnectionStore().completePendingConnection(code);
+    if (!pending)
+        return null;
+    return {
+        code: pending.code,
+        connectionId: pending.connectionId,
+    };
+}
+export async function getConnectionByCode(code) {
+    await ensureConnectionStoreInitialized();
+    const pending = await getConnectionStore().getConnectionByCode(code);
+    if (!pending)
+        return null;
+    return {
+        code: pending.code,
+        connectionId: pending.connectionId,
+        used: pending.used,
+    };
+}
 export async function consumeConnectionCode(code) {
     await ensureConnectionStoreInitialized();
     const pending = await getConnectionStore().consumePendingConnection(code);

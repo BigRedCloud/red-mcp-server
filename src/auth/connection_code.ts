@@ -35,6 +35,35 @@ export async function getPendingConnection(
   };
 }
 
+export async function completeConnectionCode(
+  code: string
+): Promise<{ code: string; connectionId: string } | null> {
+  await ensureConnectionStoreInitialized();
+
+  const pending = await getConnectionStore().completePendingConnection(code);
+  if (!pending) return null;
+
+  return {
+    code: pending.code,
+    connectionId: pending.connectionId,
+  };
+}
+
+export async function getConnectionByCode(
+  code: string
+): Promise<{ code: string; connectionId: string; used: boolean } | null> {
+  await ensureConnectionStoreInitialized();
+
+  const pending = await getConnectionStore().getConnectionByCode(code);
+  if (!pending) return null;
+
+  return {
+    code: pending.code,
+    connectionId: pending.connectionId,
+    used: pending.used,
+  };
+}
+
 export async function consumeConnectionCode(
   code: string
 ): Promise<{ code: string; connectionId: string } | null> {

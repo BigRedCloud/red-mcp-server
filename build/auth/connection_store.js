@@ -91,6 +91,38 @@ export async function ensureConnectionIdForSession(sessionId) {
     await store.bindSessionToConnection(sessionId, connectionId);
     return connectionId;
 }
+export class ClaimConnectionError extends Error {
+    reason;
+    constructor(message, reason) {
+        super(message);
+        this.name = "ClaimConnectionError";
+        this.reason = reason;
+    }
+}
+export async function claimConnectionCodeForSession(code, sessionId) {
+    await ensureConnectionStoreInitialized();
+    const trimmedCode = code.trim();
+    if (!trimmedCode) {
+        throw new ClaimConnectionError("A connection code is required. Please start a new company connection and try again.", "not_found");
+    }
+    const store = getConnectionStore();
+    const pending = await store.getConnectionByCode(trimmedCode);
+    if (!pending) {
+        throw new ClaimConnectionError("That connection code is missing, expired, or invalid. Please start a new company connection and try again.", "not_found");
+    }
+    if (!pending.used) {
+        throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.", "not_completed");
+    }
+    const companies = await store.listConnectedCompanies(pending.connectionId);
+    if (companies.length === 0) {
+        throw new ClaimConnectionError("No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.", "no_companies");
+    }
+    await store.bindSessionToConnection(sessionId, pending.connectionId);
+    return {
+        connectionId: pending.connectionId,
+        companyNames: companies.map((company) => company.companyName),
+    };
+}
 export async function createPendingConnection(sessionId) {
     await ensureConnectionStoreInitialized();
     const connectionId = await ensureConnectionIdForSession(sessionId);

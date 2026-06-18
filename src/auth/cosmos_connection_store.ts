@@ -57,6 +57,7 @@ type PendingConnectionDocument = CosmosRecord & {
   connectionId: string;
   createdAt: number;
   expiresAt: number;
+  used: boolean;
   ttl: number;
 };
 
@@ -124,13 +125,16 @@ export class CosmosConnectionStore implements ConnectionStore {
       connectionId: args.connectionId,
       createdAt: now,
       expiresAt: args.expiresAt,
+      used: false,
       ttl: PENDING_TTL_SECONDS,
     };
 
     await this.getContainer().items.upsert(doc);
   }
 
-  async getPendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+  private async readPendingConnectionDocument(
+    code: string
+  ): Promise<PendingConnectionDocument | null> {
     try {
       const { resource } = await this.getContainer()
         .item("pending", pendingPartitionKey(code))
@@ -148,16 +152,55 @@ export class CosmosConnectionStore implements ConnectionStore {
         return null;
       }
 
-      return {
-        code: resource.code,
-        connectionId: resource.connectionId,
-        createdAt: resource.createdAt,
-        expiresAt: resource.expiresAt,
-        used: false,
-      };
+      return resource;
     } catch {
       return null;
     }
+  }
+
+  private pendingRecordFromDocument(
+    resource: PendingConnectionDocument
+  ): PendingConnectionRecord {
+    return {
+      code: resource.code,
+      connectionId: resource.connectionId,
+      createdAt: resource.createdAt,
+      expiresAt: resource.expiresAt,
+      used: Boolean(resource.used),
+    };
+  }
+
+  async getPendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(code);
+    if (!resource || resource.used) {
+      return null;
+    }
+
+    return this.pendingRecordFromDocument(resource);
+  }
+
+  async getConnectionByCode(code: string): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(code);
+    if (!resource) {
+      return null;
+    }
+
+    return this.pendingRecordFromDocument(resource);
+  }
+
+  async completePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(code);
+    if (!resource || resource.used) {
+      return null;
+    }
+
+    const completed: PendingConnectionDocument = {
+      ...resource,
+      used: true,
+    };
+
+    await this.getContainer().items.upsert(completed);
+    return this.pendingRecordFromDocument(completed);
   }
 
   async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {

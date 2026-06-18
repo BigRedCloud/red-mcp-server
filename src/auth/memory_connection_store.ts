@@ -77,6 +77,31 @@ export class MemoryConnectionStore implements ConnectionStore {
     return { ...pending };
   }
 
+  async getConnectionByCode(code: string): Promise<PendingConnectionRecord | null> {
+    cleanupExpiredPendingConnections();
+
+    const pending = pendingConnections.get(code);
+    if (!pending || pending.expiresAt < Date.now()) {
+      if (pending) pendingConnections.delete(code);
+      return null;
+    }
+
+    return { ...pending };
+  }
+
+  async completePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+    cleanupExpiredPendingConnections();
+
+    const pending = pendingConnections.get(code);
+    if (!pending || pending.used || pending.expiresAt < Date.now()) {
+      if (pending) pendingConnections.delete(code);
+      return null;
+    }
+
+    pending.used = true;
+    return { ...pending };
+  }
+
   async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
     const pending = await this.getPendingConnection(code);
     if (!pending) return null;

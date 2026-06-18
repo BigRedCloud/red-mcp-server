@@ -390,7 +390,7 @@ export function renderExpiredLinkPage(): string {
   return pageShell("Connection link expired", body);
 }
 
-export function renderSuccessPage(connectedNames: string[]): string {
+export function renderSuccessPage(connectedNames: string[], code: string): string {
   const count = connectedNames.length;
   const summary =
     count === 1
@@ -409,7 +409,7 @@ export function renderSuccessPage(connectedNames: string[]): string {
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
         <div class="next-step">
-          You can now return to chat and ask: <strong>Show my connected companies</strong>
+          Connection complete. Return to ChatGPT and say: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>
       </div>`;
 

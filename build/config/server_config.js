@@ -65,6 +65,7 @@ export function getMaxAuditEntries() {
 }
 const SESSION_TOOL_NAMES = new Set([
     "brc_start_company_connection",
+    "brc_confirm_company_connection",
     "brc_get_company_api_key_status",
     "brc_list_company_contexts",
     "brc_clear_company_api_key",

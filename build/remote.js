@@ -9,7 +9,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, runWithMcpSessionContext, runWithSessionKeyStore, } from "./shared.js";
-import { consumeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
+import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
 import { hydrateSessionKeyStoreFromConnectionStore } from "./auth/connection_persistence.js";
 import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
@@ -176,7 +176,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
             .send("Missing connection code or no valid companies were provided.");
         return;
     }
-    const pending = await consumeConnectionCode(code);
+    const pending = await completeConnectionCode(code);
     if (!pending) {
         res.status(400).send(renderExpiredLinkPage());
         return;
@@ -201,7 +201,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
             }
         }
         const connectedNames = companies.map((company) => company.companyName);
-        res.send(renderSuccessPage(connectedNames));
+        res.send(renderSuccessPage(connectedNames, code));
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";

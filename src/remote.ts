@@ -21,7 +21,7 @@ import {
 } from "./shared.js";
 
 import {
-  consumeConnectionCode,
+  completeConnectionCode,
   getPendingConnection,
 } from "./auth/connection_code.js";
 import {
@@ -270,7 +270,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     return;
   }
 
-  const pending = await consumeConnectionCode(code);
+  const pending = await completeConnectionCode(code);
 
   if (!pending) {
     res.status(400).send(renderExpiredLinkPage());
@@ -309,7 +309,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
 
     const connectedNames = companies.map((company) => company.companyName);
 
-    res.send(renderSuccessPage(connectedNames));
+    res.send(renderSuccessPage(connectedNames, code));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
 

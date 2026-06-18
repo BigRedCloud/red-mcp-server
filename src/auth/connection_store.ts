@@ -139,6 +139,71 @@ export async function ensureConnectionIdForSession(
   return connectionId;
 }
 
+export type ClaimConnectionResult = {
+  connectionId: string;
+  companyNames: string[];
+};
+
+export class ClaimConnectionError extends Error {
+  readonly reason: "not_found" | "not_completed" | "no_companies";
+
+  constructor(
+    message: string,
+    reason: "not_found" | "not_completed" | "no_companies"
+  ) {
+    super(message);
+    this.name = "ClaimConnectionError";
+    this.reason = reason;
+  }
+}
+
+export async function claimConnectionCodeForSession(
+  code: string,
+  sessionId: string
+): Promise<ClaimConnectionResult> {
+  await ensureConnectionStoreInitialized();
+
+  const trimmedCode = code.trim();
+  if (!trimmedCode) {
+    throw new ClaimConnectionError(
+      "A connection code is required. Please start a new company connection and try again.",
+      "not_found"
+    );
+  }
+
+  const store = getConnectionStore();
+  const pending = await store.getConnectionByCode(trimmedCode);
+
+  if (!pending) {
+    throw new ClaimConnectionError(
+      "That connection code is missing, expired, or invalid. Please start a new company connection and try again.",
+      "not_found"
+    );
+  }
+
+  if (!pending.used) {
+    throw new ClaimConnectionError(
+      "That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.",
+      "not_completed"
+    );
+  }
+
+  const companies = await store.listConnectedCompanies(pending.connectionId);
+  if (companies.length === 0) {
+    throw new ClaimConnectionError(
+      "No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.",
+      "no_companies"
+    );
+  }
+
+  await store.bindSessionToConnection(sessionId, pending.connectionId);
+
+  return {
+    connectionId: pending.connectionId,
+    companyNames: companies.map((company) => company.companyName),
+  };
+}
+
 export async function createPendingConnection(
   sessionId: string
 ): Promise<{ code: string; connectionId: string }> {

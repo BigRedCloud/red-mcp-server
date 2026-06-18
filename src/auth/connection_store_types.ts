@@ -42,6 +42,10 @@ export interface ConnectionStore {
 
   getPendingConnection(code: string): Promise<PendingConnectionRecord | null>;
 
+  getConnectionByCode(code: string): Promise<PendingConnectionRecord | null>;
+
+  completePendingConnection(code: string): Promise<PendingConnectionRecord | null>;
+
   consumePendingConnection(code: string): Promise<PendingConnectionRecord | null>;
 
   bindSessionToConnection(

@@ -45,6 +45,27 @@ export class MemoryConnectionStore {
         }
         return { ...pending };
     }
+    async getConnectionByCode(code) {
+        cleanupExpiredPendingConnections();
+        const pending = pendingConnections.get(code);
+        if (!pending || pending.expiresAt < Date.now()) {
+            if (pending)
+                pendingConnections.delete(code);
+            return null;
+        }
+        return { ...pending };
+    }
+    async completePendingConnection(code) {
+        cleanupExpiredPendingConnections();
+        const pending = pendingConnections.get(code);
+        if (!pending || pending.used || pending.expiresAt < Date.now()) {
+            if (pending)
+                pendingConnections.delete(code);
+            return null;
+        }
+        pending.used = true;
+        return { ...pending };
+    }
     async consumePendingConnection(code) {
         const pending = await this.getPendingConnection(code);
         if (!pending)

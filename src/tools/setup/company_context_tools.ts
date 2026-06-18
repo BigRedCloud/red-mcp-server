@@ -11,6 +11,7 @@ import {
   jsonResponse,
   getCompanyApiContexts, 
   textResponse,
+  hydrateCurrentSessionFromConnectionStore,
   getCurrentMcpSessionId,
   getCurrentConnectionId,
 } from "../../shared.js";
@@ -21,6 +22,8 @@ import {
   getPublicBaseUrl,
 } from "../../config/server_config.js";
 import {
+  claimConnectionCodeForSession,
+  ClaimConnectionError,
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -61,6 +64,61 @@ export function registerCompanyContextTools(server: ServerType) {
           "After connecting, return here and ask: “Show my connected companies”.",
         ].join("\n")
       );
+    }
+  );
+
+  server.tool(
+    "brc_confirm_company_connection",
+    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the connection code shown on the success page (for example in ChatGPT when the MCP session changed after opening the browser). Never exposes API keys.",
+    {
+      code: z
+        .string()
+        .min(1)
+        .describe(
+          "The connection code from the secure Red connection page success message."
+        ),
+    },
+    async ({ code }) => {
+      await ensureConnectionStoreInitialized();
+
+      const sessionId = getCurrentMcpSessionId();
+      if (!sessionId) {
+        return textResponse(
+          [
+            "Red could not determine the current MCP session.",
+            "",
+            "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+          ].join("\n")
+        );
+      }
+
+      try {
+        const result = await claimConnectionCodeForSession(code, sessionId);
+        await hydrateCurrentSessionFromConnectionStore(result.connectionId);
+
+        const count = result.companyNames.length;
+        const summary =
+          count === 1
+            ? "1 company is now connected in this session:"
+            : `${count} companies are now connected in this session:`;
+
+        return textResponse(
+          [
+            "Connection confirmed.",
+            "",
+            summary,
+            ...result.companyNames.map((name) => `- ${name}`),
+            "",
+            "You can now ask for connected companies or work with your company records.",
+          ].join("\n")
+        );
+      } catch (error) {
+        if (error instanceof ClaimConnectionError) {
+          return textResponse(error.message);
+        }
+
+        throw error;
+      }
     }
   );
 

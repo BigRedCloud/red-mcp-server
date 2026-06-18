@@ -60,11 +60,12 @@ export class CosmosConnectionStore {
             connectionId: args.connectionId,
             createdAt: now,
             expiresAt: args.expiresAt,
+            used: false,
             ttl: PENDING_TTL_SECONDS,
         };
         await this.getContainer().items.upsert(doc);
     }
-    async getPendingConnection(code) {
+    async readPendingConnectionDocument(code) {
         try {
             const { resource } = await this.getContainer()
                 .item("pending", pendingPartitionKey(code))
@@ -79,17 +80,46 @@ export class CosmosConnectionStore {
                     .catch(() => { });
                 return null;
             }
-            return {
-                code: resource.code,
-                connectionId: resource.connectionId,
-                createdAt: resource.createdAt,
-                expiresAt: resource.expiresAt,
-                used: false,
-            };
+            return resource;
         }
         catch {
             return null;
         }
+    }
+    pendingRecordFromDocument(resource) {
+        return {
+            code: resource.code,
+            connectionId: resource.connectionId,
+            createdAt: resource.createdAt,
+            expiresAt: resource.expiresAt,
+            used: Boolean(resource.used),
+        };
+    }
+    async getPendingConnection(code) {
+        const resource = await this.readPendingConnectionDocument(code);
+        if (!resource || resource.used) {
+            return null;
+        }
+        return this.pendingRecordFromDocument(resource);
+    }
+    async getConnectionByCode(code) {
+        const resource = await this.readPendingConnectionDocument(code);
+        if (!resource) {
+            return null;
+        }
+        return this.pendingRecordFromDocument(resource);
+    }
+    async completePendingConnection(code) {
+        const resource = await this.readPendingConnectionDocument(code);
+        if (!resource || resource.used) {
+            return null;
+        }
+        const completed = {
+            ...resource,
+            used: true,
+        };
+        await this.getContainer().items.upsert(completed);
+        return this.pendingRecordFromDocument(completed);
     }
     async consumePendingConnection(code) {
         const pending = await this.getPendingConnection(code);
