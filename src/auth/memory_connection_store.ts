@@ -114,15 +114,15 @@ export class MemoryConnectionStore implements ConnectionStore {
     sessionId: string,
     connectionId: string
   ): Promise<void> {
-    sessionBindings.set(sessionId, {
-      sessionId,
+    sessionBindings.set(sessionId.trim(), {
+      sessionId: sessionId.trim(),
       connectionId,
       updatedAt: Date.now(),
     });
   }
 
   async getConnectionIdForSession(sessionId: string): Promise<string | null> {
-    return sessionBindings.get(sessionId)?.connectionId ?? null;
+    return sessionBindings.get(sessionId.trim())?.connectionId ?? null;
   }
 
   async saveConnectedCompanies(

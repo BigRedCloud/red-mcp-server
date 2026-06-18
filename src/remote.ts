@@ -16,12 +16,14 @@ import { createBrcMcpServer } from "./server.js";
 import {
   CompanyApiContext,
   ensureMcpSessionReady,
+  enterHttpRequestSessionId,
+  enterSessionKeyStore,
   registerHttpSessionKeyStore,
   reloadSessionCredentialsFromConnectionStore,
-  runWithMcpSessionContext,
   runWithSessionKeyStore,
   unregisterHttpSessionKeyStore,
 } from "./shared.js";
+import { enterMcpSessionContext } from "./auth/connection_store.js";
 
 import {
   completeConnectionCode,
@@ -100,17 +102,19 @@ async function handleMcpRequest(
   res: Response,
   body?: unknown
 ): Promise<void> {
-  const context = await ensureMcpSessionReady(sessionId, session.keyStore);
+  const normalizedSessionId = sessionId.trim();
+  registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
+  enterHttpRequestSessionId(normalizedSessionId);
+  enterSessionKeyStore(session.keyStore);
 
-  await runWithMcpSessionContext(context, async () =>
-    runWithSessionKeyStore(session.keyStore, async () => {
-      if (body !== undefined) {
-        await session.transport.handleRequest(req, res, body);
-      } else {
-        await session.transport.handleRequest(req, res);
-      }
-    })
-  );
+  const context = await ensureMcpSessionReady(normalizedSessionId, session.keyStore);
+  enterMcpSessionContext(context);
+
+  if (body !== undefined) {
+    await session.transport.handleRequest(req, res, body);
+  } else {
+    await session.transport.handleRequest(req, res);
+  }
 }
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
@@ -327,7 +331,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
 app.post("/mcp", async (req: Request, res: Response) => {
   await ensureConnectionStoreInitialized();
 
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
     touchSession(session);
@@ -409,7 +413,7 @@ app.get("/connect", async (req, res) => {
 app.get("/mcp", async (req: Request, res: Response) => {
   await ensureConnectionStoreInitialized();
 
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
     touchSession(session);
@@ -424,7 +428,7 @@ app.get("/mcp", async (req: Request, res: Response) => {
 });
 
 app.delete("/mcp", async (req: Request, res: Response) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
   if (sessionId && sessions.has(sessionId)) {
     const { server, transport } = sessions.get(sessionId)!;
     await transport.close();

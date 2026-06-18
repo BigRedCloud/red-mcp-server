@@ -11,7 +11,8 @@ import {
   jsonResponse,
   getCompanyApiContexts, 
   textResponse,
-  reloadSessionCredentialsFromConnectionStore,
+  ensureCredentialsForCurrentSession,
+  resolveActiveMcpSessionId,
   getCurrentMcpSessionId,
   getCurrentConnectionId,
 } from "../../shared.js";
@@ -27,7 +28,7 @@ import {
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
-  runWithMcpSessionContext,
+  enterMcpSessionContext,
 } from "../../auth/connection_store.js";
 
 export function registerCompanyContextTools(server: ServerType) {
@@ -38,7 +39,7 @@ export function registerCompanyContextTools(server: ServerType) {
     async () => {
       await ensureConnectionStoreInitialized();
 
-      const sessionId = getCurrentMcpSessionId();
+      const sessionId = resolveActiveMcpSessionId();
       if (!sessionId) {
         return textResponse(
           [
@@ -82,7 +83,7 @@ export function registerCompanyContextTools(server: ServerType) {
     async ({ code }) => {
       await ensureConnectionStoreInitialized();
 
-      const sessionId = getCurrentMcpSessionId();
+      const sessionId = resolveActiveMcpSessionId();
       if (!sessionId) {
         return textResponse(
           [
@@ -95,10 +96,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
       try {
         const result = await claimConnectionCodeForSession(code, sessionId);
-        await reloadSessionCredentialsFromConnectionStore(
-          sessionId,
-          result.connectionId
-        );
+        await ensureCredentialsForCurrentSession();
 
         const count = result.companyNames.length;
         const summary =
@@ -106,19 +104,17 @@ export function registerCompanyContextTools(server: ServerType) {
             ? "1 company is now connected in this session:"
             : `${count} companies are now connected in this session:`;
 
-        return runWithMcpSessionContext(
-          { sessionId, connectionId: result.connectionId },
-          () =>
-            textResponse(
-              [
-                "Connection confirmed.",
-                "",
-                summary,
-                ...result.companyNames.map((name) => `- ${name}`),
-                "",
-                "You can now ask for connected companies or work with your company records.",
-              ].join("\n")
-            )
+        enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
+
+        return textResponse(
+          [
+            "Connection confirmed.",
+            "",
+            summary,
+            ...result.companyNames.map((name) => `- ${name}`),
+            "",
+            "You can now ask for connected companies or work with your company records.",
+          ].join("\n")
         );
       } catch (error) {
         if (error instanceof ClaimConnectionError) {
@@ -140,6 +136,8 @@ export function registerCompanyContextTools(server: ServerType) {
     },
 
     async ({ companyName }) => {
+      await ensureCredentialsForCurrentSession(companyName);
+
       if (companyName) {
         try {
           const credential = getCredentialForCompany(companyName);
@@ -227,6 +225,8 @@ export function registerCompanyContextTools(server: ServerType) {
     "Lists company contexts currently available in this MCP server session. API keys are never returned.",
     {},
     async () => {
+      await ensureCredentialsForCurrentSession();
+
       const companies = listConnectedCompanyNames().map((companyName) => {
         const credential = getCredentialForCompany(companyName);
       

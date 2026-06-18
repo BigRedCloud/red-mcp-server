@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
-import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, reloadSessionCredentialsFromConnectionStore, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
+import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
-import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, runWithMcpSessionContext, } from "../../auth/connection_store.js";
+import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
     server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
         await ensureConnectionStoreInitialized();
-        const sessionId = getCurrentMcpSessionId();
+        const sessionId = resolveActiveMcpSessionId();
         if (!sessionId) {
             return textResponse([
                 "Red could not determine the current MCP session.",
@@ -35,7 +35,7 @@ export function registerCompanyContextTools(server) {
             .describe("The connection code from the secure Red connection page success message."),
     }, async ({ code }) => {
         await ensureConnectionStoreInitialized();
-        const sessionId = getCurrentMcpSessionId();
+        const sessionId = resolveActiveMcpSessionId();
         if (!sessionId) {
             return textResponse([
                 "Red could not determine the current MCP session.",
@@ -45,19 +45,20 @@ export function registerCompanyContextTools(server) {
         }
         try {
             const result = await claimConnectionCodeForSession(code, sessionId);
-            await reloadSessionCredentialsFromConnectionStore(sessionId, result.connectionId);
+            await ensureCredentialsForCurrentSession();
             const count = result.companyNames.length;
             const summary = count === 1
                 ? "1 company is now connected in this session:"
                 : `${count} companies are now connected in this session:`;
-            return runWithMcpSessionContext({ sessionId, connectionId: result.connectionId }, () => textResponse([
+            enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
+            return textResponse([
                 "Connection confirmed.",
                 "",
                 summary,
                 ...result.companyNames.map((name) => `- ${name}`),
                 "",
                 "You can now ask for connected companies or work with your company records.",
-            ].join("\n")));
+            ].join("\n"));
         }
         catch (error) {
             if (error instanceof ClaimConnectionError) {
@@ -69,6 +70,7 @@ export function registerCompanyContextTools(server) {
     server.tool("brc_get_company_api_key_status", "Use when the user asks for an API key, secret, or what key was used. Returns connection status only — never the key. The assistant must not repeat keys from chat history.", {
         companyName: companyNameSchema.optional().describe("Optional company context name. If omitted, summarises all contexts."),
     }, async ({ companyName }) => {
+        await ensureCredentialsForCurrentSession(companyName);
         if (companyName) {
             try {
                 const credential = getCredentialForCompany(companyName);
@@ -137,6 +139,7 @@ export function registerCompanyContextTools(server) {
         });
     }
     server.tool("brc_list_company_contexts", "Lists company contexts currently available in this MCP server session. API keys are never returned.", {}, async () => {
+        await ensureCredentialsForCurrentSession();
         const companies = listConnectedCompanyNames().map((companyName) => {
             const credential = getCredentialForCompany(companyName);
             return {

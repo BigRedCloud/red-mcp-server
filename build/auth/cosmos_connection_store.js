@@ -132,11 +132,12 @@ export class CosmosConnectionStore {
         return pending;
     }
     async bindSessionToConnection(sessionId, connectionId) {
+        const normalizedSessionId = sessionId.trim();
         const now = Date.now();
         let createdAt = now;
         try {
             const { resource } = await this.getContainer()
-                .item("binding", sessionPartitionKey(sessionId))
+                .item("binding", sessionPartitionKey(normalizedSessionId))
                 .read();
             if (resource?.createdAt) {
                 createdAt = resource.createdAt;
@@ -146,10 +147,10 @@ export class CosmosConnectionStore {
             // new binding
         }
         const doc = {
-            pk: sessionPartitionKey(sessionId),
+            pk: sessionPartitionKey(normalizedSessionId),
             id: "binding",
             type: "sessionBinding",
-            sessionId,
+            sessionId: normalizedSessionId,
             connectionId,
             createdAt,
             updatedAt: now,
@@ -160,7 +161,7 @@ export class CosmosConnectionStore {
     async getConnectionIdForSession(sessionId) {
         try {
             const { resource } = await this.getContainer()
-                .item("binding", sessionPartitionKey(sessionId))
+                .item("binding", sessionPartitionKey(sessionId.trim()))
                 .read();
             return resource?.connectionId ?? null;
         }

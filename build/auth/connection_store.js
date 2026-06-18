@@ -57,6 +57,9 @@ export async function ensureConnectionStoreInitialized() {
 export function runWithMcpSessionContext(context, fn) {
     return mcpSessionContextStorage.run(context, fn);
 }
+export function enterMcpSessionContext(context) {
+    mcpSessionContextStorage.enterWith(context);
+}
 export function getMcpSessionContext() {
     return mcpSessionContextStorage.getStore();
 }
@@ -82,13 +85,14 @@ export function getCurrentConnectionId() {
 }
 export async function ensureConnectionIdForSession(sessionId) {
     await ensureConnectionStoreInitialized();
+    const normalizedSessionId = sessionId.trim();
     const store = getConnectionStore();
-    const existing = await store.getConnectionIdForSession(sessionId);
+    const existing = await store.getConnectionIdForSession(normalizedSessionId);
     if (existing) {
         return existing;
     }
     const connectionId = randomUUID();
-    await store.bindSessionToConnection(sessionId, connectionId);
+    await store.bindSessionToConnection(normalizedSessionId, connectionId);
     return connectionId;
 }
 export class ClaimConnectionError extends Error {
@@ -117,7 +121,8 @@ export async function claimConnectionCodeForSession(code, sessionId) {
     if (companies.length === 0) {
         throw new ClaimConnectionError("No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.", "no_companies");
     }
-    await store.bindSessionToConnection(sessionId, pending.connectionId);
+    const normalizedSessionId = sessionId.trim();
+    await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);
     return {
         connectionId: pending.connectionId,
         companyNames: companies.map((company) => company.companyName),

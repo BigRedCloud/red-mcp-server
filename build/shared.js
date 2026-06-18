@@ -2,11 +2,67 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
-import { ensureConnectionIdForSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, runWithMcpSessionContext, } from "./auth/connection_store.js";
+import { ensureConnectionIdForSession, ensureConnectionStoreInitialized, getConnectionStore, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
+const httpRequestSessionIdStorage = new AsyncLocalStorage();
 const globalContexts = new Map();
 const httpSessionKeyStores = new Map();
+function credentialDebugEnabled() {
+    return process.env.RED_CONNECT_CREDENTIAL_DEBUG?.trim().toLowerCase() === "true";
+}
+function logCredentialDebug(details) {
+    if (!credentialDebugEnabled()) {
+        return;
+    }
+    console.info("Red credential debug:", JSON.stringify(details));
+}
+/**
+ * Binds the active HTTP MCP request to a stable session id for the duration of
+ * the request. MCP tool handlers may not preserve other AsyncLocalStorage scopes.
+ */
+export function runWithHttpRequestSessionId(sessionId, fn) {
+    return httpRequestSessionIdStorage.run(sessionId, fn);
+}
+export function enterHttpRequestSessionId(sessionId) {
+    httpRequestSessionIdStorage.enterWith(sessionId);
+}
+/**
+ * Resolves the MCP session id for the current request.
+ * Prefers the HTTP request scope, then MCP session context, then stdio fallback.
+ */
+export function resolveActiveMcpSessionId() {
+    const fromHttpRequest = httpRequestSessionIdStorage.getStore();
+    if (fromHttpRequest) {
+        return fromHttpRequest;
+    }
+    const fromMcpContext = getMcpSessionContext()?.sessionId;
+    if (fromMcpContext) {
+        return fromMcpContext;
+    }
+    if (!process.env.RED_CONNECT_HTTP_MODE) {
+        return LOCAL_STDIO_SESSION_ID;
+    }
+    return undefined;
+}
+/**
+ * Returns the credential map for the active HTTP MCP session, creating and
+ * registering one when needed so later tool calls share the same map.
+ */
+export function resolveSessionKeyStore(sessionId) {
+    const registered = httpSessionKeyStores.get(sessionId);
+    if (registered) {
+        return registered;
+    }
+    const fromAsyncLocal = sessionKeyStorage.getStore();
+    if (fromAsyncLocal) {
+        httpSessionKeyStores.set(sessionId, fromAsyncLocal);
+        return fromAsyncLocal;
+    }
+    const created = new Map();
+    httpSessionKeyStores.set(sessionId, created);
+    return created;
+}
 /**
  * Registers the in-memory credential map for an HTTP MCP session.
  * Used when AsyncLocalStorage does not propagate into MCP tool handlers.
@@ -26,16 +82,13 @@ export function getRegisteredHttpSessionKeyStore(sessionId) {
  * In stdio mode, falls back to a shared global store (single user).
  */
 export function getCompanyApiContexts() {
+    const sessionId = resolveActiveMcpSessionId();
+    if (sessionId) {
+        return resolveSessionKeyStore(sessionId);
+    }
     const fromAsyncLocal = sessionKeyStorage.getStore();
     if (fromAsyncLocal) {
         return fromAsyncLocal;
-    }
-    const sessionId = getMcpSessionContext()?.sessionId;
-    if (sessionId) {
-        const registered = httpSessionKeyStores.get(sessionId);
-        if (registered) {
-            return registered;
-        }
     }
     return globalContexts;
 }
@@ -110,6 +163,9 @@ export const companyApiContexts = new Proxy(globalContexts, {
 export function runWithSessionKeyStore(store, fn) {
     return sessionKeyStorage.run(store, fn);
 }
+export function enterSessionKeyStore(store) {
+    sessionKeyStorage.enterWith(store);
+}
 export { runWithMcpSessionContext, getCurrentConnectionId, getCurrentMcpSessionId };
 export async function hydrateCurrentSessionFromConnectionStore(connectionId) {
     return reloadSessionCredentialsFromConnectionStore(getCurrentMcpSessionId(), connectionId);
@@ -119,10 +175,84 @@ export async function hydrateCurrentSessionFromConnectionStore(connectionId) {
  * from the active connection store (memory or Cosmos).
  */
 export async function reloadSessionCredentialsFromConnectionStore(sessionId, connectionId) {
-    const keyStore = (sessionId ? getRegisteredHttpSessionKeyStore(sessionId) : undefined) ??
-        getCompanyApiContexts();
+    const keyStore = sessionId
+        ? resolveSessionKeyStore(sessionId)
+        : getCompanyApiContexts();
     keyStore.clear();
     return hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+}
+/**
+ * Reloads decoded company credentials from the connection store into the
+ * active session map when they are missing or stale. Safe to call before every
+ * BRC API request in hosted MCP clients where in-memory context may be lost.
+ */
+export async function ensureCredentialsForCurrentSession(companyName) {
+    const sessionId = resolveActiveMcpSessionId()?.trim();
+    if (!sessionId) {
+        logCredentialDebug({ step: "ensureCredentials", reason: "no_session_id" });
+        return;
+    }
+    await ensureConnectionStoreInitialized();
+    const connectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
+    if (!connectionId) {
+        logCredentialDebug({
+            step: "ensureCredentials",
+            sessionId,
+            connectionId: null,
+            reason: "no_bound_connection",
+        });
+        return;
+    }
+    const keyStore = resolveSessionKeyStore(sessionId);
+    registerHttpSessionKeyStore(sessionId, keyStore);
+    if (companyName) {
+        const key = normaliseCompanyName(companyName);
+        const existing = keyStore.get(key);
+        if (existing?.apiKey && existing.expiresAt >= Date.now()) {
+            logCredentialDebug({
+                step: "ensureCredentials",
+                sessionId,
+                connectionId,
+                loadedCompanyNames: listLoadedCompanyNames(keyStore),
+                requestedCompany: companyName,
+                requestedCompanyLoaded: true,
+                reloaded: false,
+            });
+            return;
+        }
+    }
+    else if (keyStore.size > 0) {
+        const allValid = Array.from(keyStore.values()).every((entry) => entry.apiKey && entry.expiresAt >= Date.now());
+        if (allValid) {
+            logCredentialDebug({
+                step: "ensureCredentials",
+                sessionId,
+                connectionId,
+                loadedCompanyNames: listLoadedCompanyNames(keyStore),
+                reloaded: false,
+            });
+            return;
+        }
+    }
+    const loadedCount = await reloadSessionCredentialsFromConnectionStore(sessionId, connectionId);
+    const requestedKey = companyName
+        ? normaliseCompanyName(companyName)
+        : undefined;
+    logCredentialDebug({
+        step: "ensureCredentials",
+        sessionId,
+        connectionId,
+        loadedCount,
+        loadedCompanyNames: listLoadedCompanyNames(keyStore),
+        requestedCompany: companyName,
+        requestedCompanyLoaded: requestedKey
+            ? keyStore.has(requestedKey)
+            : undefined,
+        reloaded: true,
+    });
+}
+function listLoadedCompanyNames(keyStore) {
+    return Array.from(keyStore.values()).map((entry) => entry.companyName);
 }
 async function persistCurrentCompanyCredential(args) {
     const connectionId = getCurrentConnectionId();
@@ -146,12 +276,12 @@ async function clearAllPersistedCompanyCredentials() {
     await clearAllCompaniesFromConnectionStore(connectionId);
 }
 export async function ensureMcpSessionReady(sessionId, keyStore) {
-    const connectionId = await ensureConnectionIdForSession(sessionId);
-    const context = { sessionId, connectionId };
     if (keyStore) {
         registerHttpSessionKeyStore(sessionId, keyStore);
-        await reloadSessionCredentialsFromConnectionStore(sessionId, connectionId);
     }
+    const connectionId = await ensureConnectionIdForSession(sessionId);
+    const context = { sessionId, connectionId };
+    await ensureCredentialsForCurrentSession();
     return context;
 }
 export const companyNameSchema = z
@@ -160,6 +290,10 @@ export const companyNameSchema = z
     .describe("Company context name, for example YOUR-COMPANY-NAME.");
 export function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
+}
+export async function getCredentialForCompanyAsync(companyName) {
+    await ensureCredentialsForCurrentSession(companyName);
+    return getCredentialForCompany(companyName);
 }
 export function getCredentialForCompany(companyName) {
     const credential = companyCredentialProvider.getCredential(companyName);
@@ -182,10 +316,17 @@ export function getCredentialForCompany(companyName) {
     }
     return credential;
 }
+export async function getApiKeyForCompanyAsync(companyName) {
+    const credential = await getCredentialForCompanyAsync(companyName);
+    if (credential.kind !== "apiKey") {
+        throw new Error(`The connection for "${companyName}" is not API-key based. Use getAuthorizationHeaderForCompany() instead.`);
+    }
+    return credential.apiKey;
+}
 /**
  * Backward-compatible helper.
  * Keep this for any existing internal code that still expects a raw API key.
- * New code should prefer getAuthorizationHeaderForCompany().
+ * New code should prefer getAuthorizationHeaderForCompanyAsync().
  */
 export function getApiKeyForCompany(companyName) {
     const credential = getCredentialForCompany(companyName);
@@ -193,6 +334,14 @@ export function getApiKeyForCompany(companyName) {
         throw new Error(`The connection for "${companyName}" is not API-key based. Use getAuthorizationHeaderForCompany() instead.`);
     }
     return credential.apiKey;
+}
+export async function getAuthorizationHeaderForCompanyAsync(companyName) {
+    const credential = await getCredentialForCompanyAsync(companyName);
+    if (credential.kind === "apiKey") {
+        const auth = Buffer.from(`${credential.apiKey}:`, "utf8").toString("base64");
+        return `Basic ${auth}`;
+    }
+    return `Bearer ${credential.accessToken}`;
 }
 export function getAuthorizationHeaderForCompany(companyName) {
     const credential = getCredentialForCompany(companyName);
@@ -505,7 +654,7 @@ export async function brcFetch(companyName, path, init = {}) {
     const safePath = path.startsWith("/") ? path : `/${path}`;
     const method = normalizeHttpMethod(init);
     const requestBody = parseRequestBody(init);
-    const authorization = getAuthorizationHeaderForCompany(companyName);
+    const authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
     const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
         ...init,
         headers: {

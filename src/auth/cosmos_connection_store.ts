@@ -219,12 +219,13 @@ export class CosmosConnectionStore implements ConnectionStore {
     sessionId: string,
     connectionId: string
   ): Promise<void> {
+    const normalizedSessionId = sessionId.trim();
     const now = Date.now();
     let createdAt = now;
 
     try {
       const { resource } = await this.getContainer()
-        .item("binding", sessionPartitionKey(sessionId))
+        .item("binding", sessionPartitionKey(normalizedSessionId))
         .read<SessionBindingRecord>();
       if (resource?.createdAt) {
         createdAt = resource.createdAt;
@@ -234,10 +235,10 @@ export class CosmosConnectionStore implements ConnectionStore {
     }
 
     const doc: SessionBindingRecord = {
-      pk: sessionPartitionKey(sessionId),
+      pk: sessionPartitionKey(normalizedSessionId),
       id: "binding",
       type: "sessionBinding",
-      sessionId,
+      sessionId: normalizedSessionId,
       connectionId,
       createdAt,
       updatedAt: now,
@@ -250,7 +251,7 @@ export class CosmosConnectionStore implements ConnectionStore {
   async getConnectionIdForSession(sessionId: string): Promise<string | null> {
     try {
       const { resource } = await this.getContainer()
-        .item("binding", sessionPartitionKey(sessionId))
+        .item("binding", sessionPartitionKey(sessionId.trim()))
         .read<SessionBindingRecord>();
 
       return resource?.connectionId ?? null;

@@ -93,6 +93,10 @@ export function runWithMcpSessionContext<T>(
   return mcpSessionContextStorage.run(context, fn);
 }
 
+export function enterMcpSessionContext(context: McpSessionContext): void {
+  mcpSessionContextStorage.enterWith(context);
+}
+
 export function getMcpSessionContext(): McpSessionContext | undefined {
   return mcpSessionContextStorage.getStore();
 }
@@ -128,14 +132,15 @@ export async function ensureConnectionIdForSession(
 ): Promise<string> {
   await ensureConnectionStoreInitialized();
 
+  const normalizedSessionId = sessionId.trim();
   const store = getConnectionStore();
-  const existing = await store.getConnectionIdForSession(sessionId);
+  const existing = await store.getConnectionIdForSession(normalizedSessionId);
   if (existing) {
     return existing;
   }
 
   const connectionId = randomUUID();
-  await store.bindSessionToConnection(sessionId, connectionId);
+  await store.bindSessionToConnection(normalizedSessionId, connectionId);
   return connectionId;
 }
 
@@ -196,7 +201,8 @@ export async function claimConnectionCodeForSession(
     );
   }
 
-  await store.bindSessionToConnection(sessionId, pending.connectionId);
+  const normalizedSessionId = sessionId.trim();
+  await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);
 
   return {
     connectionId: pending.connectionId,
