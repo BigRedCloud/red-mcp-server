@@ -2,7 +2,7 @@ import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
-import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
+import { claimConnectionCodeForSession, ClaimConnectionError, CONNECTION_CODE_TTL_MINUTES, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
     server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
         await ensureConnectionStoreInitialized();
@@ -23,12 +23,12 @@ export function registerCompanyContextTools(server) {
             "",
             "On that page you can connect one company using the form, or connect several at once by uploading a CSV file. Credentials are not sent through chat.",
             "",
-            "The link expires in 10 minutes.",
+            `The link expires in ${CONNECTION_CODE_TTL_MINUTES} minutes.`,
             "",
-            "After connecting, return here and ask: “Show my connected companies”.",
+            "After connecting your companies, return to your AI assistant and paste the confirmation command shown on the success page. Your connection will not be active until you do.",
         ].join("\n"));
     });
-    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the connection code shown on the success page (for example in ChatGPT when the MCP session changed after opening the browser). Never exposes API keys.", {
+    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the confirmation command shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.", {
         code: z
             .string()
             .min(1)

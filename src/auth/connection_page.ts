@@ -1,3 +1,6 @@
+import { CONNECTION_CODE_TTL_MINUTES } from "./connection_store.js";
+import { RED_LOGO_URL } from "./red_assets.js";
+
 export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -18,6 +21,7 @@ function pageShell(title: string, body: string): string {
     <meta charset="utf-8" />
     <title>${escapeHtml(title)}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="${RED_LOGO_URL}" type="image/png" />
     <style>
       *, *::before, *::after { box-sizing: border-box; }
 
@@ -61,6 +65,17 @@ function pageShell(title: string, body: string): string {
         font-weight: 500;
         letter-spacing: 0.02em;
         opacity: 0.92;
+      }
+
+      .brand-logo {
+        display: block;
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 12px;
+        padding: 10px;
+        border-radius: 50%;
+        background: #ffffff;
+        object-fit: contain;
       }
 
       .card {
@@ -300,6 +315,7 @@ function pageShell(title: string, body: string): string {
 function brandBar(): string {
   return `
       <div class="brand-bar">
+        <img class="brand-logo" src="${RED_LOGO_URL}" alt="" width="64" height="64" />
         <p class="tagline">Big Red Cloud&rsquo;s AI assistant</p>
         <h1>Red</h1>
       </div>`;
@@ -380,7 +396,7 @@ export function renderExpiredLinkPage(): string {
         <div class="status-icon warning" aria-hidden="true">!</div>
         <h2>Connection link expired</h2>
         <p class="centered">
-          This connection link is invalid, has expired, or has already been used. Connection links are valid for about 10 minutes and can only be used once.
+          This connection link is invalid, has expired, or has already been used. Connection links are valid for about ${CONNECTION_CODE_TTL_MINUTES} minutes and can only be used once.
         </p>
         <div class="next-step">
           Return to your chat and ask Red to <strong>start a new company connection</strong>.
@@ -409,7 +425,7 @@ export function renderSuccessPage(connectedNames: string[], code: string): strin
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
         <div class="next-step">
-          Connection complete. Return to ChatGPT and say: <strong>Confirm connection code ${escapeHtml(code)}</strong>
+          Connection complete. Return to your AI assistant and paste this confirmation command: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>
       </div>`;
 

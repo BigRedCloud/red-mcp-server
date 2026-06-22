@@ -12,7 +12,8 @@ export type McpSessionContext = {
   connectionId: string;
 };
 
-const CONNECTION_CODE_TTL_MS = 10 * 60 * 1000;
+export const CONNECTION_CODE_TTL_MS = 30 * 60 * 1000;
+export const CONNECTION_CODE_TTL_MINUTES = CONNECTION_CODE_TTL_MS / 60000;
 const CLIENT_CLAIM_INHERIT_TTL_MS = CONNECTION_CODE_TTL_MS;
 
 const mcpSessionContextStorage = new AsyncLocalStorage<McpSessionContext>();

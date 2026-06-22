@@ -3,6 +3,10 @@
   "version": "1.4.0",
   "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
   "type": "module",
+  "files": [
+    "build",
+    "assets"
+  ],
   "bin": {
     "brc-company-mcp-server": "build/index.js"
   },

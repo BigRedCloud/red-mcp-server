@@ -1,7 +1,7 @@
 import { CosmosClient } from "@azure/cosmos";
 import { redServerConfig } from "../config/server_config.js";
 import { encodeStoredApiKey } from "./credential_secret.js";
-const PENDING_TTL_SECONDS = 600;
+const PENDING_TTL_SECONDS = 30 * 60;
 function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
 }

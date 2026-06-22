@@ -26,6 +26,7 @@ import {
 import {
   claimConnectionCodeForSession,
   ClaimConnectionError,
+  CONNECTION_CODE_TTL_MINUTES,
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -62,9 +63,9 @@ export function registerCompanyContextTools(server: ServerType) {
           "",
           "On that page you can connect one company using the form, or connect several at once by uploading a CSV file. Credentials are not sent through chat.",
           "",
-          "The link expires in 10 minutes.",
+          `The link expires in ${CONNECTION_CODE_TTL_MINUTES} minutes.`,
           "",
-          "After connecting, return here and ask: “Show my connected companies”.",
+          "After connecting your companies, return to your AI assistant and paste the confirmation command shown on the success page. Your connection will not be active until you do.",
         ].join("\n")
       );
     }
@@ -72,7 +73,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_confirm_company_connection",
-    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the connection code shown on the success page (for example in ChatGPT when the MCP session changed after opening the browser). Never exposes API keys.",
+    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the confirmation command shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.",
     {
       code: z
         .string()

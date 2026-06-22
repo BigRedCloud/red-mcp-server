@@ -47,6 +47,7 @@ import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./c
 
 import multer from "multer";
 import { parse } from "csv-parse/sync";
+import { redAssetsDirectory } from "./auth/red_assets.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -221,6 +222,13 @@ setInterval(() => {
 
 app.use(rateLimitMiddleware);
 app.use(cors());
+app.use(
+  "/assets",
+  express.static(redAssetsDirectory, {
+    maxAge: "7d",
+    immutable: true,
+  })
+);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 

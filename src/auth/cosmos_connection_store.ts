@@ -9,7 +9,7 @@ import type {
   StoredCompanyCredential,
 } from "./connection_store_types.js";
 
-const PENDING_TTL_SECONDS = 600;
+const PENDING_TTL_SECONDS = 30 * 60;
 
 function normaliseCompanyName(companyName: string): string {
   return companyName.trim().toLowerCase();

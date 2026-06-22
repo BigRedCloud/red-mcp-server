@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
-import { createPendingConnection as createPendingConnectionRecord, ensureConnectionStoreInitialized, getConnectionStore, } from "./connection_store.js";
-const CONNECTION_CODE_TTL_MS = 10 * 60 * 1000;
+import { CONNECTION_CODE_TTL_MS, createPendingConnection as createPendingConnectionRecord, ensureConnectionStoreInitialized, getConnectionStore, } from "./connection_store.js";
 /** @deprecated Use createPendingConnection(sessionId) from connection_store.js */
 export async function createConnectionCode(connectionId) {
     await ensureConnectionStoreInitialized();
