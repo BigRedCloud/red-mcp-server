@@ -21,7 +21,9 @@ function pageShell(title: string, header: string, content: string): string {
     <meta charset="utf-8" />
     <title>${escapeHtml(title)}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="${RED_LOGO_URL}" type="image/png" />
+    <link rel="icon" href="${RED_LOGO_URL}" type="image/png" sizes="any" />
+    <link rel="shortcut icon" href="${RED_LOGO_URL}" type="image/png" />
+    <link rel="apple-touch-icon" href="${RED_LOGO_URL}" />
     <style>
       *, *::before, *::after { box-sizing: border-box; }
 

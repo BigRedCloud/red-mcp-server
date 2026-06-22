@@ -47,7 +47,7 @@ import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./c
 
 import multer from "multer";
 import { parse } from "csv-parse/sync";
-import { redAssetsDirectory } from "./auth/red_assets.js";
+import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -229,6 +229,9 @@ app.use(
     immutable: true,
   })
 );
+app.get("/favicon.ico", (_req, res) => {
+  res.type("png").sendFile(RED_FAVICON_PATH);
+});
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 

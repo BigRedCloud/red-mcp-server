@@ -10,3 +10,4 @@ const packageRoot = path.resolve(
 );
 
 export const redAssetsDirectory = path.join(packageRoot, "assets");
+export const RED_FAVICON_PATH = path.join(redAssetsDirectory, "red.png");
