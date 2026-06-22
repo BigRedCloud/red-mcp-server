@@ -92,13 +92,6 @@ function pageShell(title: string, header: string, content: string): string {
         letter-spacing: -0.02em;
       }
 
-      .brand-subtitle {
-        margin: 8px 0 0;
-        font-size: clamp(0.95rem, 1.4vw, 1.125rem);
-        font-weight: 500;
-        opacity: 0.9;
-      }
-
       @media (max-width: 480px) {
         .brand-inner {
           flex-direction: column;
@@ -125,7 +118,7 @@ function pageShell(title: string, header: string, content: string): string {
         font-size: clamp(0.98rem, 1.2vw, 1.05rem);
         line-height: 1.65;
         color: #4b5563;
-        max-width: 72ch;
+        width: 100%;
       }
 
       .trust-notes {
@@ -420,7 +413,6 @@ function brandBar(): string {
             <div class="brand-copy">
               <p class="eyebrow">Big Red Cloud&rsquo;s AI assistant</p>
               <h1>Red</h1>
-              <p class="brand-subtitle">Secure company connection</p>
             </div>
           </div>
         </div>
