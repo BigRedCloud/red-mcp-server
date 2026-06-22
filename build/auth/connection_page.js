@@ -11,7 +11,7 @@ export function escapeHtml(value) {
 const BRC_RED = "#b5121b";
 const BRC_RED_DARK = "#8f0e16";
 const BRC_RED_LIGHT = "#fdf2f2";
-function pageShell(title, body) {
+function pageShell(title, header, content) {
     return `<!doctype html>
 <html lang="en">
   <head>
@@ -30,26 +30,24 @@ function pageShell(title, body) {
         line-height: 1.6;
         color: #1f2937;
         background: linear-gradient(180deg, #eef0f3 0%, #f8f9fb 100%);
-        display: flex;
-        align-items: flex-start;
-        justify-content: center;
-        padding: clamp(16px, 4vw, 48px) clamp(16px, 3vw, 32px) clamp(32px, 5vw, 64px);
-      }
-
-      .page {
-        width: min(100%, 1100px);
-        margin: 0 auto;
-        border-radius: 16px;
-        overflow: hidden;
-        box-shadow:
-          0 1px 2px rgba(15, 23, 42, 0.06),
-          0 12px 40px rgba(15, 23, 42, 0.12);
+        padding: 0 0 clamp(32px, 5vw, 64px);
       }
 
       .brand-bar {
+        width: 100%;
         background: linear-gradient(90deg, #c8102e 0%, #b5121b 42%, #9a0f18 100%);
         color: #ffffff;
-        padding: clamp(28px, 4vw, 44px) clamp(24px, 4vw, 48px);
+        padding: clamp(28px, 4vw, 44px) clamp(16px, 3vw, 32px);
+      }
+
+      .brand-shell,
+      .page {
+        width: min(100%, 1100px);
+        margin: 0 auto;
+      }
+
+      .page {
+        padding: clamp(20px, 3vw, 32px) clamp(16px, 3vw, 32px) 0;
       }
 
       .brand-inner {
@@ -57,7 +55,6 @@ function pageShell(title, body) {
         align-items: center;
         justify-content: flex-start;
         gap: clamp(16px, 2.5vw, 24px);
-        max-width: 100%;
       }
 
       .brand-logo {
@@ -114,6 +111,10 @@ function pageShell(title, body) {
       .card {
         background: #ffffff;
         padding: clamp(24px, 3.5vw, 44px);
+        border-radius: 16px;
+        box-shadow:
+          0 1px 2px rgba(15, 23, 42, 0.06),
+          0 12px 40px rgba(15, 23, 42, 0.12);
       }
 
       .card > p.lead {
@@ -399,28 +400,30 @@ function pageShell(title, body) {
     </style>
   </head>
   <body>
-    <div class="page">
-      ${body}
-    </div>
+    ${header}
+    <main class="page">
+      ${content}
+    </main>
   </body>
 </html>`;
 }
 function brandBar() {
     return `
-      <div class="brand-bar">
-        <div class="brand-inner">
-          <img class="brand-logo" src="${RED_LOGO_URL}" alt="Red logo" width="72" height="72" />
-          <div class="brand-copy">
-            <p class="eyebrow">Big Red Cloud&rsquo;s AI assistant</p>
-            <h1>Red</h1>
-            <p class="brand-subtitle">Secure company connection</p>
+      <header class="brand-bar">
+        <div class="brand-shell">
+          <div class="brand-inner">
+            <img class="brand-logo" src="${RED_LOGO_URL}" alt="Red logo" width="72" height="72" />
+            <div class="brand-copy">
+              <p class="eyebrow">Big Red Cloud&rsquo;s AI assistant</p>
+              <h1>Red</h1>
+              <p class="brand-subtitle">Secure company connection</p>
+            </div>
           </div>
         </div>
-      </div>`;
+      </header>`;
 }
 export function renderConnectPage(code) {
-    const body = `
-      ${brandBar()}
+    const content = `
       <div class="card">
         <p class="lead">
           Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
@@ -486,11 +489,10 @@ Company B,xxxxxxxx</div>
 
 
       </div>`;
-    return pageShell("Connect — Red", body);
+    return pageShell("Connect — Red", brandBar(), content);
 }
 export function renderExpiredLinkPage() {
-    const body = `
-      ${brandBar()}
+    const content = `
       <div class="card">
         <div class="status-icon warning" aria-hidden="true">!</div>
         <h2>Connection link expired</h2>
@@ -501,7 +503,7 @@ export function renderExpiredLinkPage() {
           Return to your chat and ask Red to <strong>start a new company connection</strong>.
         </div>
       </div>`;
-    return pageShell("Connection link expired", body);
+    return pageShell("Connection link expired", brandBar(), content);
 }
 export function renderSuccessPage(connectedNames, code) {
     const count = connectedNames.length;
@@ -511,8 +513,7 @@ export function renderSuccessPage(connectedNames, code) {
     const listItems = connectedNames
         .map((name) => `<li>${escapeHtml(name)}</li>`)
         .join("");
-    const body = `
-      ${brandBar()}
+    const content = `
       <div class="card">
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
@@ -522,11 +523,10 @@ export function renderSuccessPage(connectedNames, code) {
           Connection complete. Return to your AI assistant and paste this confirmation command: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>
       </div>`;
-    return pageShell("Companies connected", body);
+    return pageShell("Companies connected", brandBar(), content);
 }
 export function renderConnectionFailedPage(message) {
-    const body = `
-      ${brandBar()}
+    const content = `
       <div class="card">
         <div class="status-icon error" aria-hidden="true">✕</div>
         <h2>Connection failed</h2>
@@ -538,5 +538,5 @@ export function renderConnectionFailedPage(message) {
           Return to your chat and ask Red to <strong>start a new company connection</strong>.
         </div>
       </div>`;
-    return pageShell("Connection failed", body);
+    return pageShell("Connection failed", brandBar(), content);
 }
