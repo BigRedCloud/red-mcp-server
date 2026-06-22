@@ -12,10 +12,10 @@ variables:
   azureSubscription: '9a8304e4-74dd-466f-a1d9-2a206e59a38e'
 
   # Web app name
-  webAppName: 'brc-live-mcp'
+  webAppName: 'brc-live-mcp-app'
 
   # Environment name
-  environmentName: 'brc-live-mcp'
+  environmentName: 'brc-live-mcp-app'
 
   # Agent VM image name
   vmImageName: 'ubuntu-latest'
@@ -68,7 +68,7 @@ stages:
         deploy:
           steps:
           - task: AzureWebApp@1
-            displayName: 'Azure Web App Deploy: brc-live-mcp'
+            displayName: 'Azure Web App Deploy: brc-live-mcp-app'
             inputs:
               azureSubscription: $(azureSubscription)
               appType: webAppLinux
