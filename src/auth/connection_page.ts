@@ -45,37 +45,70 @@ function pageShell(title: string, body: string): string {
       }
 
       .brand-bar {
-        background: ${BRC_RED};
+        background: linear-gradient(135deg, #b90d1a 0%, #c8102e 55%, #9f0b16 100%);
         color: #ffffff;
-        border-radius: 12px 12px 0 0;
-        padding: clamp(20px, 3vw, 32px) clamp(20px, 3vw, 40px) clamp(16px, 2.5vw, 24px);
+        padding: clamp(36px, 5vw, 64px) clamp(24px, 5vw, 72px);
         text-align: center;
       }
 
-      .brand-bar h1 {
-        margin: 6px 0 0;
-        font-size: 28px;
-        font-weight: 700;
-        line-height: 1.2;
-      }
-
-      .brand-bar .tagline {
-        margin: 0;
-        font-size: 13px;
-        font-weight: 500;
-        letter-spacing: 0.02em;
-        opacity: 0.92;
+      .brand-inner {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        max-width: 900px;
+        margin: 0 auto;
       }
 
       .brand-logo {
-        display: block;
-        width: 64px;
-        height: 64px;
-        margin: 0 auto 12px;
-        padding: 10px;
-        border-radius: 50%;
+        width: 76px;
+        height: 76px;
+        border-radius: 999px;
         background: #ffffff;
-        object-fit: contain;
+        padding: 14px;
+        box-shadow: 0 14px 35px rgba(0, 0, 0, 0.18);
+      }
+
+      .brand-copy {
+        text-align: left;
+      }
+
+      .eyebrow {
+        margin: 0 0 6px;
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        opacity: 0.95;
+      }
+
+      .brand-copy h1 {
+        margin: 0;
+        font-size: clamp(2.4rem, 5vw, 4rem);
+        line-height: 1;
+        font-weight: 800;
+      }
+
+      .brand-subtitle {
+        margin: 10px 0 0;
+        font-size: clamp(1rem, 1.5vw, 1.2rem);
+        font-weight: 500;
+        opacity: 0.9;
+      }
+
+      @media (max-width: 640px) {
+        .brand-inner {
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .brand-copy {
+          text-align: center;
+        }
+
+        .brand-logo {
+          width: 68px;
+          height: 68px;
+        }
       }
 
       .card {
@@ -348,9 +381,14 @@ function pageShell(title: string, body: string): string {
 function brandBar(): string {
   return `
       <div class="brand-bar">
-        <img class="brand-logo" src="${RED_LOGO_URL}" alt="" width="64" height="64" />
-        <p class="tagline">Big Red Cloud&rsquo;s AI assistant</p>
-        <h1>Red</h1>
+        <div class="brand-inner">
+          <img class="brand-logo" src="${RED_LOGO_URL}" alt="Red logo" width="72" height="72" />
+          <div class="brand-copy">
+            <p class="eyebrow">Big Red Cloud&rsquo;s AI assistant</p>
+            <h1>Red</h1>
+            <p class="brand-subtitle">Secure company connection</p>
+          </div>
+        </div>
       </div>`;
 }
 
@@ -358,9 +396,9 @@ export function renderConnectPage(code: string): string {
   const body = `
       ${brandBar()}
       <div class="card">
-        <p class="lead">
-          Enter your company details on this secure page. Your API key is never sent through chat — only submitted here to Red for this session.
-        </p>
+      <p class="lead">
+      Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
+    </p>
 
         <form method="POST" action="/connect" enctype="multipart/form-data">
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
