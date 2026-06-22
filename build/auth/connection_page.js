@@ -33,19 +33,19 @@ function pageShell(title, body) {
         display: flex;
         align-items: flex-start;
         justify-content: center;
-        padding: 32px 16px 48px;
+        padding: clamp(16px, 4vw, 48px) clamp(16px, 3vw, 32px) clamp(32px, 5vw, 64px);
       }
 
       .page {
-        width: 100%;
-        max-width: 520px;
+        width: min(100%, 1100px);
+        margin: 0 auto;
       }
 
       .brand-bar {
         background: ${BRC_RED};
         color: #ffffff;
         border-radius: 12px 12px 0 0;
-        padding: 24px 28px 20px;
+        padding: clamp(20px, 3vw, 32px) clamp(20px, 3vw, 40px) clamp(16px, 2.5vw, 24px);
         text-align: center;
       }
 
@@ -79,7 +79,7 @@ function pageShell(title, body) {
         background: #ffffff;
         border-radius: 0 0 12px 12px;
         box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-        padding: 28px;
+        padding: clamp(20px, 3vw, 40px);
       }
 
       .card > p.lead {
@@ -88,7 +88,40 @@ function pageShell(title, body) {
       }
 
       .section {
+        margin-top: 0;
+      }
+
+      .connect-layout {
         margin-top: 24px;
+      }
+
+      .connect-layout .section {
+        min-width: 0;
+      }
+
+      @media (min-width: 768px) {
+        .connect-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          gap: clamp(20px, 3vw, 40px);
+          align-items: start;
+        }
+
+        .connect-divider {
+          flex-direction: column;
+          margin: 0;
+          align-self: stretch;
+          min-width: 2.5rem;
+          padding: clamp(8px, 1.5vw, 16px) 0;
+        }
+
+        .connect-divider::before,
+        .connect-divider::after {
+          flex: 1;
+          width: 1px;
+          height: auto;
+          min-height: 24px;
+        }
       }
 
       .section-title {
@@ -332,6 +365,8 @@ export function renderConnectPage(code) {
         <div class="trust-note">
           <strong>File upload preferred:</strong> Below you can connect a single company via form or upload a file. If you upload a file the form will be ignored.
         </div>
+
+          <div class="connect-layout">
           <div class="section">
             <p class="section-title">Connect one company</p>
             <p class="section-hint">Enter a company name and its Big Red Cloud API key.</p>
@@ -354,9 +389,8 @@ export function renderConnectPage(code) {
               placeholder="Enter your API key"
             />
           </div>
-          
 
-          <div class="divider">or</div>
+          <div class="divider connect-divider">or</div>
 
           <div class="section">
             <p class="section-title">Connect multiple companies</p>
@@ -373,6 +407,7 @@ Company B,xxxxxxxx</div>
               type="file"
               accept=".csv,text/csv"
             />
+          </div>
           </div>
 
           <button type="submit" class="btn-primary">Connect companies</button>
