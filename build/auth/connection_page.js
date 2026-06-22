@@ -29,7 +29,7 @@ function pageShell(title, body) {
         font-size: 16px;
         line-height: 1.6;
         color: #1f2937;
-        background: #f3f4f6;
+        background: linear-gradient(180deg, #eef0f3 0%, #f8f9fb 100%);
         display: flex;
         align-items: flex-start;
         justify-content: center;
@@ -39,85 +39,113 @@ function pageShell(title, body) {
       .page {
         width: min(100%, 1100px);
         margin: 0 auto;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow:
+          0 1px 2px rgba(15, 23, 42, 0.06),
+          0 12px 40px rgba(15, 23, 42, 0.12);
       }
 
       .brand-bar {
-        background: linear-gradient(135deg, #b90d1a 0%, #c8102e 55%, #9f0b16 100%);
+        background: linear-gradient(90deg, #c8102e 0%, #b5121b 42%, #9a0f18 100%);
         color: #ffffff;
-        padding: clamp(36px, 5vw, 64px) clamp(24px, 5vw, 72px);
-        text-align: center;
+        padding: clamp(28px, 4vw, 44px) clamp(24px, 4vw, 48px);
       }
 
       .brand-inner {
-        display: inline-flex;
+        display: flex;
         align-items: center;
-        justify-content: center;
-        gap: 22px;
-        max-width: 900px;
-        margin: 0 auto;
+        justify-content: flex-start;
+        gap: clamp(16px, 2.5vw, 24px);
+        max-width: 100%;
       }
 
       .brand-logo {
-        width: 76px;
-        height: 76px;
-        border-radius: 999px;
+        flex-shrink: 0;
+        width: clamp(64px, 8vw, 76px);
+        height: clamp(64px, 8vw, 76px);
+        border-radius: 50%;
         background: #ffffff;
-        padding: 14px;
-        box-shadow: 0 14px 35px rgba(0, 0, 0, 0.18);
+        padding: clamp(10px, 1.5vw, 14px);
+        object-fit: contain;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
       }
 
       .brand-copy {
         text-align: left;
+        min-width: 0;
       }
 
       .eyebrow {
-        margin: 0 0 6px;
-        font-size: 0.95rem;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        opacity: 0.95;
+        margin: 0 0 4px;
+        font-size: clamp(0.8rem, 1.2vw, 0.95rem);
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        opacity: 0.92;
       }
 
       .brand-copy h1 {
         margin: 0;
-        font-size: clamp(2.4rem, 5vw, 4rem);
+        font-size: clamp(2rem, 4.5vw, 3.25rem);
         line-height: 1;
         font-weight: 800;
+        letter-spacing: -0.02em;
       }
 
       .brand-subtitle {
-        margin: 10px 0 0;
-        font-size: clamp(1rem, 1.5vw, 1.2rem);
+        margin: 8px 0 0;
+        font-size: clamp(0.95rem, 1.4vw, 1.125rem);
         font-weight: 500;
         opacity: 0.9;
       }
 
-      @media (max-width: 640px) {
+      @media (max-width: 480px) {
         .brand-inner {
           flex-direction: column;
-          gap: 16px;
+          align-items: center;
+          text-align: center;
         }
 
         .brand-copy {
           text-align: center;
         }
-
-        .brand-logo {
-          width: 68px;
-          height: 68px;
-        }
       }
 
       .card {
         background: #ffffff;
-        border-radius: 0 0 12px 12px;
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-        padding: clamp(20px, 3vw, 40px);
+        padding: clamp(24px, 3.5vw, 44px);
       }
 
       .card > p.lead {
-        margin: 0 0 20px;
+        margin: 0 0 clamp(20px, 3vw, 28px);
+        font-size: clamp(0.98rem, 1.2vw, 1.05rem);
+        line-height: 1.65;
         color: #4b5563;
+        max-width: 72ch;
+      }
+
+      .trust-notes {
+        display: grid;
+        gap: 12px;
+        margin-bottom: clamp(20px, 3vw, 28px);
+      }
+
+      @media (min-width: 768px) {
+        .trust-notes {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      .trust-note {
+        margin-top: 0;
+        padding: 14px 16px;
+        font-size: 14px;
+        line-height: 1.55;
+        color: #4b5563;
+        background: ${BRC_RED_LIGHT};
+        border: 1px solid rgba(181, 18, 27, 0.12);
+        border-left: 4px solid ${BRC_RED};
+        border-radius: 10px;
       }
 
       .section {
@@ -125,27 +153,32 @@ function pageShell(title, body) {
       }
 
       .connect-layout {
-        margin-top: 24px;
+        margin-top: 0;
       }
 
       .connect-layout .section {
         min-width: 0;
+        padding: clamp(16px, 2.5vw, 24px);
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
       }
 
       @media (min-width: 768px) {
         .connect-layout {
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-          gap: clamp(20px, 3vw, 40px);
-          align-items: start;
+          gap: clamp(20px, 3vw, 32px);
+          align-items: stretch;
         }
 
         .connect-divider {
           flex-direction: column;
           margin: 0;
-          align-self: stretch;
-          min-width: 2.5rem;
-          padding: clamp(8px, 1.5vw, 16px) 0;
+          align-self: center;
+          min-width: 2rem;
+          padding: 0;
+          color: #9ca3af;
         }
 
         .connect-divider::before,
@@ -153,14 +186,15 @@ function pageShell(title, body) {
           flex: 1;
           width: 1px;
           height: auto;
-          min-height: 24px;
+          min-height: 32px;
+          background: #d1d5db;
         }
       }
 
       .section-title {
-        margin: 0 0 4px;
-        font-size: 15px;
-        font-weight: 600;
+        margin: 0 0 6px;
+        font-size: 1rem;
+        font-weight: 700;
         color: #111827;
       }
 
@@ -246,35 +280,32 @@ function pageShell(title, body) {
       .btn-primary {
         display: block;
         width: 100%;
-        margin-top: 28px;
-        padding: 13px 20px;
+        max-width: 360px;
+        margin: clamp(24px, 3vw, 32px) auto 0;
+        padding: 14px 24px;
         font-size: 16px;
         font-weight: 600;
         color: #ffffff;
-        background: ${BRC_RED};
+        background: linear-gradient(180deg, ${BRC_RED} 0%, ${BRC_RED_DARK} 100%);
         border: none;
-        border-radius: 8px;
+        border-radius: 10px;
         cursor: pointer;
-        transition: background 0.15s;
+        transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+        box-shadow: 0 4px 14px rgba(181, 18, 27, 0.28);
       }
 
       .btn-primary:hover {
-        background: ${BRC_RED_DARK};
+        filter: brightness(1.05);
+        box-shadow: 0 6px 18px rgba(181, 18, 27, 0.34);
+      }
+
+      .btn-primary:active {
+        transform: translateY(1px);
       }
 
       .btn-primary:focus {
         outline: none;
         box-shadow: 0 0 0 3px rgba(181, 18, 27, 0.35);
-      }
-
-      .trust-note {
-        margin-top: 22px;
-        padding: 14px 16px;
-        font-size: 14px;
-        color: #4b5563;
-        background: ${BRC_RED_LIGHT};
-        border-left: 4px solid ${BRC_RED};
-        border-radius: 0 8px 8px 0;
       }
 
       .trust-note strong {
@@ -391,18 +422,20 @@ export function renderConnectPage(code) {
     const body = `
       ${brandBar()}
       <div class="card">
-      <p class="lead">
-      Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
-    </p>
+        <p class="lead">
+          Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
+        </p>
 
         <form method="POST" action="/connect" enctype="multipart/form-data">
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
-          <div class="trust-note">
-          <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about one hour), and are never shown in chat.
-        </div>
-        <div class="trust-note">
-          <strong>File upload preferred:</strong> Below you can connect a single company via form or upload a file. If you upload a file the form will be ignored.
-        </div>
+          <div class="trust-notes">
+            <div class="trust-note">
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about one hour), and are never shown in chat.
+            </div>
+            <div class="trust-note">
+              <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
+            </div>
+          </div>
 
           <div class="connect-layout">
           <div class="section">
