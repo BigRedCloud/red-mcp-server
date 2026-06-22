@@ -1,4 +1,3 @@
-import { CONNECTION_CODE_TTL_MINUTES } from "./connection_store.js";
 import { RED_LOGO_URL } from "./red_assets.js";
 
 export function escapeHtml(value: string): string {
@@ -432,7 +431,7 @@ export function renderConnectPage(code: string): string {
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
           <div class="trust-notes">
             <div class="trust-note">
-              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about one hour), and are never shown in chat.
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about two hours), and are never shown in chat.
             </div>
             <div class="trust-note">
               <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
@@ -496,16 +495,16 @@ export function renderExpiredLinkPage(): string {
   const content = `
       <div class="card">
         <div class="status-icon warning" aria-hidden="true">!</div>
-        <h2>Connection link expired</h2>
+        <h2>Connection link not available</h2>
         <p class="centered">
-          This connection link is invalid, has expired, or has already been used. Connection links are valid for about ${CONNECTION_CODE_TTL_MINUTES} minutes and can only be used once.
+          This connection link is invalid or has already been used. Each secure connection link works only once. Ask Red in chat for a new secure connection link.
         </p>
         <div class="next-step">
           Return to your chat and ask Red to <strong>start a new company connection</strong>.
         </div>
       </div>`;
 
-  return pageShell("Connection link expired", brandBar(), content);
+  return pageShell("Connection link not available", brandBar(), content);
 }
 
 export function renderSuccessPage(connectedNames: string[], code: string): string {

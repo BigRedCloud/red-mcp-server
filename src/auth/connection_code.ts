@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
+import { PENDING_CONNECTION_NEVER_EXPIRES_AT } from "./connection_pending.js";
 import {
-  CONNECTION_CODE_TTL_MS,
   createPendingConnection as createPendingConnectionRecord,
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -14,7 +14,7 @@ export async function createConnectionCode(connectionId: string): Promise<string
   await getConnectionStore().createPendingConnection({
     code,
     connectionId,
-    expiresAt: Date.now() + CONNECTION_CODE_TTL_MS,
+    expiresAt: PENDING_CONNECTION_NEVER_EXPIRES_AT,
   });
 
   return code;

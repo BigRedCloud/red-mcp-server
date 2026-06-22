@@ -2,9 +2,9 @@ import { z } from "zod";
 import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
-import { claimConnectionCodeForSession, ClaimConnectionError, CONNECTION_CODE_TTL_MINUTES, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
+import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
 export function registerCompanyContextTools(server) {
-    server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL. On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. Do not ask the user to type credentials into chat.", {}, async () => {
+    server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL (no time expiry, but each link works only once). On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. To connect more companies later, start a new connection. Do not ask the user to type credentials into chat.", {}, async () => {
         await ensureConnectionStoreInitialized();
         const sessionId = resolveActiveMcpSessionId();
         if (!sessionId) {
@@ -23,7 +23,7 @@ export function registerCompanyContextTools(server) {
             "",
             "On that page you can connect one company using the form, or connect several at once by uploading a CSV file. Credentials are not sent through chat.",
             "",
-            `The link expires in ${CONNECTION_CODE_TTL_MINUTES} minutes.`,
+            "This link is for one-time use only. After you use it, ask for a new secure connection link if you want to connect more companies.",
             "",
             "After connecting your companies, return to your AI assistant and paste the confirmation command shown on the success page. Your connection will not be active until you do.",
         ].join("\n"));

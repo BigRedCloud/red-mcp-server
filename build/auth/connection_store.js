@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { redServerConfig } from "../config/server_config.js";
+import { PENDING_CONNECTION_NEVER_EXPIRES_AT, } from "./connection_pending.js";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
-export const CONNECTION_CODE_TTL_MS = 30 * 60 * 1000;
-export const CONNECTION_CODE_TTL_MINUTES = CONNECTION_CODE_TTL_MS / 60000;
-const CLIENT_CLAIM_INHERIT_TTL_MS = CONNECTION_CODE_TTL_MS;
+const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
 let connectionStoreInitPromise = null;
@@ -141,7 +141,7 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     const store = getConnectionStore();
     const pending = await store.getConnectionByCode(trimmedCode);
     if (!pending) {
-        throw new ClaimConnectionError("That connection code is missing, expired, or invalid. Please start a new company connection and try again.", "not_found");
+        throw new ClaimConnectionError("That connection code is missing, invalid, or has already been used. Please start a new company connection and try again.", "not_found");
     }
     if (!pending.used) {
         throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.", "not_completed");
@@ -172,7 +172,7 @@ export async function createPendingConnection(sessionId) {
     await getConnectionStore().createPendingConnection({
         code,
         connectionId,
-        expiresAt: Date.now() + CONNECTION_CODE_TTL_MS,
+        expiresAt: PENDING_CONNECTION_NEVER_EXPIRES_AT,
     });
     return { code, connectionId };
 }

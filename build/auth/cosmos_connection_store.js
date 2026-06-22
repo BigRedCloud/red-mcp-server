@@ -1,7 +1,11 @@
 import { CosmosClient } from "@azure/cosmos";
+import { isPendingConnectionExpired } from "./connection_pending.js";
 import { redServerConfig } from "../config/server_config.js";
 import { encodeStoredApiKey } from "./credential_secret.js";
-const PENDING_TTL_SECONDS = 30 * 60;
+const PENDING_CONNECTION_NO_COSMOS_TTL = -1;
+function sessionTtlSeconds() {
+    return redServerConfig.sessionTtlMinutes * 60;
+}
 function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
 }
@@ -64,7 +68,7 @@ export class CosmosConnectionStore {
             createdAt: now,
             expiresAt: args.expiresAt,
             used: false,
-            ttl: PENDING_TTL_SECONDS,
+            ttl: PENDING_CONNECTION_NO_COSMOS_TTL,
         };
         await this.getContainer().items.upsert(doc);
     }
@@ -76,7 +80,7 @@ export class CosmosConnectionStore {
             if (!resource || resource.type !== "pendingConnection") {
                 return null;
             }
-            if (resource.expiresAt < Date.now()) {
+            if (isPendingConnectionExpired(resource.expiresAt)) {
                 await this.getContainer()
                     .item("pending", pendingPartitionKey(code))
                     .delete()
@@ -180,7 +184,7 @@ export class CosmosConnectionStore {
             clientKey: args.clientKey,
             connectionId: args.connectionId,
             claimedAt: args.claimedAt,
-            ttl: PENDING_TTL_SECONDS,
+            ttl: sessionTtlSeconds(),
         };
         await this.getContainer().items.upsert(doc);
     }

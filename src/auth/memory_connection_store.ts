@@ -1,4 +1,5 @@
 import { encodeStoredApiKey } from "./credential_secret.js";
+import { isPendingConnectionExpired } from "./connection_pending.js";
 import type {
   CompanyCredentialInput,
   ConnectionStore,
@@ -39,10 +40,12 @@ function companyMapForConnection(connectionId: string): Map<string, CompanyEntry
 }
 
 function cleanupExpiredPendingConnections(): void {
-  const now = Date.now();
-
   for (const [code, pending] of pendingConnections.entries()) {
-    if (pending.used || pending.expiresAt < now) {
+    if (pending.used) {
+      continue;
+    }
+
+    if (isPendingConnectionExpired(pending.expiresAt)) {
       pendingConnections.delete(code);
     }
   }
@@ -73,7 +76,11 @@ export class MemoryConnectionStore implements ConnectionStore {
     cleanupExpiredPendingConnections();
 
     const pending = pendingConnections.get(code);
-    if (!pending || pending.used || pending.expiresAt < Date.now()) {
+    if (
+      !pending ||
+      pending.used ||
+      isPendingConnectionExpired(pending.expiresAt)
+    ) {
       if (pending) pendingConnections.delete(code);
       return null;
     }
@@ -85,7 +92,7 @@ export class MemoryConnectionStore implements ConnectionStore {
     cleanupExpiredPendingConnections();
 
     const pending = pendingConnections.get(code);
-    if (!pending || pending.expiresAt < Date.now()) {
+    if (!pending || isPendingConnectionExpired(pending.expiresAt)) {
       if (pending) pendingConnections.delete(code);
       return null;
     }
@@ -97,7 +104,11 @@ export class MemoryConnectionStore implements ConnectionStore {
     cleanupExpiredPendingConnections();
 
     const pending = pendingConnections.get(code);
-    if (!pending || pending.used || pending.expiresAt < Date.now()) {
+    if (
+      !pending ||
+      pending.used ||
+      isPendingConnectionExpired(pending.expiresAt)
+    ) {
       if (pending) pendingConnections.delete(code);
       return null;
     }
