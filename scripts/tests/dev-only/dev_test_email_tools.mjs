@@ -1,118 +1,89 @@
 #!/usr/bin/env node
+/**
+ * Legacy manual email MCP regression.
+ *
+ * Requires:
+ *   BRC_ALLOW_EMAIL_TESTS=true
+ *   BRC_TEST_COMPANY + BRC_TEST_API_KEY
+ *   BRC_TEST_EMAIL_TO (safe test recipient — never a real customer email by default)
+ *   BRC_TEST_EMAIL_FROM (optional)
+ */
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { McpStdioClient, defaultRegressionServerEnv } from "../lib/mcp_client.mjs";
+import {
+  requireEnvFlag,
+  requireTestConnectionEnv,
+  DEFAULT_TEST_SERVER_ENTRY,
+  describeConnectionSetup,
+} from "../lib/connection_env.mjs";
+import { buildRegistryReport, buildSetupFailedRegistryReport, writeJsonReport, safeJsonForReport } from "../lib/registry_report.mjs";
+import { EMAIL_SEND_TOOLS } from "../lib/tool_classification.mjs";
+import { redactSensitive } from "../lib/redact.mjs";
+import {
+  AUTH_PREFLIGHT_TOOL,
+  printAuthFailure,
+  runAuthPreflight,
+} from "../lib/auth_preflight.mjs";
 
-const COMPANY_NAME =
-  process.env.BRC_TEST_COMPANY ||
-  process.env.BRC_TEST_COMPANY_NAME ||
-  "Company C";
-const API_KEY = process.env.BRC_TEST_API_KEY || "";
-const SERVER_ENTRY =
-  process.env.BRC_EMAIL_TEST_SERVER_ENTRY || "./build/index.email-test.js";
+requireEnvFlag(
+  "BRC_ALLOW_EMAIL_TESTS",
+  "Refusing to send email. Set BRC_ALLOW_EMAIL_TESTS=true to confirm."
+);
 
-const FIXED_TO_ADDRESS = "laurendwyer@gmail.com";
-const FIXED_FROM_ADDRESS = "lauren.dwyer@bigredbook.com";
+const { companyName: COMPANY_NAME } = requireTestConnectionEnv({
+  label: "email legacy regression",
+});
 
-if (!API_KEY) {
-  console.error("Missing BRC_TEST_API_KEY");
+const TO_ADDRESS = process.env.BRC_TEST_EMAIL_TO?.trim();
+if (!TO_ADDRESS) {
+  console.error(
+    "Missing BRC_TEST_EMAIL_TO. Use a safe test mailbox — never a real customer email."
+  );
   process.exit(1);
 }
 
-const child = spawn("node", [SERVER_ENTRY], {
-  stdio: ["pipe", "pipe", "pipe"],
-  cwd: process.cwd(),
-  env: process.env,
+const FROM_ADDRESS =
+  process.env.BRC_TEST_EMAIL_FROM?.trim() || "noreply@example.test";
+
+const client = new McpStdioClient({
+  serverEntry: DEFAULT_TEST_SERVER_ENTRY,
+  env: defaultRegressionServerEnv({
+    BRC_ALLOW_EMAIL_SKILLS: "true",
+  }),
 });
 
-let nextId = 1;
-let buffer = "";
-const pending = new Map();
 const results = [];
 
-child.stderr.on("data", (d) => {
-  const t = d.toString().trim();
-  if (t) console.error("[server]", t);
-});
-
-child.stdout.on("data", (d) => {
-  buffer += d.toString();
-  let i;
-
-  while ((i = buffer.indexOf("\n")) >= 0) {
-    const line = buffer.slice(0, i).trim();
-    buffer = buffer.slice(i + 1);
-    if (!line) continue;
-
-    try {
-      const msg = JSON.parse(line);
-      if (msg.id && pending.has(msg.id)) {
-        const p = pending.get(msg.id);
-        pending.delete(msg.id);
-        if (msg.error) p.reject(msg.error);
-        else p.resolve(msg.result);
-      }
-    } catch {
-      // Ignore non-JSON output.
-    }
+async function run(name, args = {}, timeoutMs = 90000) {
+  if (!client.tools.has(name)) {
+    results.push({
+      tool: name,
+      status: "MISSING",
+      args,
+      details: "Tool not registered",
+    });
+    console.log(`- ${name}: MISSING`);
+    return { status: "MISSING", data: {} };
   }
-});
 
-function req(method, params = {}, timeoutMs = 45000) {
-  const id = nextId++;
-  child.stdin.write(
-    JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"
-  );
-
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error(`Timeout waiting for ${method}`));
-      }
-    }, timeoutMs);
-  });
-}
-
-async function call(name, args = {}, timeoutMs = 45000) {
-  return req("tools/call", { name, arguments: args }, timeoutMs);
-}
-
-function toolText(result) {
-  if (!result?.content) return JSON.stringify(result);
-  return result.content
-    .map((part) => (part.type === "text" ? part.text : JSON.stringify(part)))
-    .join("\n");
-}
-
-function parseToolResult(result) {
   try {
-    return JSON.parse(toolText(result));
-  } catch {
-    return { rawText: toolText(result) };
+    const raw = await client.call(name, args, timeoutMs);
+    const data = client.parsed(raw);
+    const status = client.isFailure(raw, data) ? "FAIL" : "PASS";
+    results.push({ tool: name, status, args: redactSensitive(args), details: data });
+    console.log(`- ${name}: ${status}`);
+    return { status, data };
+  } catch (error) {
+    results.push({
+      tool: name,
+      status: "FAIL",
+      args: redactSensitive(args),
+      details: { message: error.message || String(error) },
+    });
+    console.log(`- ${name}: FAIL`);
+    return { status: "FAIL", data: {} };
   }
-}
-
-function isFailure(result, data) {
-  const text = toolText(result).toLowerCase();
-  return Boolean(
-    result?.isError ||
-      data?.error ||
-      data?.status === "error" ||
-      text.includes("failed") ||
-      text.includes("bad request") ||
-      text.includes("internal server error") ||
-      text.includes("validation")
-  );
-}
-
-function arr(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.Items)) return data.Items;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.data)) return data.data;
-  return [];
 }
 
 function pickId(items) {
@@ -120,86 +91,80 @@ function pickId(items) {
   return items[0]?.id ?? null;
 }
 
-async function run(name, args = {}, timeoutMs = 45000) {
-  try {
-    const raw = await call(name, args, timeoutMs);
-    const data = parseToolResult(raw);
-    const status = isFailure(raw, data) ? "FAIL" : "PASS";
-    results.push({ tool: name, status, args, details: data });
-    console.log(`- ${name}: ${status}`);
-    return { status, data };
-  } catch (error) {
-    const data = { message: error?.message || String(error) };
-    results.push({ tool: name, status: "FAIL", args, details: data });
-    console.log(`- ${name}: FAIL`);
-    return { status: "FAIL", data };
-  }
-}
-
-function redactSensitive(value) {
-  if (Array.isArray(value)) return value.map(redactSensitive);
-  if (value && typeof value === "object") {
-    const out = {};
-    for (const [key, inner] of Object.entries(value)) {
-      if (/apikey|api_key|token|password|secret|authorization/i.test(key)) {
-        out[key] = "<REDACTED>";
-      } else {
-        out[key] = redactSensitive(inner);
-      }
-    }
-    return out;
-  }
-  return value;
-}
-
 async function main() {
-  console.log("Starting dedicated BRC email tools test...");
+  console.log("Starting BRC email legacy regression...");
   console.log(`Company: ${COMPANY_NAME}`);
-  console.log(`Server entry: ${SERVER_ENTRY}`);
-  console.log(`To address: ${FIXED_TO_ADDRESS}`);
-  console.log(`From address: ${FIXED_FROM_ADDRESS}`);
+  console.log(`Recipient: ${TO_ADDRESS.replace(/(.{2}).+(@.+)/, "$1***$2")}`);
+  console.log("No credentials or API keys are printed.\n");
 
-  await req("initialize", {
-    protocolVersion: "2024-11-05",
-    capabilities: {},
-    clientInfo: {
-      name: "brc-email-test",
-      version: "1.0.0",
-    },
-  });
+  await client.init({ name: "brc-email-legacy-regression", version: "2.0.0" });
 
-  child.stdin.write(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    }) + "\n"
+  const contexts = await run("brc_list_company_contexts", {}, 45000);
+  const companies = client.arr(contexts.data?.companies ?? contexts.data);
+  const connected = companies.some(
+    (entry) =>
+      String(entry?.companyName || entry?.name || "")
+        .trim()
+        .toLowerCase() === COMPANY_NAME.trim().toLowerCase() &&
+      entry?.connected !== false
   );
 
-  const toolList = await req("tools/list", {});
-  const tools = new Set((toolList.tools || []).map((t) => t.name));
-  const requiredTools = [
-    "brc_set_company_api_key",
-    "brc_list_customers",
-    "brc_list_sales_invoices",
-    "brc_list_quotes",
-    "brc_send_email_statement",
-    "brc_send_sales_invoice_email",
-    "brc_send_quote_email",
-  ];
-
-  const missingTools = requiredTools.filter((name) => !tools.has(name));
-  if (missingTools.length) {
-    throw new Error(
-      `Missing required tools: ${missingTools.join(", ")}. ` +
-        "Use the email test entry point so email tools are registered."
+  if (!connected) {
+    console.error(
+      `Company "${COMPANY_NAME}" is not connected. Set BRC_TEST_COMPANY and BRC_TEST_API_KEY.`
     );
+    client.close();
+    process.exit(1);
   }
 
-  await run("brc_set_company_api_key", {
-    companyName: COMPANY_NAME,
-    apiKey: API_KEY,
+  console.log("\n=== Auth preflight ===");
+  const preflight = await runAuthPreflight(client, COMPANY_NAME);
+  results.push({
+    tool: preflight.toolName,
+    status: preflight.unauthorized ? "FAIL" : preflight.ok ? "PASS" : "FAIL",
+    args: { companyName: COMPANY_NAME },
+    details: preflight.data,
   });
+  console.log(
+    `- ${preflight.toolName}: ${preflight.unauthorized ? "FAIL (unauthorized)" : preflight.ok ? "PASS" : "FAIL"}`
+  );
+
+  if (preflight.unauthorized) {
+    printAuthFailure(COMPANY_NAME);
+
+    const allToolNames = [...client.tools].sort();
+    const report = buildSetupFailedRegistryReport(
+      allToolNames,
+      results,
+      "unauthorized"
+    );
+
+    const summary = [
+      "BRC EMAIL LEGACY REGRESSION SUMMARY",
+      "=================================",
+      `Company: ${COMPANY_NAME}`,
+      `Registered tools: ${report.classified.length}`,
+      `Setup: setup_failed (unauthorized)`,
+      ...Object.entries(report.statusCounts).map(
+        ([status, count]) => `${status}: ${count}`
+      ),
+    ].join("\n");
+
+    writeJsonReport("./reports/email_test_results.json", {
+      companyName: COMPANY_NAME,
+      connection: describeConnectionSetup(COMPANY_NAME),
+      registeredTools: report.classified.length,
+      categoryCounts: report.categoryCounts,
+      statusCounts: report.statusCounts,
+      setup: report.setup,
+      classifiedTools: report.classified,
+      results: redactSensitive(results),
+    });
+    fs.writeFileSync("./reports/email_test_summary.txt", summary);
+    console.log("\n" + summary);
+    client.close();
+    process.exit(1);
+  }
 
   const customersResult = await run("brc_list_customers", {
     companyName: COMPANY_NAME,
@@ -217,115 +182,104 @@ async function main() {
     pageSize: 200,
   });
 
-  const customerId = pickId(arr(customersResult.data));
-  const salesInvoiceId = pickId(arr(invoicesResult.data));
-  const quoteId = pickId(arr(quotesResult.data));
+  const customerId = pickId(client.arr(customersResult.data));
+  const salesInvoiceId = pickId(client.arr(invoicesResult.data));
+  const quoteId = pickId(client.arr(quotesResult.data));
 
   if (!customerId || !salesInvoiceId || !quoteId) {
-    throw new Error(
-      "Could not find required records to test email tools. " +
-        "Ensure the company has at least one customer, one sales invoice, and one quote."
+    console.error(
+      "Could not find required records. Ensure the test company has a customer, sales invoice, and quote."
     );
+    client.close();
+    process.exit(1);
   }
 
   const now = new Date();
   const fromDate = new Date(now);
   fromDate.setDate(now.getDate() - 30);
 
-  await run(
-    "brc_send_email_statement",
-    {
-      companyName: COMPANY_NAME,
-      customerId,
-      fromAddress: FIXED_FROM_ADDRESS,
-      toAddress: FIXED_TO_ADDRESS,
-      fromPeriod: fromDate.toISOString(),
-      toPeriod: now.toISOString(),
-      messageBody:
-        "Automated test: customer statement email endpoint via MCP email tool.",
-      confirmSend: true,
-    },
-    90000
-  );
+  await run("brc_send_email_statement", {
+    companyName: COMPANY_NAME,
+    customerId,
+    fromAddress: FROM_ADDRESS,
+    toAddress: TO_ADDRESS,
+    fromPeriod: fromDate.toISOString(),
+    toPeriod: now.toISOString(),
+    messageBody: "Legacy regression: customer statement email smoke test.",
+    confirmSend: true,
+  });
 
-  await run(
-    "brc_send_sales_invoice_email",
-    {
-      companyName: COMPANY_NAME,
-      salesInvoiceId,
-      fromAddress: FIXED_FROM_ADDRESS,
-      toAddress: FIXED_TO_ADDRESS,
-      messageBody:
-        "Automated test: sales invoice email endpoint via MCP email tool.",
-      confirmSend: true,
-    },
-    90000
-  );
+  await run("brc_send_sales_invoice_email", {
+    companyName: COMPANY_NAME,
+    salesInvoiceId,
+    fromAddress: FROM_ADDRESS,
+    toAddress: TO_ADDRESS,
+    messageBody: "Legacy regression: sales invoice email smoke test.",
+    confirmSend: true,
+  });
 
-  await run(
-    "brc_send_quote_email",
-    {
-      companyName: COMPANY_NAME,
-      quoteId,
-      fromAddress: FIXED_FROM_ADDRESS,
-      toAddress: FIXED_TO_ADDRESS,
-      messageBody: "Automated test: quote email endpoint via MCP email tool.",
-      confirmSend: true,
-    },
-    90000
-  );
+  await run("brc_send_quote_email", {
+    companyName: COMPANY_NAME,
+    quoteId,
+    fromAddress: FROM_ADDRESS,
+    toAddress: TO_ADDRESS,
+    messageBody: "Legacy regression: quote email smoke test.",
+    confirmSend: true,
+  });
 
-  await run("brc_clear_all_company_api_keys", {});
+  const allToolNames = [...client.tools].sort();
+  for (const toolName of allToolNames) {
+    if (results.some((entry) => entry.tool === toolName)) continue;
+    results.push({
+      tool: toolName,
+      status: "SKIPPED",
+      args: null,
+      details: EMAIL_SEND_TOOLS.has(toolName)
+        ? "Not invoked in this email smoke run"
+        : "Non-email tool — covered by other legacy scripts",
+    });
+  }
 
-  const counts = results.reduce((acc, item) => {
-    acc[item.status] = (acc[item.status] || 0) + 1;
-    return acc;
-  }, {});
+  const report = buildRegistryReport(allToolNames, results);
 
   const summary = [
-    "BRC EMAIL TOOLS TEST SUMMARY",
-    "============================",
+    "BRC EMAIL LEGACY REGRESSION SUMMARY",
+    "=================================",
     `Company: ${COMPANY_NAME}`,
-    `To address: ${FIXED_TO_ADDRESS}`,
-    `From address: ${FIXED_FROM_ADDRESS}`,
-    `PASS: ${counts.PASS || 0}`,
-    `FAIL: ${counts.FAIL || 0}`,
+    `Registered tools: ${report.classified.length}`,
+    `Recipient configured: yes (redacted in logs)`,
+    ...Object.entries(report.statusCounts).map(
+      ([status, count]) => `${status}: ${count}`
+    ),
     "",
     "Failures:",
-    ...results
-      .filter((r) => r.status === "FAIL")
-      .map((r) => `- ${r.tool}: ${JSON.stringify(r.details).slice(0, 900)}`),
+    ...report.classified
+      .filter((entry) => entry.status === "FAIL")
+      .map((entry) => `- ${entry.tool}: ${safeJsonForReport(entry.details)}`),
   ].join("\n");
 
-  fs.mkdirSync("./reports", { recursive: true });
-  fs.writeFileSync(
-    "./reports/email_test_results.json",
-    JSON.stringify(
-      redactSensitive({
-        companyName: COMPANY_NAME,
-        toAddress: FIXED_TO_ADDRESS,
-        fromAddress: FIXED_FROM_ADDRESS,
-        counts,
-        selectedIds: { customerId, salesInvoiceId, quoteId },
-        results,
-      }),
-      null,
-      2
-    )
-  );
-  fs.writeFileSync("./reports/email_test_summary.txt", summary);
+  writeJsonReport("./reports/email_test_results.json", {
+    companyName: COMPANY_NAME,
+    connection: describeConnectionSetup(COMPANY_NAME),
+    toAddressConfigured: true,
+    fromAddress: FROM_ADDRESS,
+    classifiedTools: report.classified,
+    results: redactSensitive(results),
+  });
 
+  fs.writeFileSync("./reports/email_test_summary.txt", summary);
   console.log("\n" + summary);
-  console.log(
-    "\nSaved reports/email_test_results.json and reports/email_test_summary.txt"
-  );
-  child.kill();
+  client.close();
+
+  if ((report.statusCounts.FAIL || 0) > 0) {
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {
-  console.error("Email test crashed:", error);
+  console.error("Email legacy regression crashed:", error.message || error);
   try {
-    child.kill();
+    client.close();
   } catch {}
   process.exit(1);
 });

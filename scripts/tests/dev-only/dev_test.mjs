@@ -1,36 +1,58 @@
 #!/usr/bin/env node
 
 /**
- * BRC MCP full coverage test runner.
+ * BRC MCP write/update legacy manual regression.
  *
- * This script creates temporary test records in BRC and attempts to delete them.
+ * Creates temporary test records in BRC and attempts to delete them.
  *
- * Important safety features:
- * - Uses a unique marker: MCP TEST DEMO LD <stamp>
- * - Uses BRC_TEST_DATE if provided, so real companies with old financial years can be tested safely.
- * - Derives financial-year dates from startYear/startMonth when possible.
- * - Runs cleanup verification at the end to search for any remaining records with the marker.
+ * Requires explicit confirmation:
+ *   BRC_ALLOW_DEV_WRITE_TESTS=true
  *
  * Recommended run:
  *   npm run build
+ *   $env:BRC_ALLOW_DEV_WRITE_TESTS="true"
  *   $env:BRC_TEST_COMPANY="JasonsCompany"
- *   $env:BRC_TEST_API_KEY="PASTE_KEY_HERE"
+ *   $env:BRC_TEST_API_KEY="<from secure store>"
  *   $env:BRC_TEST_DATE="2015-01-15"
- *   node .\scripts\tests\dev-only\dev_test.mjs
+ *   npm run test:dev:legacy
  *
- * Bank account write tools and email send tools are excluded (see ALL_EXCLUDED_TOOLS).
- * brc_list_bank_accounts is still tested for payment reference data.
+ * Bank account write tools and email send tools are excluded unless explicitly enabled.
  */
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { requireEnvFlag, requireTestConnectionEnv, DEFAULT_TEST_SERVER_ENTRY } from "../lib/connection_env.mjs";
+import { buildRegistryReport, buildSetupFailedRegistryReport, writeJsonReport, safeJsonForReport } from "../lib/registry_report.mjs";
+import { redactSensitive } from "../lib/redact.mjs";
+import { classifyToolForRegression } from "../lib/tool_classification.mjs";
+import {
+  AUTH_PREFLIGHT_TOOL,
+  isUnauthorizedToolResult,
+  printAuthFailure,
+} from "../lib/auth_preflight.mjs";
+
+requireEnvFlag(
+  "BRC_ALLOW_DEV_WRITE_TESTS",
+  "Refusing to run write legacy regression. Set BRC_ALLOW_DEV_WRITE_TESTS=true to confirm."
+);
+
+const { companyName: COMPANY_NAME } = requireTestConnectionEnv({
+  label: "write legacy regression",
+});
 
 process.env.BRC_ALLOW_READ_SKILLS ??= "true";
 process.env.BRC_ALLOW_UPDATE_SKILLS ??= "true";
 process.env.BRC_ALLOW_DELETE_SKILLS ??= "true";
+process.env.BRC_ALLOW_EMAIL_SKILLS ??= "true";
+process.env.BRC_ALLOW_BATCH_SKILLS ??= "true";
 process.env.BRC_ALLOW_DEV_MODE ??= "false";
 
-/** Bank write tools — excluded; brc_list_bank_accounts is still tested for payment reference data. */
+const ALLOW_BANK_WRITES =
+  process.env.BRC_ALLOW_BANK_WRITE_TESTS?.trim().toLowerCase() === "true";
+const ALLOW_EMAIL_IN_DEV =
+  process.env.BRC_ALLOW_EMAIL_TESTS?.trim().toLowerCase() === "true";
+
+/** Bank write tools — excluded unless BRC_ALLOW_BANK_WRITE_TESTS=true. */
 const EXCLUDED_BANK_TOOLS = [
   "brc_get_bank_account",
   "brc_create_bank_account",
@@ -39,35 +61,32 @@ const EXCLUDED_BANK_TOOLS = [
   "brc_batch_bank_accounts",
 ];
 
-/** Email send tools — under development; not exercised in this test runner. */
+/** Email send tools — use test:email:legacy unless BRC_ALLOW_EMAIL_TESTS=true. */
 const EXCLUDED_EMAIL_TOOLS = [
   "brc_send_sales_invoice_email",
   "brc_send_email_statement",
   "brc_send_quote_email",
 ];
 
-const ALL_EXCLUDED_TOOLS = [...EXCLUDED_BANK_TOOLS, ...EXCLUDED_EMAIL_TOOLS];
+const ALL_EXCLUDED_TOOLS = [
+  ...(ALLOW_BANK_WRITES ? [] : EXCLUDED_BANK_TOOLS),
+  ...(ALLOW_EMAIL_IN_DEV ? [] : EXCLUDED_EMAIL_TOOLS),
+];
 
 const EXCLUDED_TOOLS_NOTE =
-  "Bank account write tools and email send tools are excluded from this test. brc_list_bank_accounts is still used for payment reference data.";
+  "Bank account write tools and email send tools are excluded unless BRC_ALLOW_BANK_WRITE_TESTS / BRC_ALLOW_EMAIL_TESTS are true.";
 
 function recordExcluded(tool, details = EXCLUDED_TOOLS_NOTE) {
   results.push({
     tool,
-    status: "EXCLUDED",
+    status: "SKIPPED",
     args: null,
     details,
   });
-  console.log(`- ${tool}: EXCLUDED`);
+  console.log(`- ${tool}: SKIPPED`);
 }
 
-const COMPANY_NAME =
-  process.env.BRC_TEST_COMPANY ||
-  process.env.BRC_TEST_COMPANY_NAME ||
-  "Company C";
-
-const API_KEY = process.env.BRC_TEST_API_KEY || "";
-const SERVER_ENTRY = process.env.BRC_MCP_SERVER_ENTRY || "./build/index.js";
+const SERVER_ENTRY = process.env.BRC_MCP_SERVER_ENTRY || DEFAULT_TEST_SERVER_ENTRY;
 const MANUAL_TEST_DATE = process.env.BRC_TEST_DATE || "";
 
 const stamp = Date.now().toString().slice(-7);
@@ -85,12 +104,7 @@ function markerText(label) {
   return `${TEST_MARKER} - ${label}`;
 }
 
-if (!API_KEY) {
-  console.error("Missing BRC_TEST_API_KEY");
-  process.exit(1);
-}
-
-const child = spawn("node", [SERVER_ENTRY], {
+const child = spawn(process.execPath, [SERVER_ENTRY], {
   stdio: ["pipe", "pipe", "pipe"],
   cwd: process.cwd(),
   env: process.env,
@@ -1003,14 +1017,85 @@ async function main() {
   console.log(`Note: ${EXCLUDED_TOOLS_NOTE}\n`);
 
   console.log("=== Context ===");
-  await run("brc_set_company_api_key", {
+  const contextsResult = await run("brc_list_company_contexts", {});
+  const contextCompanies = arr(contextsResult.data?.companies ?? contextsResult.data);
+  const connected = contextCompanies.some(
+    (entry) =>
+      String(entry?.companyName || entry?.name || "")
+        .trim()
+        .toLowerCase() === COMPANY_NAME.trim().toLowerCase() &&
+      entry?.connected !== false
+  );
+
+  if (!connected) {
+    console.error(
+      `Company "${COMPANY_NAME}" is not connected. Set BRC_TEST_COMPANY and BRC_TEST_API_KEY — credentials are never logged.`
+    );
+    child.kill();
+    process.exit(1);
+  }
+
+  console.log("\n=== Auth preflight ===");
+  const preflightRaw = await call(AUTH_PREFLIGHT_TOOL, {
     companyName: COMPANY_NAME,
-    apiKey: API_KEY,
   });
+  const preflightData = parsed(preflightRaw);
+  const preflightText = toolText(preflightRaw);
+
+  if (isUnauthorizedToolResult(preflightRaw, preflightData, preflightText)) {
+    printAuthFailure(COMPANY_NAME);
+
+    const allToolNames = [...tools].sort();
+    const report = buildSetupFailedRegistryReport(
+      allToolNames,
+      [
+        {
+          tool: AUTH_PREFLIGHT_TOOL,
+          status: "FAIL",
+          args: { companyName: COMPANY_NAME },
+          details: preflightData,
+        },
+      ],
+      "unauthorized",
+      { allowBankWrites: ALLOW_BANK_WRITES }
+    );
+
+    const summary = [
+      "BRC MCP WRITE LEGACY REGRESSION SUMMARY",
+      "=======================================",
+      `Company: ${COMPANY_NAME}`,
+      `Registered tools: ${report.classified.length}`,
+      `Setup: setup_failed (unauthorized)`,
+      "",
+      "Classification:",
+      ...Object.entries(report.categoryCounts).map(
+        ([category, count]) => `- ${category}: ${count}`
+      ),
+      "",
+      "Run status:",
+      ...Object.entries(report.statusCounts).map(
+        ([status, count]) => `- ${status}: ${count}`
+      ),
+    ].join("\n");
+
+    writeJsonReport("./reports/dev_test_results.json", {
+      companyName: COMPANY_NAME,
+      registeredTools: report.classified.length,
+      categoryCounts: report.categoryCounts,
+      statusCounts: report.statusCounts,
+      setup: report.setup,
+      classifiedTools: report.classified,
+    });
+    fs.writeFileSync("./reports/dev_test_summary.txt", summary);
+    console.log("\n" + summary);
+
+    child.kill();
+    process.exit(1);
+  }
+
+  console.log(`- ${AUTH_PREFLIGHT_TOOL}: PASS`);
+
   await run("brc_list_company_contexts", {});
-  await run("brc_clear_company_api_key", {
-    companyName: "Unused test company",
-  });
 
   console.log("\n=== Lookup tools ===");
   const lookupTools = [
@@ -2307,107 +2392,97 @@ await run(
   await run("brc_list_audit_log", { includeTechnicalDetails: true });
   await run("brc_clear_audit_log", { confirmClear: true });
 
-  await run("brc_clear_all_company_api_keys", {});
-  await run("brc_list_company_contexts", {});
+  const allToolNames = [...tools].sort();
 
-  const tested = new Set(results.map((r) => r.tool));
-
-  for (const tool of ALL_EXCLUDED_TOOLS) {
-    if (!tested.has(tool)) {
-      recordExcluded(tool);
-      tested.add(tool);
+  for (const toolName of allToolNames) {
+    if (results.some((entry) => entry.tool === toolName)) continue;
+    if (ALL_EXCLUDED_TOOLS.includes(toolName)) {
+      recordExcluded(toolName);
+      continue;
     }
-  }
 
-  const untested = [...tools]
-    .filter((t) => !tested.has(t) && !ALL_EXCLUDED_TOOLS.includes(t))
-    .sort();
+    const classification = classifyToolForRegression(toolName, {
+      allowBankWrites: ALLOW_BANK_WRITES,
+    });
 
-  for (const t of untested) {
+    if (classification.category === "read-only") {
+      results.push({
+        tool: toolName,
+        status: "SKIPPED",
+        args: null,
+        details: "Read-only tool — covered by test:readonly:legacy",
+      });
+      continue;
+    }
+
+    if (classification.category === "email") {
+      results.push({
+        tool: toolName,
+        status: "SKIPPED",
+        args: null,
+        details: classification.skipReason,
+      });
+      continue;
+    }
+
     results.push({
-      tool: t,
-      status: "UNTESTED",
+      tool: toolName,
+      status: "SKIPPED",
       args: null,
-      details: "Registered but not included in full coverage template",
+      details: "Registered but not included in write legacy template",
     });
   }
 
-  const counts = results.reduce((a, r) => {
-    a[r.status] = (a[r.status] || 0) + 1;
-    return a;
-  }, {});
+  const report = buildRegistryReport(allToolNames, results, {
+    allowBankWrites: ALLOW_BANK_WRITES,
+  });
 
-  function redactSensitive(value) {
-    if (Array.isArray(value)) return value.map(redactSensitive);
-  
-    if (value && typeof value === "object") {
-      const out = {};
-      for (const [key, inner] of Object.entries(value)) {
-        if (/apikey|api_key|token|password|secret|authorization/i.test(key)) {
-          out[key] = "<REDACTED>";
-        } else {
-          out[key] = redactSensitive(inner);
-        }
-      }
-      return out;
-    }
-  
-    return value;
-  }
+  const counts = report.statusCounts;
 
   const summary = [
-    "BRC MCP FULL COVERAGE TEST SUMMARY",
-    "==================================",
+    "BRC MCP WRITE LEGACY REGRESSION SUMMARY",
+    "=======================================",
     `Company: ${COMPANY_NAME}`,
     `Test marker: ${TEST_MARKER}`,
     `Transaction date used: ${testDate}`,
     `Date selection method: ${dateInfo.method}`,
-    `Registered tools: ${tools.size}`,
+    `Registered tools: ${report.classified.length}`,
     `Total invocations: ${results.length}`,
-    `PASS: ${counts.PASS || 0}`,
-    `FAIL: ${counts.FAIL || 0}`,
-    `SKIPPED: ${counts.SKIPPED || 0}`,
-    `EXCLUDED: ${counts.EXCLUDED || 0}`,
-    `MISSING: ${counts.MISSING || 0}`,
-    `UNTESTED: ${counts.UNTESTED || 0}`,
+    ...Object.entries(counts).map(([status, count]) => `${status}: ${count}`),
+    "",
+    "Classification:",
+    ...Object.entries(report.categoryCounts).map(
+      ([category, count]) => `- ${category}: ${count}`
+    ),
     "",
     "Failures:",
-    ...results
+    ...report.classified
       .filter((r) => r.status === "FAIL")
-      .map((r) => `- ${r.tool}: ${JSON.stringify(r.details).slice(0, 900)}`),
+      .map((r) => `- ${r.tool}: ${safeJsonForReport(r.details)}`),
     "",
     "Skipped:",
-    ...results
+    ...report.classified
       .filter((r) => r.status === "SKIPPED")
-      .map((r) => `- ${r.tool}: ${r.details}`),
+      .slice(0, 40)
+      .map((r) => `- ${r.tool}: ${r.details || r.skipReason || ""}`),
     "",
-    "Untested:",
-    ...untested.map((t) => `- ${t}`),
-    "",
-    "Excluded from test (bank account writes and email):",
+    "Excluded unless explicitly enabled:",
     EXCLUDED_TOOLS_NOTE,
-    "Bank account write tools:",
-    ...EXCLUDED_BANK_TOOLS.map((t) => `- ${t}`),
-    "Email send tools:",
-    ...EXCLUDED_EMAIL_TOOLS.map((t) => `- ${t}`),
   ].join("\n");
 
-  fs.mkdirSync("./reports", { recursive: true });
-  fs.writeFileSync(
+  writeJsonReport(
     "./reports/dev_test_results.json",
-    JSON.stringify(
-      redactSensitive({
-        companyName: COMPANY_NAME,
-        testMarker: TEST_MARKER,
-        transactionDateUsed: testDate,
-        counts,
-        created,
-        results,
-        financialYearDateSelection: dateInfo,
-      }),
-      null,
-      2
-    )
+    {
+      companyName: COMPANY_NAME,
+      testMarker: TEST_MARKER,
+      transactionDateUsed: testDate,
+      counts,
+      categoryCounts: report.categoryCounts,
+      classifiedTools: report.classified,
+      created,
+      results: redactSensitive(results),
+      financialYearDateSelection: dateInfo,
+    }
   );
   
   fs.writeFileSync(
