@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { enforceTransactionSettingsOrThrow, getCompanyProcessingSettings, loadAndEnforceTransactionSettings, } from "../../company_processing_settings.js";
-import { enforceReferenceSettingsOrThrow, getCompanyReferenceSettings, } from "../../company_reference_settings.js";
+import { enforceTransactionSettingsOrThrow, getCompanyProcessingSettings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
+import { enforceReferenceSettingsOrThrow, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
 import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildProductPayload, enforceSalesProductLineAnalysisOrThrow, normalizeBatchItems, unwrapPayload, } from "./payloads_tools.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
-import { getMaxBatchItems } from "../../server_config.js";
+import { getMaxBatchItems } from "../../config/server_config.js";
 //Removed opening balance fields from payload --> don't prompt customer for customer opening balance because there is no API that will POST it
 const OPENING_BALANCE_FIELD_NAMES = [
     "openingBalance",

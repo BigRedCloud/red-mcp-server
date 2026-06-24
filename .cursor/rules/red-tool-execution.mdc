@@ -17,8 +17,9 @@ This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP al
 
 - Treat the company API key like a password.
 - Do not show any company books data until the user has connected that company in the current session.
-- If they ask for records (bank accounts, customers, invoices, balances, etc.) and no company is connected, ask them to connect by providing a company name and API key — do not show data from memory, prior runs, test reports, or cached results.
+- If they ask for records (bank accounts, customers, invoices, balances, etc.) and no company is connected, direct them to the secure Red connection page — do not show data from memory, prior runs, test reports, or cached results.
 - When no company is connected, keep connect prompts generic. Do not echo a company name from their question (e.g. not "provide the [your company name] API key").
+- The connection page supports multiple companies in one visit (form or CSV). Do not tell the user to connect one company at a time or to return and say "connect another company".
 - Only show company records retrieved live in the current connected session.
 
 ## When to proceed vs confirm

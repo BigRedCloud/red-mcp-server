@@ -1,5 +1,5 @@
 import { brcFetch, extractListItems } from "./shared.js";
-import { redServerConfig } from "./server_config.js";
+import { redServerConfig } from "./config/server_config.js";
 const SENSITIVE_FIELD_NAMES = new Set([
     "apiKey",
     "api_key",
