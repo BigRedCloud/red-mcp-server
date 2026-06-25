@@ -632,6 +632,7 @@ export function buildPurchasePayload(args: {
   }
   
   export function buildSalesInvoicePayload(args: {
+    priceBasis?: "net" | "gross";
     customerId: number;
     acCode: string;
     note: string;
@@ -654,16 +655,31 @@ export function buildPurchasePayload(args: {
     yourReference?: string;
     ourReference?: string;
   }) {
-    const calculatedNet = round2(args.quantity * args.unitPrice);
-  
-    if (round2(args.netAmount) !== calculatedNet) {
-      throw new Error(
-        `Invoice net amount must equal quantity * unit price. Received netAmount: ${args.netAmount}, calculated netAmount: ${calculatedNet}, quantity: ${args.quantity}, unitPrice: ${args.unitPrice}.`
-      );
+
+    const priceBasis = args.priceBasis ?? "net";
+    const isGross = priceBasis === "gross";
+
+    let calculatedNet: number;
+    let vat: number;
+    let total: number;
+
+    if (isGross) {
+      total = round2(args.quantity * args.unitPrice);
+      calculatedNet = round2(total / (1 + args.vatPercentage / 100));
+      vat = round2(total - calculatedNet);
+    } else {
+      calculatedNet = round2(args.quantity * args.unitPrice);
+
+      if (round2(args.netAmount) !== calculatedNet) {
+        throw new Error(
+          `Invoice net amount must equal quantity * unit price. Received netAmount: ${args.netAmount}, calculated netAmount: ${calculatedNet}, quantity: ${args.quantity}, unitPrice: ${args.unitPrice}.`
+        );
+      }
+
+      vat = round2(calculatedNet * (args.vatPercentage / 100));
+      total = round2(calculatedNet + vat);
     }
-  
-    const vat = round2(calculatedNet * (args.vatPercentage / 100));
-    const total = round2(calculatedNet + vat);
+
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
   
     const resolvedReference =
@@ -684,7 +700,7 @@ export function buildPurchasePayload(args: {
           vat,
           vatRateId: args.vatRateId,
           vatAnalysisTypeId: 1,
-          useTaxInclusiveUnitPrice: false,
+          useTaxInclusiveUnitPrice: isGross,
           tranNotes: [args.description],
           acEntries: [
             {
@@ -700,7 +716,7 @@ export function buildPurchasePayload(args: {
       quoteId: 0,
       saleRepId,
       saleRepCode,
-      useTaxInclusiveUnitPrice: false,
+      useTaxInclusiveUnitPrice: isGross,
       customerId: args.customerId,
       details: null,
       unpaid: total,

@@ -509,6 +509,16 @@ function readPayloadValue(
 }
 
 function payloadClearlyStatesGrossOrNetPrice(payload: unknown): boolean {
+  const taxInclusiveValue = readPayloadValue(payload, [
+    "useTaxInclusiveUnitPrice",
+    "taxInclusiveUnitPrice",
+    "useGrossUnitPrice",
+  ]);
+
+  if (typeof taxInclusiveValue === "boolean") {
+    return true;
+  }
+
   const grossIndicators = [
     "linePricesAreGross",
     "pricesAreGross",
@@ -518,12 +528,14 @@ function payloadClearlyStatesGrossOrNetPrice(payload: unknown): boolean {
     "pricesAreVatInclusive",
     "pricesAreVATInclusive",
   ];
+
   const netIndicators = [
     "linePricesAreNet",
     "pricesAreNet",
     "priceEntryIsNet",
     "unitPricesAreNet",
   ];
+
   const basisIndicators = ["priceBasis", "priceEntryMode", "linePriceBasis"];
 
   for (const key of grossIndicators) {

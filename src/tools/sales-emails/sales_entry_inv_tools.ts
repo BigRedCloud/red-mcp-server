@@ -110,6 +110,10 @@ server.tool(
       saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
       saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
       reference: z.string().optional(),
+      priceBasis: z
+        .enum(["net", "gross"])
+        .default("net")
+        .describe("Whether unitPrice is net/VAT-exclusive or gross/VAT-inclusive."),
       confirmCrAnalysisCategory: z
         .boolean()
         .optional()
