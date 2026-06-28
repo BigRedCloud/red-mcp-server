@@ -277,7 +277,31 @@ function readPayloadValue(payload, keys) {
     }
     return findValue(record, keys);
 }
+/** True when any productTrans line carries an explicit useTaxInclusiveUnitPrice boolean. */
+function productTransStatesPriceBasis(payload) {
+    const record = payloadRecord(payload);
+    if (!record || !Array.isArray(record.productTrans)) {
+        return false;
+    }
+    for (const line of record.productTrans) {
+        if (isRecord(line) && typeof line.useTaxInclusiveUnitPrice === "boolean") {
+            return true;
+        }
+    }
+    return false;
+}
 function payloadClearlyStatesGrossOrNetPrice(payload) {
+    const taxInclusiveValue = readPayloadValue(payload, [
+        "useTaxInclusiveUnitPrice",
+        "taxInclusiveUnitPrice",
+        "useGrossUnitPrice",
+    ]);
+    if (typeof taxInclusiveValue === "boolean") {
+        return true;
+    }
+    if (productTransStatesPriceBasis(payload)) {
+        return true;
+    }
     const grossIndicators = [
         "linePricesAreGross",
         "pricesAreGross",
@@ -381,13 +405,24 @@ function readStatementMinBalance(payload) {
         "defaultDebtorStatementMinimumBalance",
     ]));
 }
-function enforceSalesDocumentSettings(settings, payload, documentLabel) {
+/**
+ * True when there is any explicit signal of whether unit prices are gross or
+ * net: a top-level priceBasis argument, a payload-level price basis, a
+ * useTaxInclusiveUnitPrice boolean, or a productTrans line carrying that flag.
+ */
+function hasExplicitSalesPriceBasis(payload, options) {
+    if (options?.priceBasis === "gross" || options?.priceBasis === "net") {
+        return true;
+    }
+    return payloadClearlyStatesGrossOrNetPrice(payload);
+}
+function enforceSalesDocumentSettings(settings, payload, documentLabel, options) {
     if (settings.marginVatSchemeEnabled === true) {
         throw preflightError(`Margin VAT Scheme is enabled in Big Red Cloud. Red does not currently support creating margin-scheme VAT ${documentLabel}. Please disable Margin VAT Scheme in Big Red Cloud or create this ${documentLabel} manually in BRC.`);
     }
     if (settings.grossPriceSalesInvoicingEnabled === true &&
-        !payloadClearlyStatesGrossOrNetPrice(payload)) {
-        throw preflightError(`Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your line prices are VAT-inclusive (gross) or net. Please confirm whether prices are VAT-inclusive or net before creating the ${documentLabel}.`);
+        !hasExplicitSalesPriceBasis(payload, options)) {
+        throw preflightError(`Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your unit prices are VAT-inclusive (gross) or net (VAT-exclusive). Retry with priceBasis: "gross" for VAT-inclusive unit prices, or priceBasis: "net" for VAT-exclusive unit prices. Do not disable Gross Price Entry — provide priceBasis instead.`);
     }
 }
 function enforceCashReceiptSettings(settings, payload) {
@@ -410,13 +445,13 @@ function enforceCashReceiptSettings(settings, payload) {
         }
     }
 }
-export function enforceTransactionSettingsOrThrow(settings, workflow, payload) {
+export function enforceTransactionSettingsOrThrow(settings, workflow, payload, options) {
     if (workflow === "sales_invoice") {
-        enforceSalesDocumentSettings(settings, payload, "sales invoice");
+        enforceSalesDocumentSettings(settings, payload, "sales invoice", options);
         return;
     }
     if (workflow === "sales_credit_note") {
-        enforceSalesDocumentSettings(settings, payload, "sales credit note");
+        enforceSalesDocumentSettings(settings, payload, "sales credit note", options);
         return;
     }
     if (workflow === "purchase") {
@@ -439,8 +474,8 @@ export function enforceTransactionSettingsOrThrow(settings, workflow, payload) {
         throw preflightError("Red could not determine the default debtor statement minimum balance from company settings. Please provide a minimum balance for this statement, or confirm you want no minimum balance before sending.");
     }
 }
-export async function loadAndEnforceTransactionSettings(companyName, workflow, payload) {
+export async function loadAndEnforceTransactionSettings(companyName, workflow, payload, options) {
     const settings = await getCompanyProcessingSettings(companyName);
-    enforceTransactionSettingsOrThrow(settings, workflow, payload);
+    enforceTransactionSettingsOrThrow(settings, workflow, payload, options);
     return settings;
 }

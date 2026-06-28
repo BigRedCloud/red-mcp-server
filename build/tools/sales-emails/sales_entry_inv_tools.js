@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
+import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
 import { getTransactionSafetyWarnings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
 import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
 export function registerSalesEntryInvoiceTools(server) {
@@ -57,7 +57,7 @@ export function registerSalesEntryInvoiceTools(server) {
         return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
     });
     // Sales invoice tools --------------------------------------------------------
-    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
         acCode: z.string(),
@@ -78,6 +78,10 @@ export function registerSalesEntryInvoiceTools(server) {
         saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
         saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
         reference: z.string().optional(),
+        priceBasis: z
+            .enum(["net", "gross"])
+            .optional()
+            .describe(SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION),
         confirmCrAnalysisCategory: z
             .boolean()
             .optional()
@@ -89,7 +93,7 @@ export function registerSalesEntryInvoiceTools(server) {
             enforceSalesProductLineAnalysisOrThrow(payload, "sales_invoice", {
                 confirmCrAnalysisCategory,
             });
-            const processingSettings = await loadAndEnforceTransactionSettings(String(companyName), "sales_invoice", payload);
+            const processingSettings = await loadAndEnforceTransactionSettings(String(companyName), "sales_invoice", payload, { priceBasis: args.priceBasis });
             const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "sales_invoice", payload, "manual");
             const settingsWarnings = [
                 ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
@@ -115,20 +119,24 @@ export function registerSalesEntryInvoiceTools(server) {
             });
         }
     });
-    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
+        priceBasis: z
+            .enum(["net", "gross"])
+            .optional()
+            .describe(SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION),
         confirmCrAnalysisCategory: z
             .boolean()
             .optional()
             .describe("Set true only after the user confirms a CR sales analysis account code is intentional for this product line."),
-    }, async ({ companyName, payload, confirmCrAnalysisCategory }) => {
-        const finalPayload = payload;
+    }, async ({ companyName, payload, priceBasis, confirmCrAnalysisCategory }) => {
+        const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
         requireSalesRepInPayload(finalPayload);
         enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
             confirmCrAnalysisCategory,
         });
-        const processingSettings = await loadAndEnforceTransactionSettings(String(companyName), "sales_invoice", finalPayload);
+        const processingSettings = await loadAndEnforceTransactionSettings(String(companyName), "sales_invoice", finalPayload, { priceBasis });
         const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(String(companyName), "sales_invoice", finalPayload, "generated");
         const settingsWarnings = [
             ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),

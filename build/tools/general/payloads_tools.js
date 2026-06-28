@@ -36,6 +36,30 @@ function requireQuoteCompanyId(companyId) {
 }
 export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION = "Requires saleRepId and saleRepCode. Do not use default or demo sales rep values. If missing, list sales reps or ask the user to choose one before creating.";
 export const SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION = "Requires analysisCategoryId and accountCode from a Sales Analysis category on each product line. Do not default to CR01/Customer or the first listed category. Set confirmCrAnalysisCategory=true only after the user confirms a CR account code is intentional.";
+export const SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION = 'When Gross Price Entry is enabled for sales invoicing, this tool requires priceBasis. Use priceBasis "gross" when unit prices are VAT-inclusive/gross, or priceBasis "net" when unit prices are VAT-exclusive/net. Do not tell the user to disable Gross Price Entry if they have provided priceBasis.';
+export const SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION = "Required when Gross Price Entry is enabled. Use `gross` when unit prices are VAT-inclusive/gross. Use `net` when unit prices are VAT-exclusive/net.";
+/**
+ * Applies an explicit top-level price basis to a raw sales document payload.
+ *
+ * When priceBasis is "gross" or "net", sets useTaxInclusiveUnitPrice on the
+ * payload and on every productTrans line. When priceBasis is omitted, the
+ * payload is returned unchanged so the Gross Price Entry guard can still block
+ * a raw payload that carries no price-basis signal.
+ */
+export function applySalesPriceBasisToRawPayload(payload, priceBasis) {
+    if (priceBasis !== "net" && priceBasis !== "gross") {
+        return payload;
+    }
+    const useTaxInclusiveUnitPrice = priceBasis === "gross";
+    const next = {
+        ...payload,
+        useTaxInclusiveUnitPrice,
+    };
+    if (Array.isArray(next.productTrans)) {
+        next.productTrans = next.productTrans.map((line) => isRecord(line) ? { ...line, useTaxInclusiveUnitPrice } : line);
+    }
+    return next;
+}
 const SALES_ANALYSIS_STOP_PREFIX = "Red stopped before posting because sales analysis details need attention.";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -460,12 +484,24 @@ export function buildPurchasePayload(args) {
     };
 }
 export function buildSalesInvoicePayload(args) {
-    const calculatedNet = round2(args.quantity * args.unitPrice);
-    if (round2(args.netAmount) !== calculatedNet) {
-        throw new Error(`Invoice net amount must equal quantity * unit price. Received netAmount: ${args.netAmount}, calculated netAmount: ${calculatedNet}, quantity: ${args.quantity}, unitPrice: ${args.unitPrice}.`);
+    const priceBasis = args.priceBasis ?? "net";
+    const isGross = priceBasis === "gross";
+    let calculatedNet;
+    let vat;
+    let total;
+    if (isGross) {
+        total = round2(args.quantity * args.unitPrice);
+        calculatedNet = round2(total / (1 + args.vatPercentage / 100));
+        vat = round2(total - calculatedNet);
     }
-    const vat = round2(calculatedNet * (args.vatPercentage / 100));
-    const total = round2(calculatedNet + vat);
+    else {
+        calculatedNet = round2(args.quantity * args.unitPrice);
+        if (round2(args.netAmount) !== calculatedNet) {
+            throw new Error(`Invoice net amount must equal quantity * unit price. Received netAmount: ${args.netAmount}, calculated netAmount: ${calculatedNet}, quantity: ${args.quantity}, unitPrice: ${args.unitPrice}.`);
+        }
+        vat = round2(calculatedNet * (args.vatPercentage / 100));
+        total = round2(calculatedNet + vat);
+    }
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     const resolvedReference = args.reference ?? args.ourReference ?? args.yourReference;
     const payload = {
@@ -483,7 +519,7 @@ export function buildSalesInvoicePayload(args) {
                 vat,
                 vatRateId: args.vatRateId,
                 vatAnalysisTypeId: 1,
-                useTaxInclusiveUnitPrice: false,
+                useTaxInclusiveUnitPrice: isGross,
                 tranNotes: [args.description],
                 acEntries: [
                     {
@@ -499,7 +535,7 @@ export function buildSalesInvoicePayload(args) {
         quoteId: 0,
         saleRepId,
         saleRepCode,
-        useTaxInclusiveUnitPrice: false,
+        useTaxInclusiveUnitPrice: isGross,
         customerId: args.customerId,
         details: null,
         unpaid: total,
