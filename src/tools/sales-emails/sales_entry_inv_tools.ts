@@ -9,7 +9,7 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../../shared.js";
-  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
+  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
 
   import {
     getTransactionSafetyWarnings,
@@ -88,7 +88,7 @@ server.tool(
   
   server.tool(
     "brc_create_sales_invoice",
-    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
+    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       customerId: z.number().int().positive(),
@@ -112,8 +112,8 @@ server.tool(
       reference: z.string().optional(),
       priceBasis: z
         .enum(["net", "gross"])
-        .default("net")
-        .describe("Whether unitPrice is net/VAT-exclusive or gross/VAT-inclusive."),
+        .optional()
+        .describe(SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION),
       confirmCrAnalysisCategory: z
         .boolean()
         .optional()
@@ -132,7 +132,8 @@ server.tool(
         const processingSettings = await loadAndEnforceTransactionSettings(
           String(companyName),
           "sales_invoice",
-          payload
+          payload,
+          { priceBasis: args.priceBasis }
         );
         const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
           String(companyName),
@@ -175,10 +176,14 @@ server.tool(
   );
   server.tool(
     "brc_create_sales_invoice_gen_ref",
-    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION}`,
+    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       payload: z.record(z.string(),z.unknown()),
+      priceBasis: z
+        .enum(["net", "gross"])
+        .optional()
+        .describe(SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION),
       confirmCrAnalysisCategory: z
         .boolean()
         .optional()
@@ -186,8 +191,11 @@ server.tool(
           "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
         ),
     },
-    async ({ companyName, payload, confirmCrAnalysisCategory }) => {
-      const finalPayload = payload as Record<string, unknown>;
+    async ({ companyName, payload, priceBasis, confirmCrAnalysisCategory }) => {
+      const finalPayload = applySalesPriceBasisToRawPayload(
+        payload as Record<string, unknown>,
+        priceBasis
+      );
       requireSalesRepInPayload(finalPayload);
       enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
         confirmCrAnalysisCategory,
@@ -196,7 +204,8 @@ server.tool(
       const processingSettings = await loadAndEnforceTransactionSettings(
         String(companyName),
         "sales_invoice",
-        finalPayload
+        finalPayload,
+        { priceBasis }
       );
       const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
         String(companyName),

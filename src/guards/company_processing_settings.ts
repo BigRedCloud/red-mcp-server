@@ -508,6 +508,22 @@ function readPayloadValue(
   return findValue(record, keys);
 }
 
+/** True when any productTrans line carries an explicit useTaxInclusiveUnitPrice boolean. */
+function productTransStatesPriceBasis(payload: unknown): boolean {
+  const record = payloadRecord(payload);
+  if (!record || !Array.isArray(record.productTrans)) {
+    return false;
+  }
+
+  for (const line of record.productTrans) {
+    if (isRecord(line) && typeof line.useTaxInclusiveUnitPrice === "boolean") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function payloadClearlyStatesGrossOrNetPrice(payload: unknown): boolean {
   const taxInclusiveValue = readPayloadValue(payload, [
     "useTaxInclusiveUnitPrice",
@@ -516,6 +532,10 @@ function payloadClearlyStatesGrossOrNetPrice(payload: unknown): boolean {
   ]);
 
   if (typeof taxInclusiveValue === "boolean") {
+    return true;
+  }
+
+  if (productTransStatesPriceBasis(payload)) {
     return true;
   }
 
@@ -650,10 +670,38 @@ function readStatementMinBalance(payload: unknown): number | undefined {
   );
 }
 
+/**
+ * Explicit price-basis signal supplied as a top-level tool argument.
+ *
+ * This is separate from the payload so the structured sales invoice tool can
+ * tell the guard exactly what the user/model confirmed, even though the built
+ * payload always carries a useTaxInclusiveUnitPrice flag.
+ */
+export interface SalesPriceBasisOptions {
+  priceBasis?: "net" | "gross";
+}
+
+/**
+ * True when there is any explicit signal of whether unit prices are gross or
+ * net: a top-level priceBasis argument, a payload-level price basis, a
+ * useTaxInclusiveUnitPrice boolean, or a productTrans line carrying that flag.
+ */
+function hasExplicitSalesPriceBasis(
+  payload: unknown,
+  options?: SalesPriceBasisOptions
+): boolean {
+  if (options?.priceBasis === "gross" || options?.priceBasis === "net") {
+    return true;
+  }
+
+  return payloadClearlyStatesGrossOrNetPrice(payload);
+}
+
 function enforceSalesDocumentSettings(
   settings: CompanyProcessingSettings,
   payload: unknown,
-  documentLabel: string
+  documentLabel: string,
+  options?: SalesPriceBasisOptions
 ): void {
   if (settings.marginVatSchemeEnabled === true) {
     throw preflightError(
@@ -663,10 +711,10 @@ function enforceSalesDocumentSettings(
 
   if (
     settings.grossPriceSalesInvoicingEnabled === true &&
-    !payloadClearlyStatesGrossOrNetPrice(payload)
+    !hasExplicitSalesPriceBasis(payload, options)
   ) {
     throw preflightError(
-      `Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your line prices are VAT-inclusive (gross) or net. Please confirm whether prices are VAT-inclusive or net before creating the ${documentLabel}.`
+      `Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your unit prices are VAT-inclusive (gross) or net (VAT-exclusive). Retry with priceBasis: "gross" for VAT-inclusive unit prices, or priceBasis: "net" for VAT-exclusive unit prices. Do not disable Gross Price Entry — provide priceBasis instead.`
     );
   }
 }
@@ -709,15 +757,16 @@ function enforceCashReceiptSettings(
 export function enforceTransactionSettingsOrThrow(
   settings: CompanyProcessingSettings,
   workflow: TransactionWorkflow,
-  payload?: unknown
+  payload?: unknown,
+  options?: SalesPriceBasisOptions
 ): void {
   if (workflow === "sales_invoice") {
-    enforceSalesDocumentSettings(settings, payload, "sales invoice");
+    enforceSalesDocumentSettings(settings, payload, "sales invoice", options);
     return;
   }
 
   if (workflow === "sales_credit_note") {
-    enforceSalesDocumentSettings(settings, payload, "sales credit note");
+    enforceSalesDocumentSettings(settings, payload, "sales credit note", options);
     return;
   }
 
@@ -753,9 +802,10 @@ export function enforceTransactionSettingsOrThrow(
 export async function loadAndEnforceTransactionSettings(
   companyName: string,
   workflow: TransactionWorkflow,
-  payload?: unknown
+  payload?: unknown,
+  options?: SalesPriceBasisOptions
 ): Promise<CompanyProcessingSettings> {
   const settings = await getCompanyProcessingSettings(companyName);
-  enforceTransactionSettingsOrThrow(settings, workflow, payload);
+  enforceTransactionSettingsOrThrow(settings, workflow, payload, options);
   return settings;
 }

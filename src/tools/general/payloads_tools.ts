@@ -55,6 +55,43 @@ export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION =
 export const SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION =
   "Requires analysisCategoryId and accountCode from a Sales Analysis category on each product line. Do not default to CR01/Customer or the first listed category. Set confirmCrAnalysisCategory=true only after the user confirms a CR account code is intentional.";
 
+export const SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION =
+  'When Gross Price Entry is enabled for sales invoicing, this tool requires priceBasis. Use priceBasis "gross" when unit prices are VAT-inclusive/gross, or priceBasis "net" when unit prices are VAT-exclusive/net. Do not tell the user to disable Gross Price Entry if they have provided priceBasis.';
+
+export const SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION =
+  "Required when Gross Price Entry is enabled. Use `gross` when unit prices are VAT-inclusive/gross. Use `net` when unit prices are VAT-exclusive/net.";
+
+/**
+ * Applies an explicit top-level price basis to a raw sales document payload.
+ *
+ * When priceBasis is "gross" or "net", sets useTaxInclusiveUnitPrice on the
+ * payload and on every productTrans line. When priceBasis is omitted, the
+ * payload is returned unchanged so the Gross Price Entry guard can still block
+ * a raw payload that carries no price-basis signal.
+ */
+export function applySalesPriceBasisToRawPayload(
+  payload: Record<string, unknown>,
+  priceBasis?: "net" | "gross"
+): Record<string, unknown> {
+  if (priceBasis !== "net" && priceBasis !== "gross") {
+    return payload;
+  }
+
+  const useTaxInclusiveUnitPrice = priceBasis === "gross";
+  const next: Record<string, unknown> = {
+    ...payload,
+    useTaxInclusiveUnitPrice,
+  };
+
+  if (Array.isArray(next.productTrans)) {
+    next.productTrans = next.productTrans.map((line) =>
+      isRecord(line) ? { ...line, useTaxInclusiveUnitPrice } : line
+    );
+  }
+
+  return next;
+}
+
 export type SalesDocumentAnalysisWorkflow =
   | "sales_invoice"
   | "sales_credit_note"
