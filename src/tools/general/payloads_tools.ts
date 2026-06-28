@@ -221,6 +221,75 @@ export function enforceSalesProductLineAnalysisOrThrow(
   }
 }
 
+/**
+ * Placeholder product IDs that BRC rejects with a 500 error when posted on a
+ * sales document product line. These are commonly emitted by models as filler
+ * values instead of a real product from brc_list_products.
+ */
+export const PLACEHOLDER_PRODUCT_IDS = new Set<number>([0, 1]);
+
+export const SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION =
+  "Do not invent productId values and do not use productId 0 or 1 as placeholders. If a product line is needed, first call brc_list_products and use a real product from the connected company. If no suitable product exists, ask the user whether to create/select a product, or use a service/non-product line only if the endpoint supports it.";
+
+function readLineProductId(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const id = Number(value);
+  return Number.isFinite(id) ? id : undefined;
+}
+
+/**
+ * Collects the productId from each sales document product line where a productId
+ * is actually present. Prefers a productTrans array, otherwise falls back to a
+ * flat/top-level product line shape (used by structured args and batch items).
+ */
+function collectSalesProductLineProductIds(payload: unknown): number[] {
+  if (!isRecord(payload)) {
+    return [];
+  }
+
+  const ids: number[] = [];
+
+  if (Array.isArray(payload.productTrans) && payload.productTrans.length > 0) {
+    for (const line of payload.productTrans) {
+      if (!isRecord(line)) {
+        continue;
+      }
+      const id = readLineProductId(line.productId);
+      if (id !== undefined) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  if (payload.productId !== undefined) {
+    const id = readLineProductId(payload.productId);
+    if (id !== undefined) {
+      ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
+/**
+ * Blocks sales document posting when a product line carries a placeholder
+ * productId (0 or 1). Only blocks when productId is actually present, so
+ * service/non-product lines that omit productId are unaffected.
+ */
+export function enforceSalesProductLineProductIdOrThrow(payload: unknown): void {
+  for (const productId of collectSalesProductLineProductIds(payload)) {
+    if (PLACEHOLDER_PRODUCT_IDS.has(productId)) {
+      throw new Error(
+        `Red stopped before posting because a product line uses placeholder productId ${productId}. Select a real product from brc_list_products before posting, or omit productId only if the BRC endpoint supports non-product service lines. Do not use placeholder productId values such as 0 or 1.`
+      );
+    }
+  }
+}
+
 export function requireSalesRepFields(
   saleRepId: number | undefined,
   saleRepCode: string | undefined

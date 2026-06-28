@@ -27,6 +27,7 @@ import {
   buildCustomerLikePayload,
   buildProductPayload,
   enforceSalesProductLineAnalysisOrThrow,
+  enforceSalesProductLineProductIdOrThrow,
   normalizeBatchItems,
   unwrapPayload,
   type SalesDocumentAnalysisWorkflow,
@@ -390,6 +391,7 @@ export function registerRawBatchTool(
             raw.confirmCrAnalysisCategory === true;
 
           try {
+            enforceSalesProductLineProductIdOrThrow(raw);
             enforceSalesProductLineAnalysisOrThrow(raw, salesAnalysisWorkflow, {
               confirmCrAnalysisCategory,
             });
