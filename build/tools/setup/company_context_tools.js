@@ -28,7 +28,7 @@ export function registerCompanyContextTools(server) {
             "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
         ].join("\n"));
     });
-    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.", {
+    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.", {
         code: z
             .string()
             .min(1)
@@ -183,7 +183,7 @@ export function registerCompanyContextTools(server) {
             connected: false,
         });
     });
-    server.tool("brc_clear_all_company_api_keys", "Clears all API keys for all company contexts from MCP server memory.", {}, async () => {
+    server.tool("brc_clear_all_company_api_keys", "Clears all connection credentials for all company contexts from MCP server memory.", {}, async () => {
         const count = clearAllCompanyCredentials();
         return jsonResponse({
             message: "Cleared all connected company credentials from this MCP session.",
@@ -192,7 +192,7 @@ export function registerCompanyContextTools(server) {
         });
     });
     if (redServerConfig.allowDevMode) {
-        server.tool("brc_get_connection_store_diagnostics", "Internal operator diagnostic for Red connection persistence. Returns store type, session/connection id presence, and connected company count. Never exposes API keys or secrets.", {}, async () => {
+        server.tool("brc_get_connection_store_diagnostics", "Internal operator diagnostic for Red connection persistence. Returns store type, session/connection id presence, and connected company count. Never exposes connection credentials or secrets.", {}, async () => {
             await ensureConnectionStoreInitialized();
             const diagnostics = await getConnectionStore().getDiagnostics({
                 sessionId: getCurrentMcpSessionId(),

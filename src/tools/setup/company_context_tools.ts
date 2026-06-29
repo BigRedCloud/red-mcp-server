@@ -72,7 +72,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_confirm_company_connection",
-    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.",
+    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.",
     {
       code: z
         .string()
@@ -287,7 +287,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_clear_all_company_api_keys",
-    "Clears all API keys for all company contexts from MCP server memory.",
+    "Clears all connection credentials for all company contexts from MCP server memory.",
     {},
     async () => {
       const count = clearAllCompanyCredentials();
@@ -302,7 +302,7 @@ export function registerCompanyContextTools(server: ServerType) {
   if (redServerConfig.allowDevMode) {
     server.tool(
       "brc_get_connection_store_diagnostics",
-      "Internal operator diagnostic for Red connection persistence. Returns store type, session/connection id presence, and connected company count. Never exposes API keys or secrets.",
+      "Internal operator diagnostic for Red connection persistence. Returns store type, session/connection id presence, and connected company count. Never exposes connection credentials or secrets.",
       {},
       async () => {
         await ensureConnectionStoreInitialized();
