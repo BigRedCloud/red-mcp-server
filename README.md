@@ -273,7 +273,7 @@ Batch variants exist for the main create workflows and apply the same safety che
 ---
 ## Maintainers
 
-This project is maintained by the Big Red Cloud's software development team.
+This project is maintained by the Big Red Cloud software development team.
 
 ---
 

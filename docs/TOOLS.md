@@ -50,7 +50,7 @@ src/
 - **`src/shared.ts`** — The Big Red Cloud HTTP client (`brcFetch`, JSON request helpers), session-scoped connection storage, the session audit log, list/response helpers, and user-facing status wording.
 - **`src/config/server_config.ts`** — Classifies each tool into a skill group and decides whether it is enabled, based on the `BRC_ALLOW_*` flags.
 - **`src/config/mcp_config.ts`** — Server instructions and connection-safety rules surfaced to MCP clients.
-- **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory and an optional persistent backend), connection codes, and credential handling. API keys are never returned to clients.
+- **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory and an optional persistent backend), connection codes, and credential handling. Connection credentials are never returned to clients.
 
 ---
 
