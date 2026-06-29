@@ -3,13 +3,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   clearRedAuditLog,
   getRedAuditLog,
+  RED_ACTIVITY_SCOPE_INSTRUCTION,
   textResponse,
 } from "../shared.js";
 
 export function registerAuditTools(server: McpServer) {
   server.tool(
     "brc_list_audit_log",
-    "Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red MCP server session. Read-only API calls are not logged.",
+    `Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red MCP server session. Read-only API calls are not logged. Use this as the source of truth for "what did I do today in Red?" style questions. ${RED_ACTIVITY_SCOPE_INSTRUCTION}`,
     {
       includeTechnicalDetails: z
         .boolean()

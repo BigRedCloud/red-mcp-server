@@ -179,6 +179,14 @@ function numberOrUnknown(value: number | undefined): string {
   return value === undefined ? "Unknown" : String(value);
 }
 
+/**
+ * Formats the VAT discrepancy tolerance with a currency unit so warnings never
+ * read like a bare "VAT discrepancy tolerance is 1" with no unit.
+ */
+export function formatVatDiscrepancyTolerance(value: number): string {
+  return `${value.toFixed(2)} EUR (the maximum rounding difference allowed between supplied and calculated VAT)`;
+}
+
 function textOrUnknown(value: string | undefined): string {
   return value === undefined ? "Unknown" : value;
 }
@@ -400,7 +408,7 @@ export function getTransactionSafetyWarnings(
 
     if (settings.vatDiscrepancyAllowed !== undefined) {
       warnings.push(
-        `VAT discrepancy tolerance is ${settings.vatDiscrepancyAllowed}. Check supplied VAT amounts against this tolerance where VAT is manually provided.`
+        `VAT discrepancy tolerance is ${formatVatDiscrepancyTolerance(settings.vatDiscrepancyAllowed)}. Check supplied VAT amounts against this tolerance where VAT is manually provided.`
       );
     }
   }
@@ -408,19 +416,19 @@ export function getTransactionSafetyWarnings(
   if (workflow === "sales_invoice" || workflow === "sales_credit_note") {
     if (settings.grossPriceSalesInvoicingEnabled === true) {
       warnings.push(
-        "Gross Price Entry is enabled for sales invoicing. Confirm whether line prices are VAT-inclusive gross prices or net prices before creating the invoice."
+        "Gross Price Entry is enabled for sales invoicing. Before creating the invoice, confirm whether the prices entered are VAT-inclusive/gross or VAT-exclusive/net. Say 'gross' if the prices include VAT, or 'net' if the prices exclude VAT."
       );
     }
 
     if (settings.grossPriceSalesInvoicingEnabled === false) {
       warnings.push(
-        "Gross Price Entry is not enabled for sales invoicing. Treat line prices as net prices unless the user explicitly asks for VAT-inclusive calculation."
+        "Gross Price Entry is not enabled for sales invoicing. Treat line prices as net (VAT-exclusive) prices unless the user explicitly asks for VAT-inclusive calculation."
       );
     }
 
     if (settings.reverseChargeCreditInputEnabled === true) {
       warnings.push(
-        "Credit Input for Reverse Charge VAT is enabled. Check EU/reverse-charge VAT treatment before creating relevant sales documents."
+        "Credit Input for Reverse Charge VAT is enabled. Before posting, check whether EU or reverse-charge VAT applies to this sale; if it does, confirm the correct VAT treatment with the user rather than assuming standard domestic VAT."
       );
     }
   }
@@ -428,7 +436,7 @@ export function getTransactionSafetyWarnings(
   if (workflow === "purchase") {
     if (settings.reverseChargeCreditInputEnabled === true) {
       warnings.push(
-        "Credit Input for Reverse Charge VAT is enabled. Check reverse-charge VAT treatment before creating relevant purchase transactions."
+        "Credit Input for Reverse Charge VAT is enabled. Before posting, check whether EU or reverse-charge VAT applies to this purchase; if it does, confirm the correct VAT treatment with the user rather than assuming standard domestic VAT."
       );
     }
   }
@@ -714,7 +722,7 @@ function enforceSalesDocumentSettings(
     !hasExplicitSalesPriceBasis(payload, options)
   ) {
     throw preflightError(
-      `Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether your unit prices are VAT-inclusive (gross) or net (VAT-exclusive). Retry with priceBasis: "gross" for VAT-inclusive unit prices, or priceBasis: "net" for VAT-exclusive unit prices. Do not disable Gross Price Entry — provide priceBasis instead.`
+      `Gross Price Entry is enabled in Big Red Cloud. Red stopped before posting because it is unclear whether the prices entered are VAT-inclusive/gross or VAT-exclusive/net. Say 'gross' if the prices include VAT, or 'net' if the prices exclude VAT, then retry with priceBasis: "gross" for VAT-inclusive unit prices, or priceBasis: "net" for VAT-exclusive unit prices. Do not disable Gross Price Entry — provide priceBasis instead.`
     );
   }
 }

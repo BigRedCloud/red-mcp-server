@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
+import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
 import { getTransactionSafetyWarnings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
 import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
+import { enforceSalesVatCategoryOrThrow } from "../../guards/sales_vat_category.js";
 export function registerSalesEntryInvoiceTools(server) {
     // Sales entry tools ----------------------------------------------------------
     server.tool("brc_create_sales_entry", "Creates a BRC sales entry using structured MCP fields.", {
@@ -27,8 +28,8 @@ export function registerSalesEntryInvoiceTools(server) {
     server.tool("brc_update_sales_entry", "Updates a BRC sales entry using structured safe text/reference fields.", {
         companyName: companyNameSchema,
         id: z.union([z.string(), z.number()]).describe("Sales entry id."),
-        note: z.string().optional(),
-        reference: z.string().optional(),
+        note: z.string().optional().describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
+        reference: z.string().optional().describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
     }, async ({ companyName, id, note, reference }) => {
         const current = await brcFetch(companyName, `/v1/salesEntries/${encodeURIComponent(id)}`);
         if (!current || typeof current !== "object" || Array.isArray(current))
@@ -57,27 +58,32 @@ export function registerSalesEntryInvoiceTools(server) {
         return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
     });
     // Sales invoice tools --------------------------------------------------------
-    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`, {
         companyName: companyNameSchema,
         customerId: z.number().int().positive(),
+        customerName: z.string().optional().describe(SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION),
         acCode: z.string(),
-        note: z.string(),
+        note: z.string().optional().describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
+        deliveryTo: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe(SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION),
         entryDate: z.string(),
         procDate: z.string(),
         bookTranTypeId: z.number().int().positive(),
         analysisCategoryId: z.number().int().positive(),
         accountCode: z.string().min(1),
-        description: z.string(),
+        description: z.string().describe(SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION),
         netAmount: z.number().positive(),
         vatRateId: z.number().int().positive(),
         vatPercentage: z.number(),
-        productId: z.number().int().positive(),
-        productCode: z.string(),
+        productId: z.number().int().positive().describe(SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION),
+        productCode: z.string().describe(SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION),
         quantity: z.number().int().positive(),
         unitPrice: z.number().positive(),
         saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
         saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
-        reference: z.string().optional(),
+        reference: z.string().optional().describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
         priceBasis: z
             .enum(["net", "gross"])
             .optional()
@@ -91,6 +97,7 @@ export function registerSalesEntryInvoiceTools(server) {
         try {
             payload = buildSalesInvoicePayload(args);
             enforceSalesProductLineProductIdOrThrow(payload);
+            await enforceSalesVatCategoryOrThrow(String(companyName), payload);
             enforceSalesProductLineAnalysisOrThrow(payload, "sales_invoice", {
                 confirmCrAnalysisCategory,
             });
@@ -120,7 +127,7 @@ export function registerSalesEntryInvoiceTools(server) {
             });
         }
     });
-    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`, {
+    server.tool("brc_create_sales_invoice_gen_ref", `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`, {
         companyName: companyNameSchema,
         payload: z.record(z.string(), z.unknown()),
         priceBasis: z
@@ -135,6 +142,7 @@ export function registerSalesEntryInvoiceTools(server) {
         const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
         requireSalesRepInPayload(finalPayload);
         enforceSalesProductLineProductIdOrThrow(finalPayload);
+        await enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
         enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
             confirmCrAnalysisCategory,
         });
@@ -156,8 +164,8 @@ export function registerSalesEntryInvoiceTools(server) {
     server.tool("brc_update_sales_invoice", "Updates a BRC sales invoice using structured safe text/reference fields.", {
         companyName: companyNameSchema,
         id: z.union([z.string(), z.number()]).describe("Sales invoice id."),
-        note: z.string().optional(),
-        reference: z.string().optional(),
+        note: z.string().optional().describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
+        reference: z.string().optional().describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
     }, async ({ companyName, id, note, reference }) => {
         const current = await brcFetch(companyName, `/v1/salesInvoices/${encodeURIComponent(id)}`);
         if (!current || typeof current !== "object" || Array.isArray(current))

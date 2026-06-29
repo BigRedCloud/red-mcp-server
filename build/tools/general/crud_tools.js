@@ -2,7 +2,8 @@ import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
 import { enforceTransactionSettingsOrThrow, getCompanyProcessingSettings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
 import { enforceReferenceSettingsOrThrow, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
-import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildProductPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, unwrapPayload, } from "./payloads_tools.js";
+import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildProductPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, unwrapPayload, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, } from "./payloads_tools.js";
+import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "../../guards/sales_vat_category.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
 import { getMaxBatchItems } from "../../config/server_config.js";
 //Removed opening balance fields from payload --> don't prompt customer for customer opening balance because there is no API that will POST it
@@ -182,7 +183,15 @@ export function registerRawBatchTool(server, toolName, description, path) {
         items: z.array(z.record(z.string(), z.unknown())).min(1)
             .max(maxBatchItems)
             .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
-    }, async ({ companyName, items }) => {
+        confirmCrAnalysisCategory: z
+            .boolean()
+            .optional()
+            .describe("Applies to every sales document item in this batch. Set true only after the user confirms a CR (customer) sales analysis account code is intentional for these product lines."),
+        priceBasis: z
+            .enum(["net", "gross"])
+            .optional()
+            .describe(`Applies to every sales invoice/credit note item in this batch. ${SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION}`),
+    }, async ({ companyName, items, confirmCrAnalysisCategory, priceBasis }) => {
         if (items.length > maxBatchItems) {
             throw new Error(`Batch limit exceeded. Red allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`);
         }
@@ -197,7 +206,7 @@ export function registerRawBatchTool(server, toolName, description, path) {
             for (let index = 0; index < items.length; index++) {
                 const raw = extractBatchItemPayload(items[index]);
                 try {
-                    enforceTransactionSettingsOrThrow(processingSettings, transactionWorkflow, raw);
+                    enforceTransactionSettingsOrThrow(processingSettings, transactionWorkflow, raw, { priceBasis });
                 }
                 catch (error) {
                     preflightFailures.push(`Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
@@ -230,12 +239,13 @@ export function registerRawBatchTool(server, toolName, description, path) {
             for (let index = 0; index < items.length; index++) {
                 const entry = items[index];
                 const raw = extractBatchItemPayload(entry);
-                const confirmCrAnalysisCategory = entry.confirmCrAnalysisCategory === true ||
+                const itemConfirmCrAnalysisCategory = confirmCrAnalysisCategory === true ||
+                    entry.confirmCrAnalysisCategory === true ||
                     raw.confirmCrAnalysisCategory === true;
                 try {
                     enforceSalesProductLineProductIdOrThrow(raw);
                     enforceSalesProductLineAnalysisOrThrow(raw, salesAnalysisWorkflow, {
-                        confirmCrAnalysisCategory,
+                        confirmCrAnalysisCategory: itemConfirmCrAnalysisCategory,
                     });
                 }
                 catch (error) {
@@ -246,7 +256,35 @@ export function registerRawBatchTool(server, toolName, description, path) {
                 throw new Error(`Red stopped before posting the batch because ${preflightFailures.length} item(s) failed sales analysis preflight checks:\n${preflightFailures.join("\n")}`);
             }
         }
-        const normalizedItems = normalizeBatchItems(path, items, {
+        if (path === "/v1/salesInvoices") {
+            const salesVatContext = await loadSalesVatCategoryContext(companyName);
+            const preflightFailures = [];
+            for (let index = 0; index < items.length; index++) {
+                const raw = extractBatchItemPayload(items[index]);
+                try {
+                    assertSalesVatRatesOrThrow(raw, salesVatContext);
+                }
+                catch (error) {
+                    preflightFailures.push(`Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            if (preflightFailures.length > 0) {
+                throw new Error(`Red stopped before posting the batch because ${preflightFailures.length} item(s) failed Sales VAT category checks:\n${preflightFailures.join("\n")}`);
+            }
+        }
+        const itemsForNormalization = priceBasis && (path === "/v1/salesInvoices" || path === "/v1/salesCreditNotes")
+            ? items.map((entry) => {
+                const inner = entry.item ?? entry.Item;
+                if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+                    return {
+                        ...entry,
+                        item: { priceBasis, ...inner },
+                    };
+                }
+                return { priceBasis, ...entry };
+            })
+            : items;
+        const normalizedItems = normalizeBatchItems(path, itemsForNormalization, {
             vatOnCashReceiptEnabled,
         });
         const response = await brcJsonRequest(companyName, "PUT", `${path}/batch`, normalizedItems);

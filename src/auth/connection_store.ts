@@ -220,7 +220,7 @@ export async function claimConnectionCodeForSession(
   const trimmedCode = code.trim();
   if (!trimmedCode) {
     throw new ClaimConnectionError(
-      "A connection code is required. Please start a new company connection and try again.",
+      "A connection code is required. Please ask for a new secure Red connection link and try again.",
       "not_found"
     );
   }
@@ -230,7 +230,7 @@ export async function claimConnectionCodeForSession(
 
   if (!pending) {
     throw new ClaimConnectionError(
-      "That connection code is missing, invalid, or has already been used. Please start a new company connection and try again.",
+      "That connection code is missing, incorrect, or has already been used. Please ask for a new secure Red connection link and try again.",
       "not_found"
     );
   }

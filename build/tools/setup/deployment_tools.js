@@ -128,6 +128,44 @@ function dateWithinRange(dateOnly, start, end) {
         return null;
     return dateOnly >= start && dateOnly <= end;
 }
+/**
+ * Builds the customer-facing transaction date validation result. Returns a
+ * success message when the date is within the current financial year, and an
+ * actionable message (distinguishing before/after where possible) otherwise, so
+ * the model does not invent wording.
+ */
+export function buildTransactionDateValidation(transactionDate, start, end) {
+    const inFinancialYear = dateWithinRange(transactionDate, start, end);
+    if (inFinancialYear === true) {
+        return {
+            inFinancialYear,
+            position: "within",
+            message: "This transaction date is within the current financial year.",
+        };
+    }
+    if (inFinancialYear === false) {
+        let position = "unknown";
+        let detail = "";
+        if (start && transactionDate < start) {
+            position = "before";
+            detail = " The date falls before the current financial year starts.";
+        }
+        else if (end && transactionDate > end) {
+            position = "after";
+            detail = " The date falls after the current financial year ends.";
+        }
+        return {
+            inFinancialYear,
+            position,
+            message: `This transaction date is outside the company's current financial year.${detail} Please choose a date within the current financial year before creating the transaction.`,
+        };
+    }
+    return {
+        inFinancialYear,
+        position: "unknown",
+        message: "Red could not determine the company's current financial year, so this transaction date could not be checked. Please verify the financial year in Big Red Cloud before creating the transaction.",
+    };
+}
 function envFlag(name, defaultValue = false) {
     const value = process.env[name];
     if (value === undefined)
@@ -428,15 +466,14 @@ export function registerDeploymentTools(server) {
             brcFetch(companyName, "/v1/companySetupConfig"),
         ]);
         const financialYear = deriveFinancialYear(financialYearData, setupData);
-        const inRange = dateWithinRange(transactionDate, financialYear.start, financialYear.end);
+        const validation = buildTransactionDateValidation(transactionDate, financialYear.start, financialYear.end);
         return jsonResponse({
             companyName,
             transactionDate,
             financialYear,
-            inFinancialYear: inRange,
-            warning: inRange === false
-                ? "This transaction date is outside the company's current financial year and BRC may reject create/generate requests."
-                : undefined,
+            inFinancialYear: validation.inFinancialYear,
+            position: validation.position,
+            message: validation.message,
         });
     });
     server.tool("brc_company_readiness_check", "Checks whether a connected Big Red Cloud company appears ready for read-only and transaction workflows. Highlights financial-year, VAT and reference-data considerations.", {

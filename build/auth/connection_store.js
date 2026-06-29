@@ -136,12 +136,12 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     await ensureConnectionStoreInitialized();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
-        throw new ClaimConnectionError("A connection code is required. Please start a new company connection and try again.", "not_found");
+        throw new ClaimConnectionError("A connection code is required. Please ask for a new secure Red connection link and try again.", "not_found");
     }
     const store = getConnectionStore();
     const pending = await store.getConnectionByCode(trimmedCode);
     if (!pending) {
-        throw new ClaimConnectionError("That connection code is missing, invalid, or has already been used. Please start a new company connection and try again.", "not_found");
+        throw new ClaimConnectionError("That connection code is missing, incorrect, or has already been used. Please ask for a new secure Red connection link and try again.", "not_found");
     }
     if (!pending.used) {
         throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.", "not_completed");

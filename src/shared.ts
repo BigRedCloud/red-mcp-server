@@ -607,6 +607,54 @@ export function jsonResponse(data: unknown) {
   return textResponse(JSON.stringify(data, null, 2));
 }
 
+/**
+ * Converts an HTTP status into plain, customer-facing wording so responses do
+ * not expose raw status codes such as "201 Created", "204" or "401"/"401s".
+ *
+ * - 201 => "created successfully"
+ * - 200 / 204 => "saved successfully"
+ * - 401 / 403 => "the connection was no longer valid and needed to be refreshed"
+ *
+ * Only pass includeTechnicalDetails=true when the user explicitly asks for
+ * technical/API/HTTP details.
+ */
+export function describeWriteStatusForUser(
+  status: number,
+  options?: { includeTechnicalDetails?: boolean }
+): string {
+  let phrase: string;
+
+  if (status === 201) {
+    phrase = "created successfully";
+  } else if (status === 200 || status === 204) {
+    phrase = "saved successfully";
+  } else if (status === 401 || status === 403) {
+    phrase = "the connection was no longer valid and needed to be refreshed";
+  } else if (status >= 200 && status < 300) {
+    phrase = "completed successfully";
+  } else if (status >= 500) {
+    phrase = "could not be completed because Big Red Cloud had a problem";
+  } else {
+    phrase = "could not be completed";
+  }
+
+  if (options?.includeTechnicalDetails) {
+    return `${phrase} (HTTP ${status})`;
+  }
+
+  return phrase;
+}
+
+/**
+ * Scoping guidance for "what did I do today in Red?" style questions. Answers
+ * must come only from Red/BRC activity (audit log, BRC session actions,
+ * connector-visible BRC activity) and must not mix in unrelated Claude chat
+ * history (MCP debugging, Mistral debugging, coding work, or other non-BRC
+ * conversations) unless the user explicitly asks for broader chat history.
+ */
+export const RED_ACTIVITY_SCOPE_INSTRUCTION =
+  'When the user asks what they did "in Red" (or in Big Red Cloud), answer only from Red/BRC activity: the Red/BRC audit log, BRC session actions, and connector-visible BRC activity. Do not include unrelated Claude chat history such as MCP debugging, Mistral debugging, coding work, or other non-BRC conversations unless the user explicitly asks for broader chat history.';
+
 export function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -995,6 +1043,14 @@ export async function brcFetch(
   const text = await response.text();
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        `BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(
+          response.status
+        )}. Ask the user to reconnect the company using the secure Red connection page; do not ask the user to paste an API key into chat.`
+      );
+    }
+
     throw new Error(
       `BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`
     );
@@ -1004,6 +1060,7 @@ export async function brcFetch(
 
   if (!text.trim()) {
     parsedBody = {
+      message: describeWriteStatusForUser(response.status),
       statusCode: response.status,
       statusText: response.statusText,
     };

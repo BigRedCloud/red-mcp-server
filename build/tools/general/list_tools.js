@@ -84,11 +84,11 @@ export function registerTools(server) {
     registerListTool(server, "brc_list_purchases", "Lists BRC purchases.", "/v1/purchases");
     registerGetTool(server, "brc_get_purchase", "Gets one BRC purchase by id.", "/v1/purchases", "Purchase");
     // Analysis Categories
-    registerListTool(server, "brc_list_analysis_categories", "Lists BRC analysis categories.", "/v1/analysisCategories");
+    registerListTool(server, "brc_list_analysis_categories", "Lists BRC analysis categories. For sales invoice and sales credit note product lines, choose a Sales analysis category that matches the income type. Do not default to a CR/customer category such as CR01 Customer — CR categories are customer control categories, not sales categories. If no clearly correct Sales category stands out, ask the user instead of picking the first plausible-looking one.", "/v1/analysisCategories");
     // VAT Rates
-    registerListTool(server, "brc_list_vat_rates", "Lists BRC VAT rates.", "/v1/vatRates");
+    registerListTool(server, "brc_list_vat_rates", "Lists BRC VAT rates. Each rate belongs to a VAT category via vatCategoryId (for example Sales, Purchases for Resale, Purchases not for Resale). For a sales invoice or sales credit note line, use a VAT rate whose vatCategoryId is a Sales VAT category, even if a purchase rate has the same percentage. Cross-reference brc_list_vat_categories to group rates by Sales vs Purchase category before choosing.", "/v1/vatRates");
     registerListTool(server, "brc_list_vat_analysis_types", "Lists BRC VAT analysis types.", "/v1/vatAnalysisTypes");
-    registerListTool(server, "brc_list_vat_categories", "Lists BRC VAT categories.", "/v1/vatCategories");
+    registerListTool(server, "brc_list_vat_categories", "Lists BRC VAT categories (for example Sales, Purchases for Resale, Purchases not for Resale). Use this to tell which VAT category a VAT rate belongs to. Sales invoices and sales credit notes must use VAT rates from a Sales VAT category, not a purchase category.", "/v1/vatCategories");
     registerListTool(server, "brc_list_vat_types", "Lists BRC VAT types.", "/v1/vatTypes");
     // Company Settings
     registerListTool(server, "brc_list_company_settings", "Lists BRC company settings.", "/v1/companySettings");

@@ -75,7 +75,7 @@ function buildMissingOrNotProvidedSection(missingLabels: string[]): string {
     "Missing or not provided:",
     ...missingLabels.map((label) => `- ${label}`),
     "",
-    "These contact fields are warnings only for create/post. Red must not invent missing phone or email values.",
+    "These contact fields are warnings only for create/post. These values will not be invented.",
     "Missing customer email does not block create/post, but email sending will require a recipient override unless a customer email is on file.",
   ].join("\n");
 }
@@ -84,12 +84,12 @@ function buildContactWarning(label: string): string {
   if (label === "Customer email") {
     return [
       `${label} is missing or not provided.`,
-      "Red will not invent this value.",
+      "This value will not be invented.",
       "You can still create or post the document, but email sending will require a recipient override unless a customer email is added later.",
     ].join(" ");
   }
 
-  return `${label} is missing or not provided. Red will not invent this value.`;
+  return `${label} is missing or not provided. This value will not be invented.`;
 }
 
 export async function buildQuoteOrSalesInvoiceDraftDetails(

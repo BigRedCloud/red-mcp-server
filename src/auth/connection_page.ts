@@ -525,7 +525,7 @@ export function renderSuccessPage(connectedNames: string[], code: string): strin
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
         <div class="next-step">
-          Connection complete. Return to your AI assistant and paste this confirmation command: <strong>Confirm connection code ${escapeHtml(code)}</strong>
+          Connection complete. Return to this chat and copy/paste this confirmation code: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>
       </div>`;
 

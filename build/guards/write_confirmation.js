@@ -2,6 +2,67 @@ import { z } from "zod";
 import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "../shared.js";
+import { enforceSalesProductLineProductIdOrThrow } from "../tools/general/payloads_tools.js";
+import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "./sales_vat_category.js";
+/** Sales invoice write tools where lines must use a Sales VAT rate before any draft preview or post. */
+const SALES_DOCUMENT_VAT_PREFLIGHT_TOOLS = new Set([
+    "brc_create_sales_invoice",
+    "brc_create_sales_invoice_gen_ref",
+    "brc_batch_sales_invoices",
+]);
+/**
+ * Runs the Sales VAT category guard before any draft/confirmation preview or
+ * post. A purchase/non-Sales VAT rate is blocked immediately so the wrong
+ * vatRateId never reaches payloadPreview. Requires a connected company; without
+ * one the guard is skipped and the pre-post backstop still applies.
+ */
+async function runSalesDocumentSalesVatPreflight(toolName, companyName, args) {
+    if (!SALES_DOCUMENT_VAT_PREFLIGHT_TOOLS.has(toolName) || !companyName) {
+        return;
+    }
+    const context = await loadSalesVatCategoryContext(companyName);
+    const bodies = toolName.startsWith("brc_batch_") && getBatchItems(args).length > 0
+        ? getBatchItems(args).map((entry) => extractBatchItemBody(entry))
+        : [getWriteBody(args)];
+    for (const body of bodies) {
+        assertSalesVatRatesOrThrow(body, context);
+    }
+}
+/** Sales-document write tools whose product lines must never carry placeholder productId 0/1. */
+const SALES_DOCUMENT_PRODUCT_LINE_TOOLS = new Set([
+    "brc_create_sales_invoice",
+    "brc_create_sales_invoice_gen_ref",
+    "brc_create_sales_credit_note",
+    "brc_create_sales_credit_note_gen_ref",
+    "brc_create_quote",
+    "brc_create_quote_gen_ref",
+    "brc_batch_sales_invoices",
+    "brc_batch_sales_credit_notes",
+    "brc_batch_quotes",
+]);
+/**
+ * Runs the placeholder productId guard before any draft preview or post so a
+ * placeholder productId (0 or 1) can never reach payloadPreview or BRC. Throws a
+ * customer-facing error when a placeholder is present.
+ */
+function runSalesDocumentProductIdPreflight(toolName, args) {
+    if (!SALES_DOCUMENT_PRODUCT_LINE_TOOLS.has(toolName)) {
+        return;
+    }
+    const bodies = toolName.startsWith("brc_batch_") && getBatchItems(args).length > 0
+        ? getBatchItems(args).map((entry) => extractBatchItemBody(entry))
+        : [getWriteBody(args)];
+    for (const body of bodies) {
+        enforceSalesProductLineProductIdOrThrow(body);
+    }
+}
+function extractBatchItemBody(entry) {
+    const inner = entry.item ?? entry.Item;
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        return inner;
+    }
+    return entry;
+}
 const WRITE_CONFIRMATION_SKILL_GROUPS = new Set([
     "update",
     "delete",
@@ -253,10 +314,12 @@ async function validateCounterpartyForWrite(args) {
         return null;
     }
     const label = counterpartyLabel(kind);
-    const hint = counterpartyNameHint(getWriteBody(args.payload));
-    const exampleQuestion = hint
-        ? `I need the ${label} before I can prepare this draft for posting. Did you want to use ${hint} from the previous draft, or choose another ${label}?`
-        : `I need the ${label} before I can prepare this draft for posting. Which ${label} should be used?`;
+    const isBatch = args.toolName.startsWith("brc_batch_");
+    const batchHints = isBatch ? collectBatchCounterpartyHints(bodies) : [];
+    const hint = isBatch
+        ? batchHints[0]
+        : counterpartyNameHint(getWriteBody(args.payload));
+    const exampleQuestion = buildCounterpartyQuestion(label, isBatch, batchHints, hint);
     return jsonResponse(await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
         status: "counterparty_confirmation_required",
         message: [
@@ -264,6 +327,12 @@ async function validateCounterpartyForWrite(args) {
             "",
             "Do not silently carry over a customer or supplier from an earlier draft.",
             "Do not pass confirmWrite: true until the counterparty has been explicitly confirmed.",
+            ...(isBatch && batchHints.length > 1
+                ? [
+                    "",
+                    `This batch covers ${batchHints.length} ${label}s. Confirming applies to all of them, not just the first: ${batchHints.join(", ")}.`,
+                ]
+                : []),
             "",
             `Ask the user in plain English, for example: "${exampleQuestion}"`,
             "",
@@ -274,11 +343,39 @@ async function validateCounterpartyForWrite(args) {
         counterpartyKind: kind,
         counterpartyLabel: label,
         suggestedCounterpartyName: hint,
+        batchCounterpartyNames: isBatch ? batchHints : undefined,
         exampleUserQuestion: exampleQuestion,
         payloadPreview: buildWritePayloadPreview(args.payload),
         confirmationField: "confirmCounterpartyExplicit",
         confirmWriteRequiresExplicitCounterparty: true,
     }));
+}
+function collectBatchCounterpartyHints(bodies) {
+    const names = new Set();
+    for (const body of bodies) {
+        const hint = counterpartyNameHint(body);
+        if (hint) {
+            names.add(hint);
+        }
+    }
+    return [...names];
+}
+/**
+ * Builds the plain-English confirmation question. For a batch covering several
+ * customers it makes clear the user is confirming all of them, not just one.
+ */
+function buildCounterpartyQuestion(label, isBatch, batchHints, hint) {
+    if (isBatch && batchHints.length > 1) {
+        return `Please confirm all ${label}s for this batch before I prepare the final draft: ${batchHints.join(", ")}. Should I prepare drafts for all of these ${label}s?`;
+    }
+    if (label === "customer") {
+        return hint
+            ? `Please confirm the customer for this invoice before I prepare the final draft. Did you want to use ${hint}, or choose another customer?`
+            : "Please confirm the customer for this invoice before I prepare the final draft.";
+    }
+    return hint
+        ? `I need the ${label} before I can prepare this draft for posting. Did you want to use ${hint} from the previous draft, or choose another ${label}?`
+        : `I need the ${label} before I can prepare this draft for posting. Which ${label} should be used?`;
 }
 function writeActionLabel(toolName) {
     const group = getToolSkillGroup(toolName);
@@ -394,21 +491,14 @@ async function enrichWriteConfirmationResponse(toolName, companyName, payload, r
     if (!draftDetails.documentDraftDetails) {
         return response;
     }
-    const nextMessage = typeof response.message === "string" && draftDetails.missingOrNotProvidedSection
-        ? [
-            response.message,
-            "",
-            draftDetails.missingOrNotProvidedSection,
-            "",
-            "Missing customer phone and email are warnings only for create/post. Do not invent contact values.",
-        ].join("\n")
-        : response.message;
+    // Show the missing-details warning once via missingOrNotProvidedSection only.
+    // The message text is left unchanged so the same phone/email warning is not
+    // repeated across message, a warnings array, and the section.
     return {
         ...response,
-        message: nextMessage,
         documentDraftDetails: draftDetails.documentDraftDetails,
         missingOrNotProvidedSection: draftDetails.missingOrNotProvidedSection,
-        draftWarnings: draftDetails.draftWarnings,
+        missingDetailsDisplayHint: "Show the 'Missing or not provided' section once. Do not repeat the same customer phone or email warnings elsewhere in the reply.",
     };
 }
 function buildWritePayloadPreview(input) {
@@ -462,6 +552,8 @@ export function wrapWriteToolHandler(toolName, handler) {
     }
     return async (args) => {
         const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
+        runSalesDocumentProductIdPreflight(toolName, args);
+        await runSalesDocumentSalesVatPreflight(toolName, companyName, args);
         const counterpartyBlock = await validateCounterpartyForWrite({
             toolName,
             companyName,

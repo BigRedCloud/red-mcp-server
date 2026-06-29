@@ -25,10 +25,10 @@ export function registerCompanyContextTools(server) {
             "",
             "This link is for one-time use only. After you use it, ask for a new secure connection link if you want to connect more companies.",
             "",
-            "After connecting your companies, return to your AI assistant and paste the confirmation command shown on the success page. Your connection will not be active until you do.",
+            "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
         ].join("\n"));
     });
-    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns with the confirmation command shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.", {
+    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes API keys.", {
         code: z
             .string()
             .min(1)
@@ -140,7 +140,7 @@ export function registerCompanyContextTools(server) {
             });
         });
     }
-    server.tool("brc_list_company_contexts", "Lists company contexts currently available in this MCP server session. API keys are never returned.", {}, async () => {
+    server.tool("brc_list_company_contexts", "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. API keys are never returned.", {}, async () => {
         await ensureCredentialsForCurrentSession();
         const companies = listConnectedCompanyNames().map((companyName) => {
             const credential = getCredentialForCompany(companyName);
@@ -151,8 +151,22 @@ export function registerCompanyContextTools(server) {
                 expiresAt: new Date(credential.expiresAt).toISOString(),
             };
         });
+        const connectedNames = companies
+            .filter((company) => company.connected)
+            .map((company) => company.companyName);
+        const customerMessage = connectedNames.length === 0
+            ? "No companies are connected in this session yet. Use the secure Red connection page to connect a company, then tell me which company you would like to work with."
+            : [
+                "You have the following companies connected in this session:",
+                ...connectedNames.map((name) => `- ${name}`),
+                "",
+                "Tell me which company you would like to work with.",
+            ].join("\n");
         return jsonResponse({
             count: companies.length,
+            customerMessage,
+            companyNames: connectedNames,
+            presentationHint: "Show customerMessage and the company names. Only mention credentialType or expiresAt if the user asks for technical connection details.",
             companies,
         });
     });

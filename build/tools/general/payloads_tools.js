@@ -38,6 +38,45 @@ export const SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION = "Requires saleRepId
 export const SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION = "Requires analysisCategoryId and accountCode from a Sales Analysis category on each product line. Do not default to CR01/Customer or the first listed category. Set confirmCrAnalysisCategory=true only after the user confirms a CR account code is intentional.";
 export const SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION = 'When Gross Price Entry is enabled for sales invoicing, this tool requires priceBasis. Use priceBasis "gross" when unit prices are VAT-inclusive/gross, or priceBasis "net" when unit prices are VAT-exclusive/net. Do not tell the user to disable Gross Price Entry if they have provided priceBasis.';
 export const SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION = "Required when Gross Price Entry is enabled. Use `gross` when unit prices are VAT-inclusive/gross. Use `net` when unit prices are VAT-exclusive/net.";
+export const SALES_DOCUMENT_NOTE_DESCRIPTION = 'Optional. BRC "Note" field on the sales document (JSON field `note`). Leave blank to default it to the customer name (BRC customer "Name" / JSON `name`). Do not use the product name as the note. Only set this when the user explicitly provides a note.';
+export const SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION = 'Optional. The selected customer\'s name (BRC customer "Name" / JSON `name`). Used as the default sales document note (BRC "Note" / JSON `note`) when no explicit note is given.';
+export const SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION = 'Optional. BRC "Delivery To" address (JSON field `deliveryTo`). Leave blank unless the user explicitly provides a delivery address. Do not invent or default a delivery address (for example "MCP Test").';
+export const SALES_DOCUMENT_REFERENCE_DESCRIPTION = 'Optional. BRC "Reference" field (JSON field `reference`). BRC "Our Ref" (JSON `ourReference`) and BRC "Your Ref" (JSON `yourReference`) default to this value when not supplied separately.';
+export const SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION = 'Product line description shown on the document line (BRC product line description / JSON `tranNotes`, also used on the line\'s analysis entry description). This is the line narrative, not the BRC "Note" field.';
+export const SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION = 'productCode is the BRC product "Code" (JSON `productCode`); productId is the BRC product "Id" (JSON `productId`) from brc_list_products. The product name is not a payload field — do not place it in the BRC "Note" field (JSON `note`).';
+/**
+ * Resolves the BRC sales document "Note" field (JSON `note`).
+ *
+ * Priority: an explicit user note, then the customer name (BRC customer "Name" /
+ * JSON `name`), otherwise undefined so the caller omits `note` entirely. The
+ * product name is never used as a default note.
+ */
+export function resolveSalesDocumentNote(note, customerName) {
+    const explicit = typeof note === "string" ? note.trim() : "";
+    if (explicit !== "") {
+        return explicit;
+    }
+    const fromCustomer = typeof customerName === "string" ? customerName.trim() : "";
+    if (fromCustomer !== "") {
+        return fromCustomer;
+    }
+    return undefined;
+}
+/**
+ * Normalises a BRC "Delivery To" value (JSON `deliveryTo`) into a non-empty
+ * string array, or undefined when no real delivery address was provided. Never
+ * invents a default delivery address.
+ */
+export function normaliseDeliveryTo(value) {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+    const raw = Array.isArray(value) ? value : [value];
+    const cleaned = raw
+        .map((entry) => (typeof entry === "string" ? entry.trim() : String(entry).trim()))
+        .filter((entry) => entry !== "");
+    return cleaned.length > 0 ? cleaned : undefined;
+}
 /**
  * Applies an explicit top-level price basis to a raw sales document payload.
  *
@@ -137,7 +176,7 @@ export function enforceSalesProductLineAnalysisOrThrow(payload, workflow, option
         }
         if (line.accountCode.toUpperCase().startsWith("CR") &&
             options?.confirmCrAnalysisCategory !== true) {
-            throw salesAnalysisPreflightError(`The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red blocked posting because CR categories are unusual here. Ask the user to confirm that category is intentional, then retry with confirmCrAnalysisCategory=true.`);
+            throw salesAnalysisPreflightError(`The sales analysis account code "${line.accountCode}" looks like a Customer (CR) category on this ${documentLabel} product line. Red blocked posting because CR categories are unusual here. Ask the user in plain English, for example: "This analysis category appears to be a customer/CR category rather than a Sales category. Do you want to use it anyway, or should I choose a Sales analysis category?" Only retry with confirmCrAnalysisCategory=true after the user confirms that category is intentional.`);
         }
     }
 }
@@ -482,7 +521,7 @@ export function normalizeBatchItems(path, items, options) {
         if (path === "/v1/salesEntries")
             item = buildSimpleSalesEntryPayload({ ...raw, ownerId: asNumber(raw.customerId), ownerField: "customerId", acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch sales entry"), bookTranTypeId: asNumber(raw.bookTranTypeId, 5), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch sales entry"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) });
         if (path === "/v1/salesInvoices")
-            item = buildSalesInvoicePayload({ ...raw, customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch invoice"), bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
+            item = buildSalesInvoicePayload({ ...raw, customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
         if (path === "/v1/salesCreditNotes")
             item = buildSalesCreditNotePayload({ ...raw, customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
         if (path === "/v1/quotes") {
@@ -560,8 +599,9 @@ export function buildSalesInvoicePayload(args) {
     }
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     const resolvedReference = args.reference ?? args.ourReference ?? args.yourReference;
+    const resolvedNote = resolveSalesDocumentNote(args.note, args.customerName);
+    const deliveryTo = normaliseDeliveryTo(args.deliveryTo);
     const payload = {
-        deliveryTo: ["MCP Test"],
         productTrans: [
             {
                 id: 0,
@@ -603,12 +643,17 @@ export function buildSalesInvoicePayload(args) {
         id: 0,
         bookTranTypeId: args.bookTranTypeId,
         acCode: args.acCode,
-        note: args.note,
         entryDate: args.entryDate,
         procDate: args.procDate,
         total,
         customFields: [],
     };
+    if (resolvedNote !== undefined) {
+        payload.note = resolvedNote;
+    }
+    if (deliveryTo !== undefined) {
+        payload.deliveryTo = deliveryTo;
+    }
     if (resolvedReference !== undefined) {
         payload.reference = resolvedReference;
         payload.ourReference = args.ourReference ?? resolvedReference;
@@ -699,6 +744,7 @@ export function buildQuotePayload(args) {
     const total = round2(net + vat);
     const companyId = requireQuoteCompanyId(args.companyId);
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
+    const deliveryTo = normaliseDeliveryTo(args.deliveryTo);
     const payload = {
         companyId,
         customerOwnerId: args.customerOwnerId,
@@ -710,7 +756,6 @@ export function buildQuotePayload(args) {
         procDate: args.procDate,
         closedDate: null,
         customerOwnerName: args.customerOwnerName,
-        deliveryList: "\"MCP Test\"",
         comments: args.comments,
         layoutType: args.layoutType ?? 1,
         total,
@@ -744,9 +789,12 @@ export function buildQuotePayload(args) {
                 vatAnalysisTypeId: 0,
             },
         ],
-        deliveryTo: ["MCP Test"],
         customFields: [],
     };
+    if (deliveryTo !== undefined) {
+        payload.deliveryTo = deliveryTo;
+        payload.deliveryList = deliveryTo.map((entry) => `"${entry}"`).join(",");
+    }
     if (args.reference !== undefined) {
         payload.reference = args.reference;
     }

@@ -30,8 +30,13 @@ import {
   enforceSalesProductLineProductIdOrThrow,
   normalizeBatchItems,
   unwrapPayload,
+  SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION,
   type SalesDocumentAnalysisWorkflow,
 } from "./payloads_tools.js";
+import {
+  assertSalesVatRatesOrThrow,
+  loadSalesVatCategoryContext,
+} from "../../guards/sales_vat_category.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
 import { getMaxBatchItems } from "../../config/server_config.js";
 
@@ -313,8 +318,20 @@ export function registerRawBatchTool(
       items: z.array(z.record(z.string(), z.unknown())).min(1)
             .max(maxBatchItems)
             .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
+      confirmCrAnalysisCategory: z
+        .boolean()
+        .optional()
+        .describe(
+          "Applies to every sales document item in this batch. Set true only after the user confirms a CR (customer) sales analysis account code is intentional for these product lines."
+        ),
+      priceBasis: z
+        .enum(["net", "gross"])
+        .optional()
+        .describe(
+          `Applies to every sales invoice/credit note item in this batch. ${SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION}`
+        ),
     },
-    async ({ companyName, items }) => {
+    async ({ companyName, items, confirmCrAnalysisCategory, priceBasis }) => {
       if (items.length > maxBatchItems) {
         throw new Error(
           `Batch limit exceeded. Red allows a maximum of ${maxBatchItems} items per batch request. Split the work into smaller batches and confirm each batch before sending.`
@@ -335,7 +352,8 @@ export function registerRawBatchTool(
             enforceTransactionSettingsOrThrow(
               processingSettings,
               transactionWorkflow,
-              raw
+              raw,
+              { priceBasis }
             );
           } catch (error) {
             preflightFailures.push(
@@ -386,14 +404,15 @@ export function registerRawBatchTool(
         for (let index = 0; index < items.length; index++) {
           const entry = items[index] as Record<string, unknown>;
           const raw = extractBatchItemPayload(entry);
-          const confirmCrAnalysisCategory =
+          const itemConfirmCrAnalysisCategory =
+            confirmCrAnalysisCategory === true ||
             entry.confirmCrAnalysisCategory === true ||
             raw.confirmCrAnalysisCategory === true;
 
           try {
             enforceSalesProductLineProductIdOrThrow(raw);
             enforceSalesProductLineAnalysisOrThrow(raw, salesAnalysisWorkflow, {
-              confirmCrAnalysisCategory,
+              confirmCrAnalysisCategory: itemConfirmCrAnalysisCategory,
             });
           } catch (error) {
             preflightFailures.push(
@@ -409,7 +428,43 @@ export function registerRawBatchTool(
         }
       }
 
-      const normalizedItems = normalizeBatchItems(path, items as Record<string, unknown>[], {
+      if (path === "/v1/salesInvoices") {
+        const salesVatContext = await loadSalesVatCategoryContext(companyName);
+        const preflightFailures: string[] = [];
+
+        for (let index = 0; index < items.length; index++) {
+          const raw = extractBatchItemPayload(items[index] as Record<string, unknown>);
+          try {
+            assertSalesVatRatesOrThrow(raw, salesVatContext);
+          } catch (error) {
+            preflightFailures.push(
+              `Item ${index + 1}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+
+        if (preflightFailures.length > 0) {
+          throw new Error(
+            `Red stopped before posting the batch because ${preflightFailures.length} item(s) failed Sales VAT category checks:\n${preflightFailures.join("\n")}`
+          );
+        }
+      }
+
+      const itemsForNormalization =
+        priceBasis && (path === "/v1/salesInvoices" || path === "/v1/salesCreditNotes")
+          ? (items as Record<string, unknown>[]).map((entry) => {
+              const inner = entry.item ?? entry.Item;
+              if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+                return {
+                  ...entry,
+                  item: { priceBasis, ...(inner as Record<string, unknown>) },
+                };
+              }
+              return { priceBasis, ...entry };
+            })
+          : (items as Record<string, unknown>[]);
+
+      const normalizedItems = normalizeBatchItems(path, itemsForNormalization, {
         vatOnCashReceiptEnabled,
       });
       const response = await brcJsonRequest(
