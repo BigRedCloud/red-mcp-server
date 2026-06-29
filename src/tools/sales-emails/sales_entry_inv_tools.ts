@@ -9,7 +9,7 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../../shared.js";
-  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
+  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
 
   import {
     getTransactionSafetyWarnings,
@@ -89,7 +89,7 @@ server.tool(
   
   server.tool(
     "brc_create_sales_invoice",
-    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`,
+    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       customerId: z.number().int().positive(),
@@ -184,7 +184,7 @@ server.tool(
   );
   server.tool(
     "brc_create_sales_invoice_gen_ref",
-    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION}`,
+    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. In the raw payload, the BRC "Note" field (JSON \`note\`) defaults to the customer name (BRC customer "Name" / JSON \`name\`) when omitted and must never be set to the product name; the BRC "Delivery To" address (JSON \`deliveryTo\`) is only included when explicitly provided. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       payload: z.record(z.string(),z.unknown()),

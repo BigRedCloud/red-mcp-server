@@ -35,7 +35,7 @@ import {
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
     "brc_start_company_connection",
-    "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL (no time expiry, but each link works only once). On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. To connect more companies later, start a new connection. Do not ask the user to type credentials into chat.",
+    "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL (no time expiry, but each link works only once). On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. After completing the secure page, the user should return to this chat and provide (copy/paste) the confirmation code shown on the success page. To connect more companies later, start a new connection. Do not ask the user to type credentials into chat.",
     {},
     async () => {
       await ensureConnectionStoreInitialized();
@@ -225,7 +225,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_list_company_contexts",
-    "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. API keys are never returned.",
+    "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. Connection credentials are never returned.",
     {},
     async () => {
       await ensureCredentialsForCurrentSession();

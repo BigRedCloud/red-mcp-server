@@ -289,7 +289,13 @@ export function enforceSalesProductLineAnalysisOrThrow(
 export const PLACEHOLDER_PRODUCT_IDS = new Set<number>([0, 1]);
 
 export const SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION =
-  "Do not invent productId values and do not use productId 0 or 1 as placeholders. If a product line is needed, first call brc_list_products and use a real product from the connected company. If no suitable product exists, ask the user whether to create/select a product, or use a service/non-product line only if the endpoint supports it.";
+  "Do not invent productId values and do not use productId 0 or 1 as placeholders. productId 0 and 1 are treated as placeholders and are blocked at runtime before the draft preview and before posting. If a product line is needed, first call brc_list_products and use a real product from the connected company. If no suitable product exists, ask the user whether to create/select a product, or use a service/non-product line only if the endpoint supports it.";
+
+export const SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION =
+  "Sales invoices must use Sales VAT rates. Purchase/non-Sales VAT rates are blocked before draft and before posting, even if the VAT percentage matches.";
+
+export const SALES_DOCUMENT_BATCH_SAFETY_DESCRIPTION =
+  "Batch sales invoices apply the same safety checks as single sales invoices: productId 0/1 placeholder blocking before draft and posting; Sales VAT category validation before draft and posting; Gross Price Entry priceBasis handling; CR analysis category confirmation; and counterparty confirmation covering all listed customers. If the batch includes multiple customers, confirming means confirming all listed customers, not just one. Set confirmCrAnalysisCategory=true at batch level only after the user confirms CR sales analysis account codes are intentional. Per item, the BRC \"Note\" field (JSON `note`) defaults to the customer name when omitted (never the product name), and the BRC \"Delivery To\" address (JSON `deliveryTo`) is only included when explicitly provided.";
 
 function readLineProductId(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") {
