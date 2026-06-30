@@ -6,6 +6,9 @@ build/
 dist/
 out/
 
+# Internal scripts
+scripts/
+
 # Test / report output
 coverage/
 reports/
@@ -38,6 +41,3 @@ Thumbs.db
 tmp/
 temp/
 .cache/
-
-# Internal scripts
-scripts/
