@@ -653,17 +653,7 @@ export function describeWriteStatusForUser(
  * conversations) unless the user explicitly asks for broader chat history.
  */
 export const RED_ACTIVITY_SCOPE_INSTRUCTION =
-  'When the user asks what they did "in Red" (or in Big Red Cloud), answer only from Red/BRC activity recorded for the current Red session/connection: this session\'s Red/BRC audit log and BRC session actions. Do not include activity from other MCP sessions, other users, or other connections, even for the same company. Do not include unrelated Claude chat history such as MCP debugging, Mistral debugging, coding work, or other non-BRC conversations unless the user explicitly asks for broader chat history. If the requested history (for example yesterday or last week) is not available in this session\'s scope, say: "I can only see Red activity recorded for this current session/connection. For broader history, check Big Red Cloud directly." Do not offer to pull in other companies\' or other users\' audit entries.';
-
-/**
- * Wording guidance for the processing date vs stored entryDate on created sales
- * documents. In BRC the processing date is the invoice/document date and the
- * stored entryDate reflects the accounting period/month, which BRC routinely
- * records as the first day of that month. That is normal and must be presented
- * as the period, never flagged as a possible problem with the invoice date.
- */
-export const SALES_ENTRY_DATE_PERIOD_INSTRUCTION =
-  'When reporting a created sales document\'s dates, treat the stored entryDate as the BRC accounting period indicator, not the invoice date. If the processing date matches what was requested and entryDate is the first day of the month, use neutral wording such as "Processing date: 30/06/2026" and "Period entered: June 2026". Do not say "but BRC stored", "recorded the entry date", or "worth checking", and do not flag the entryDate as a possible issue. Only warn about the date if the actual processing date differs from the requested invoice date.';
+  'When the user asks what they did "in Red" (or in Big Red Cloud), answer only from Red/BRC activity: the Red/BRC audit log, BRC session actions, and connector-visible BRC activity. Do not include unrelated Claude chat history such as MCP debugging, Mistral debugging, coding work, or other non-BRC conversations unless the user explicitly asks for broader chat history.';
 
 export function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -728,62 +718,7 @@ export type RedAuditEntry = {
   summary: string;
   requestBody?: unknown;
   responseBody?: unknown;
-  /**
-   * Scope of the MCP session/connection that produced the entry. Used to keep
-   * audit answers scoped to the current session/user/connection only. Never
-   * returned to the user.
-   */
-  mcpSessionId?: string;
-  connectionId?: string;
 };
-
-/**
- * Identifies the current MCP session/connection scope for the audit log. Audit
- * answers must only include entries from the same scope so one user/session
- * cannot see another user's, session's, or connection's activity.
- */
-export interface AuditScope {
-  mcpSessionId?: string;
-  connectionId?: string;
-}
-
-function resolveCurrentAuditScope(): AuditScope {
-  return {
-    mcpSessionId: resolveActiveMcpSessionId(),
-    connectionId: getCurrentConnectionId(),
-  };
-}
-
-/**
- * Returns true only when an audit entry belongs to the supplied scope.
- *
- * Requires a known, matching MCP session id, and when a connection id is known
- * on both the entry and the scope, requires that to match too. With no current
- * session scope, nothing matches so global/other-session entries are never
- * leaked.
- */
-export function auditEntryMatchesScope(
-  entry: RedAuditEntry,
-  scope: AuditScope
-): boolean {
-  if (!scope.mcpSessionId) {
-    return false;
-  }
-
-  if (entry.mcpSessionId !== scope.mcpSessionId) {
-    return false;
-  }
-
-  if (
-    scope.connectionId &&
-    entry.connectionId &&
-    entry.connectionId !== scope.connectionId
-  ) {
-    return false;
-  }
-
-  return true;
-}
 
 const redAuditLog: RedAuditEntry[] = [];
 let redAuditCounter = 1;
@@ -1057,13 +992,9 @@ export function recordRedAuditEntry(args: {
   path: string;
   requestBody?: unknown;
   responseBody?: unknown;
-  mcpSessionId?: string;
-  connectionId?: string;
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
-
-  const scope = resolveCurrentAuditScope();
 
   const entry: RedAuditEntry = {
     id: redAuditCounter++,
@@ -1077,8 +1008,6 @@ export function recordRedAuditEntry(args: {
     summary: meta.summary,
     requestBody: args.requestBody,
     responseBody: args.responseBody,
-    mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
-    connectionId: args.connectionId ?? scope.connectionId,
   };
 
   redAuditLog.push(entry);
@@ -1246,22 +1175,16 @@ function redactSensitiveValues(value: unknown): unknown {
 
 export function getRedAuditLog(options?: {
   includeTechnicalDetails?: boolean;
-  scope?: AuditScope;
 }): RedAuditEntry[] {
-  const scope = options?.scope ?? resolveCurrentAuditScope();
-  const scoped = redAuditLog.filter((entry) =>
-    auditEntryMatchesScope(entry, scope)
-  );
-
   if (options?.includeTechnicalDetails) {
-    return scoped.map((entry) => ({
+    return redAuditLog.map((entry) => ({
       ...entry,
       requestBody: redactSensitiveValues(entry.requestBody),
       responseBody: redactSensitiveValues(entry.responseBody),
     }));
   }
 
-  return scoped.map((entry) => ({
+  return redAuditLog.map((entry) => ({
     id: entry.id,
     timestamp: entry.timestamp,
     companyName: entry.companyName,
@@ -1274,31 +1197,10 @@ export function getRedAuditLog(options?: {
   }));
 }
 
-/**
- * Clears audit entries for the current session/connection scope only. Entries
- * recorded by other sessions, users, or connections are left untouched.
- */
-export function clearRedAuditLog(scopeOverride?: AuditScope): number {
-  const scope = scopeOverride ?? resolveCurrentAuditScope();
-
-  let clearedCount = 0;
-  for (let index = redAuditLog.length - 1; index >= 0; index--) {
-    if (auditEntryMatchesScope(redAuditLog[index], scope)) {
-      redAuditLog.splice(index, 1);
-      clearedCount++;
-    }
-  }
-
-  return clearedCount;
-}
-
-/**
- * Test seam: removes every audit entry regardless of scope so test cases start
- * from a clean, deterministic log.
- */
-export function __resetRedAuditLogForTests(): void {
+export function clearRedAuditLog(): number {
+  const clearedCount = redAuditLog.length;
   redAuditLog.length = 0;
-  redAuditCounter = 1;
+  return clearedCount;
 }
 //requested by SM
 export function evidenceAnalysisResponse(args: {
