@@ -104,7 +104,7 @@ export function resolveSalesDocumentNote(
 }
 
 export const SALES_DOCUMENT_VAT_TYPE_DESCRIPTION =
-  'Optional. BRC sales document VAT Type (JSON `vatTypeId`: Domestic, Other EU, Foreign – Non EU, VAT Exempt). Leave blank to default it from the selected customer\'s VAT type (BRC customer `vatType`), matching BRC manual invoice entry. For a customer with a non-Domestic VAT type, that VAT type is used rather than Domestic; Domestic is only the last-resort default when the customer\'s VAT type cannot be read. Only set this when the user explicitly overrides the customer\'s VAT type.';
+  'Optional. BRC sales document VAT Type (JSON `vatTypeId`: Domestic, Other EU, Foreign – Non EU, VAT Exempt). Leave blank to default it from the selected customer\'s VAT type (BRC customer `vatType`), matching BRC manual invoice entry. Do not default to Domestic for a customer with a different VAT type. Only set this when the user explicitly overrides the customer\'s VAT type.';
 
 function readSalesVatTypeNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") {
@@ -951,12 +951,9 @@ export function buildPurchasePayload(args: {
       customFields: [],
     };
 
-    // BRC requires a vatTypeId on the sales document, so it must always be
-    // present or posting fails. Prefer an explicit override, then the selected
-    // customer's VAT type (Dave's foreign/EU/non-EU fix), and fall back to
-    // Domestic (1) only when neither is available — matching BRC's manual
-    // invoice-entry default and the previously working payload shape.
-    payload.vatTypeId = resolvedVatTypeId ?? 1;
+    if (resolvedVatTypeId !== undefined) {
+      payload.vatTypeId = resolvedVatTypeId;
+    }
 
     if (resolvedNote !== undefined) {
       payload.note = resolvedNote;
