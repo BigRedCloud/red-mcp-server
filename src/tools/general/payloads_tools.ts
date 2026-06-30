@@ -103,6 +103,42 @@ export function resolveSalesDocumentNote(
   return undefined;
 }
 
+export const SALES_DOCUMENT_VAT_TYPE_DESCRIPTION =
+  'Optional. BRC sales document VAT Type (JSON `vatTypeId`: Domestic, Other EU, Foreign – Non EU, VAT Exempt). Leave blank to default it from the selected customer\'s VAT type (BRC customer `vatType`), matching BRC manual invoice entry. Do not default to Domestic for a customer with a different VAT type. Only set this when the user explicitly overrides the customer\'s VAT type.';
+
+function readSalesVatTypeNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Resolves the BRC sales document VAT type (JSON `vatTypeId`).
+ *
+ * Priority: an explicit user override, then the selected customer's VAT type
+ * (BRC customer `vatType`), otherwise undefined so the caller omits `vatTypeId`
+ * entirely. Red must never silently post Domestic (1) for a customer whose VAT
+ * type is unknown or different.
+ */
+export function resolveSalesDocumentVatTypeId(
+  explicitVatTypeId?: unknown,
+  customerVatType?: unknown
+): number | undefined {
+  const explicit = readSalesVatTypeNumber(explicitVatTypeId);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  const fromCustomer = readSalesVatTypeNumber(customerVatType);
+  if (fromCustomer !== undefined) {
+    return fromCustomer;
+  }
+
+  return undefined;
+}
+
 /**
  * Normalises a BRC "Delivery To" value (JSON `deliveryTo`) into a non-empty
  * string array, or undefined when no real delivery address was provided. Never
@@ -731,8 +767,8 @@ export function normalizeBatchItems(
     if (path === "/v1/cashPayments") item = buildCashPaymentPayload({ ...(raw as any), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), entryDate: asString(raw.entryDate, todayIsoDate()), note: asString(raw.note ?? raw.details ?? raw.description, "Batch cash payment"), bookTranTypeId: asNumber(raw.bookTranTypeId, 2) } as any);
     if (path === "/v1/purchases") item = buildPurchasePayload({ ...(raw as any), supplierId: asString(raw.supplierId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch purchase"), bookTranTypeId: asNumber(raw.bookTranTypeId, 4), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch purchase"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) } as any);
     if (path === "/v1/salesEntries") item = buildSimpleSalesEntryPayload({ ...(raw as any), ownerId: asNumber(raw.customerId), ownerField: "customerId", acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch sales entry"), bookTranTypeId: asNumber(raw.bookTranTypeId, 5), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch sales entry"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) } as any);
-    if (path === "/v1/salesInvoices") item = buildSalesInvoicePayload({ ...(raw as any), customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo as any, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
-    if (path === "/v1/salesCreditNotes") item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
+    if (path === "/v1/salesInvoices") item = buildSalesInvoicePayload({ ...(raw as any), customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo as any, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), vatTypeId: raw.vatTypeId !== undefined ? asNumber(raw.vatTypeId) : undefined, customerVatType: raw.customerVatType !== undefined ? asNumber(raw.customerVatType) : (raw.vatType !== undefined ? asNumber(raw.vatType) : undefined), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
+    if (path === "/v1/salesCreditNotes") item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), vatTypeId: raw.vatTypeId !== undefined ? asNumber(raw.vatTypeId) : undefined, customerVatType: raw.customerVatType !== undefined ? asNumber(raw.customerVatType) : (raw.vatType !== undefined ? asNumber(raw.vatType) : undefined), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
     if (path === "/v1/quotes") {
       if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
         item = raw;
@@ -819,6 +855,8 @@ export function buildPurchasePayload(args: {
     netAmount: number;
     vatRateId: number;
     vatPercentage: number;
+    vatTypeId?: number;
+    customerVatType?: number;
     productId: number;
     productCode: string;
     quantity: number;
@@ -861,6 +899,10 @@ export function buildPurchasePayload(args: {
 
     const resolvedNote = resolveSalesDocumentNote(args.note, args.customerName);
     const deliveryTo = normaliseDeliveryTo(args.deliveryTo);
+    const resolvedVatTypeId = resolveSalesDocumentVatTypeId(
+      args.vatTypeId,
+      args.customerVatType
+    );
 
     const payload: Record<string, unknown> = {
       productTrans: [
@@ -898,7 +940,6 @@ export function buildPurchasePayload(args: {
       unpaid: total,
       netGoods: 0,
       netServices: 0,
-      vatTypeId: 1,
       totalNet: calculatedNet,
       totalVAT: vat,
       id: 0,
@@ -909,6 +950,10 @@ export function buildPurchasePayload(args: {
       total,
       customFields: [],
     };
+
+    if (resolvedVatTypeId !== undefined) {
+      payload.vatTypeId = resolvedVatTypeId;
+    }
 
     if (resolvedNote !== undefined) {
       payload.note = resolvedNote;
@@ -944,6 +989,8 @@ export function buildSalesCreditNotePayload(args: {
   netAmount: number;
   vatRateId: number;
   vatPercentage: number;
+  vatTypeId?: number;
+  customerVatType?: number;
   productId: number;
   productCode: string;
   quantity: number;
