@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
+import { buildSalesInvoicePayload, buildSimpleSalesEntryPayload, resolveSalesInvoiceVatTypeId, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload } from "../general/payloads_tools.js";
 import { getTransactionSafetyWarnings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
 import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
 import { enforceSalesVatCategoryOrThrow } from "../../guards/sales_vat_category.js";
+import { resolveCustomerVatType } from "../../guards/customer_vat_type.js";
 export function registerSalesEntryInvoiceTools(server) {
     // Sales entry tools ----------------------------------------------------------
     server.tool("brc_create_sales_entry", "Creates a BRC sales entry using structured MCP fields.", {
@@ -95,7 +96,10 @@ export function registerSalesEntryInvoiceTools(server) {
     }, async ({ companyName, confirmCrAnalysisCategory, ...args }) => {
         let payload;
         try {
-            payload = buildSalesInvoicePayload(args);
+            // Default the invoice VAT type from the selected customer (BRC manual
+            // entry behaviour). VAT rate / percentage selection is unchanged.
+            const customerVatType = await resolveCustomerVatType(String(companyName), args.customerId);
+            payload = buildSalesInvoicePayload({ ...args, customerVatType });
             enforceSalesProductLineProductIdOrThrow(payload);
             await enforceSalesVatCategoryOrThrow(String(companyName), payload);
             enforceSalesProductLineAnalysisOrThrow(payload, "sales_invoice", {
@@ -140,6 +144,15 @@ export function registerSalesEntryInvoiceTools(server) {
             .describe("Set true only after the user confirms a CR sales analysis account code is intentional for this product line."),
     }, async ({ companyName, payload, priceBasis, confirmCrAnalysisCategory }) => {
         const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
+        // Default the invoice VAT type from the selected customer (BRC manual
+        // entry behaviour) only when the raw payload did not already supply a
+        // valid vatTypeId. An explicit vatTypeId in the payload is respected. VAT
+        // rate / percentage selection is unchanged.
+        const existingVatTypeId = Number(finalPayload.vatTypeId);
+        if (!(Number.isFinite(existingVatTypeId) && existingVatTypeId > 0)) {
+            const customerVatType = await resolveCustomerVatType(String(companyName), finalPayload.customerId);
+            finalPayload.vatTypeId = resolveSalesInvoiceVatTypeId(customerVatType);
+        }
         requireSalesRepInPayload(finalPayload);
         enforceSalesProductLineProductIdOrThrow(finalPayload);
         await enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
