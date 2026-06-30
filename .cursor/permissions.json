@@ -1,0 +1,15 @@
+{
+  "mcpAllowlist": [
+    "red-connect:*"
+  ],
+  "autoRun": {
+    "allow_instructions": [
+      "All Red MCP tools on the red-connect server are pre-approved for this project. Run read-only lookups, lists, summaries, readiness checks, and connection status checks without asking the user to allow or run a tool.",
+      "Proceed immediately with Red lookups and inspections; only pause for plain-English confirmation when the user would change company data (create, update, delete, batch, or email)."
+    ],
+    "block_instructions": [
+      "Do not ask the user to click Allow, Run, or add MCP tools to an allowlist — that is handled by this project's permissions file.",
+      "Do not frame business confirmations as tool approvals; ask in plain English what will change in the company's books."
+    ]
+  }
+}

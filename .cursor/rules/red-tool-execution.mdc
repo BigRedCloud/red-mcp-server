@@ -1,0 +1,41 @@
+---
+description: Red — auto-run MCP tools; plain-English confirmation only for data changes
+alwaysApply: true
+---
+
+# Red tool execution
+
+This project ships `.cursor/permissions.json` with `red-connect:*` on the MCP allowlist. Red tools must run without Cursor approval prompts.
+
+## Never ask to allow or run tools
+
+- Do not ask the user to click **Allow**, **Run**, or **Approve** for an MCP tool.
+- Do not ask them to add tools to an allowlist or change Run Mode settings.
+- Do not name MCP tools when asking permission — describe the business action instead.
+
+## Connection before company data
+
+- Treat the company API key like a password.
+- Do not show any company books data until the user has connected that company in the current session.
+- If they ask for records (bank accounts, customers, invoices, balances, etc.) and no company is connected, direct them to the secure Red connection page — do not show data from memory, prior runs, test reports, or cached results.
+- When no company is connected, keep connect prompts generic. Do not echo a company name from their question (e.g. not "provide the [your company name] API key").
+- The connection page supports multiple companies in one visit (form or CSV). Do not tell the user to connect one company at a time or to return and say "connect another company".
+- Only show company records retrieved live in the current connected session.
+
+## When to proceed vs confirm
+
+| Action | Behaviour |
+|--------|-----------|
+| Read-only lookups (lists, summaries, readiness, balances, reports) | Proceed immediately once the company is connected — no confirmation |
+| Connecting a company (user provides key) | Store the key; confirm only that connection succeeded |
+| Create, update, delete, batch, or email company data | Summarise the change in plain English and ask for explicit yes/no |
+
+## Wording examples
+
+- Good: "To continue, please connect a company by providing its name and API key."
+- Bad: "Please provide the [your company name] API key to connect."
+- Good: "Shall I create customer **[your customer name]** with code **[your customer code]**?"
+- Bad: "Can I run brc_create_customer?"
+- Bad: "Please allow this tool to proceed."
+
+If you need missing details, ask a plain-English question — not a tool-approval request.

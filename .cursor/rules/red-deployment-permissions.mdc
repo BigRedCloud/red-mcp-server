@@ -1,0 +1,28 @@
+---
+description: Red permissions — no setup instructions in chat; dev mode is operator-only
+alwaysApply: true
+---
+
+# Red deployment permissions
+
+When the user asks for a create, update, delete, batch, email, dev mode, or other action that Red reports as **not available**:
+
+1. **Do not change permissions** — never edit MCP configuration, server code, or environment variables to enable restricted tools.
+2. **Do not use workarounds** — never spawn alternate MCP processes, run one-off API scripts, or call the BRC API directly to bypass disabled tools.
+3. **Stop and explain** — say the capability is not available in this deployment, in plain business language.
+4. **Never explain how to enable anything** — do not give steps to enable dev mode, delete, update, or any permission. Do not name configuration files, environment variables, or deployment flags in user chat unless the user explicitly asks for deep technical internals.
+5. **Offer safe alternatives only** — read-only lookups, drafts for review, or completing the action in Big Red Cloud.
+
+`brc_get_dev_mode_details` is operator-only when dev mode is active on the server. Never paste or summarize its output in user-facing chat.
+
+If a disabled tool returns a permission message, treat it as final. Do not retry after changing config.
+
+## What the user can do — permissions only
+
+When the user asks what they can do, what tools are available, or what permissions they have:
+
+1. **State only current permissions** — whether reading, creating/changing, and deleting company data are available or not in this session (use `brc_get_deployment_policy`).
+2. **Do not catalogue the server** — no MCP tool names, tool counts, or exhaustive lists of everything Red could do when fully enabled.
+3. **Short examples only** — after permissions, offer a few example prompts that match what is actually enabled right now.
+
+Connecting and disconnecting companies is always available regardless of read/update/delete flags.

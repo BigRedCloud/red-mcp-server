@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build / generated output
+build/
+dist/
+out/
+
+# Internal scripts
+scripts/
+
+# Test / report output
+coverage/
+reports/
+test-results/
+junit.xml
+*.lcov
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/
+.cache/

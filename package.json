@@ -1,0 +1,52 @@
+{
+  "name": "brc-company-mcp-server",
+  "version": "1.4.0",
+  "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
+  "type": "module",
+  "files": [
+    "build",
+    "assets"
+  ],
+  "bin": {
+    "brc-company-mcp-server": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postinstall": "npm run build",
+    "start": "node build/remote.js",
+    "start:local": "node build/index.js",
+    "dev": "tsx src/remote.ts",
+    "dev:local": "tsx src/index.ts",
+    "test:readonly:legacy": "node scripts/tests/test_readonly_tools.mjs",
+    "test:dev:legacy": "node scripts/tests/dev-only/dev_test.mjs",
+    "test:email:legacy": "node scripts/tests/dev-only/dev_test_email_tools.mjs",
+    "test:unit": "npm run build && node --test build/src/**/*.test.js",
+    "test:security": "npm run build && node --test build/tests/security/**/*.test.js",
+    "test:config": "npm run build && node --test build/tests/config/**/*.test.js",
+    "test:integration": "npm run build && node --test build/tests/integration/**/*.test.js",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "leftovers:scan": "node scripts/tests/dev-only/dev_test_cleanup.mjs scan",
+    "leftovers:delete": "node scripts/tests/dev-only/dev_test_cleanup.mjs delete",
+    "test": "npm run build && node --test build/**/*.test.js"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.9.3",
+    "@modelcontextprotocol/sdk": "latest",
+    "cors": "^2.8.6",
+    "csv-parse": "^7.0.0",
+    "dotenv": "latest",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "readline-sync": "^1.4.10",
+    "typescript": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
+    "@types/node": "latest",
+    "@types/readline-sync": "^1.4.8",
+    "tsx": "latest"
+  }
+}
