@@ -56,7 +56,7 @@ import {
   }
 
   const SALES_INVOICE_VAT_TYPE_UNRESOLVED_WARNING =
-    "Could not read the customer's VAT type, so the invoice used the Domestic VAT type by default (BRC requires a VAT type to post). If this customer should be Other EU, Foreign – Non EU, or VAT Exempt, re-run with an explicit vatTypeId or set the customer's VAT type in Big Red Cloud.";
+    "Could not determine the customer's VAT type, so the invoice was sent without a VAT type and Big Red Cloud will apply its own default. Red did not assume Domestic. Confirm the VAT type in Big Red Cloud, or re-run with an explicit vatTypeId, if a non-Domestic VAT type is expected.";
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
 // Sales entry tools ----------------------------------------------------------
@@ -230,13 +230,13 @@ server.tool(
           message: "Sales invoice created using structured MCP fields.",
           companyName,
           payloadSent: payload,
-          vatType: resolvedVatTypeId ?? 1,
+          vatType: resolvedVatTypeId,
           vatTypeSource:
             resolveSalesDocumentVatTypeId(args.vatTypeId, undefined) !== undefined
               ? "user_override"
               : resolvedVatTypeId !== undefined
                 ? "customer"
-                : "default_domestic",
+                : "unresolved",
           dateSummary,
           settingsWarnings:
             settingsWarnings.length > 0 ? settingsWarnings : undefined,
@@ -278,20 +278,14 @@ server.tool(
       );
 
       // Default the document VAT type from the selected customer when the raw
-      // payload did not supply one. BRC requires vatTypeId, so it must always
-      // be present: prefer an explicit value, then the customer's VAT type, and
-      // fall back to Domestic (1) only when neither is available. Never strip
-      // vatTypeId, or posting fails.
-      const explicitVatTypeId = resolveSalesDocumentVatTypeId(
-        finalPayload.vatTypeId,
-        undefined
-      );
-      let vatTypeSource: "user_override" | "customer" | "default_domestic";
+      // payload did not supply one. Never assume Domestic.
+      const vatTypeExplicit =
+        resolveSalesDocumentVatTypeId(finalPayload.vatTypeId, undefined) !==
+        undefined;
+      let vatTypeSource: "user_override" | "customer" | "unresolved" =
+        vatTypeExplicit ? "user_override" : "unresolved";
 
-      if (explicitVatTypeId !== undefined) {
-        finalPayload.vatTypeId = explicitVatTypeId;
-        vatTypeSource = "user_override";
-      } else {
+      if (!vatTypeExplicit) {
         const customerVatType = await resolveCustomerVatType(
           String(companyName),
           finalPayload.customerId as number | string | undefined
@@ -300,9 +294,13 @@ server.tool(
           undefined,
           customerVatType
         );
-        finalPayload.vatTypeId = resolvedVatTypeId ?? 1;
-        vatTypeSource =
-          resolvedVatTypeId !== undefined ? "customer" : "default_domestic";
+        if (resolvedVatTypeId !== undefined) {
+          finalPayload.vatTypeId = resolvedVatTypeId;
+          vatTypeSource = "customer";
+        } else {
+          delete finalPayload.vatTypeId;
+          vatTypeSource = "unresolved";
+        }
       }
 
       requireSalesRepInPayload(finalPayload);
@@ -330,7 +328,7 @@ server.tool(
         ...referenceWarnings,
       ];
 
-      if (vatTypeSource === "default_domestic") {
+      if (vatTypeSource === "unresolved") {
         settingsWarnings.push(SALES_INVOICE_VAT_TYPE_UNRESOLVED_WARNING);
       }
     
