@@ -803,6 +803,17 @@ export function buildPurchasePayload(args: {
     };
   }
   
+  /**
+   * Resolves the sales invoice document VAT type (`vatTypeId`) from the selected
+   * customer's VAT type. Returns the customer's VAT type when present and valid,
+   * otherwise Domestic (1). This sets the VAT *type* only and does not affect VAT
+   * rate / VAT percentage selection.
+   */
+  export function resolveSalesInvoiceVatTypeId(customerVatType?: unknown): number {
+    const n = Number(customerVatType);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
   export function buildSalesInvoicePayload(args: {
     priceBasis?: "net" | "gross";
     customerId: number;
@@ -819,6 +830,12 @@ export function buildPurchasePayload(args: {
     netAmount: number;
     vatRateId: number;
     vatPercentage: number;
+    /**
+     * Selected customer's VAT type (BRC customer `vatType`). When provided, the
+     * sales invoice document VAT type (`vatTypeId`) defaults from it, mirroring
+     * BRC manual invoice entry. Falls back to Domestic (1) only when missing.
+     */
+    customerVatType?: number;
     productId: number;
     productCode: string;
     quantity: number;
@@ -898,7 +915,12 @@ export function buildPurchasePayload(args: {
       unpaid: total,
       netGoods: 0,
       netServices: 0,
-      vatTypeId: 1,
+      // Default the invoice VAT type from the selected customer (BRC manual
+      // entry behaviour); fall back to Domestic (1) only when it is missing.
+      // NOTE: this only sets the document VAT type. It deliberately does NOT
+      // change VAT rate / VAT percentage selection. TODO: VAT-rate calculation
+      // driven by VAT type should wait for Khoa's extracted BRC logic.
+      vatTypeId: resolveSalesInvoiceVatTypeId(args.customerVatType),
       totalNet: calculatedNet,
       totalVAT: vat,
       id: 0,
