@@ -37,7 +37,6 @@ import {
   assertSalesVatRatesOrThrow,
   loadSalesVatCategoryContext,
 } from "../../guards/sales_vat_category.js";
-import { resolveCustomerVatType } from "../../guards/customer_vat_type.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
 import { getMaxBatchItems } from "../../config/server_config.js";
 
@@ -94,53 +93,6 @@ function extractBatchItemPayload(
   entry: Record<string, unknown>
 ): Record<string, unknown> {
   return (entry.item ?? entry.Item ?? entry) as Record<string, unknown>;
-}
-
-/**
- * Defaults each batch sales-document item's customer VAT type from the selected
- * customer record when the item did not supply a VAT type, matching BRC manual
- * invoice entry. Never assumes Domestic: items whose customer VAT type cannot be
- * resolved are left untouched so the builder omits the field. Resolved values
- * are cached per customer id to avoid duplicate reads within a batch.
- */
-async function applyCustomerVatTypeDefaultsToBatch(
-  companyName: string,
-  items: Record<string, unknown>[]
-): Promise<void> {
-  const cache = new Map<string, number | undefined>();
-
-  for (const entry of items) {
-    const raw = extractBatchItemPayload(entry);
-
-    const hasExplicitVatType =
-      raw.vatTypeId !== undefined ||
-      raw.vatType !== undefined ||
-      raw.customerVatType !== undefined;
-    if (hasExplicitVatType) {
-      continue;
-    }
-
-    const customerId = raw.customerId;
-    if (customerId === undefined || customerId === null || customerId === "") {
-      continue;
-    }
-
-    const cacheKey = String(customerId);
-    let resolved: number | undefined;
-    if (cache.has(cacheKey)) {
-      resolved = cache.get(cacheKey);
-    } else {
-      resolved = await resolveCustomerVatType(
-        companyName,
-        customerId as number | string
-      );
-      cache.set(cacheKey, resolved);
-    }
-
-    if (resolved !== undefined) {
-      raw.customerVatType = resolved;
-    }
-  }
 }
 export function registerRawCreateTool(
   server: ServerType,
@@ -496,13 +448,6 @@ export function registerRawBatchTool(
             `Red stopped before posting the batch because ${preflightFailures.length} item(s) failed Sales VAT category checks:\n${preflightFailures.join("\n")}`
           );
         }
-      }
-
-      if (path === "/v1/salesInvoices" || path === "/v1/salesCreditNotes") {
-        await applyCustomerVatTypeDefaultsToBatch(
-          companyName,
-          items as Record<string, unknown>[]
-        );
       }
 
       const itemsForNormalization =
