@@ -66,15 +66,37 @@ test("explicit vatTypeId override wins over the customer VAT type", () => {
   assert.equal(payload.vatTypeId, FOREIGN_NON_EU);
 });
 
-test("missing/unknown customer VAT type does not default to domestic", () => {
+test("REGRESSION: vatTypeId is always present so BRC posting does not fail", () => {
+  // BRC's /v1/salesInvoices requires vatTypeId. A previous change omitted the
+  // field when the customer VAT type could not be resolved, which broke
+  // posting. The payload must always carry a vatTypeId.
+  const noVatInfo = buildSalesInvoicePayload(invoiceArgs()) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("vatTypeId" in noVatInfo, true);
+  assert.equal(typeof noVatInfo.vatTypeId, "number");
+
+  const foreign = buildSalesInvoicePayload(
+    invoiceArgs({ customerVatType: FOREIGN_NON_EU })
+  ) as Record<string, unknown>;
+  assert.equal("vatTypeId" in foreign, true);
+
+  const override = buildSalesInvoicePayload(
+    invoiceArgs({ vatTypeId: FOREIGN_NON_EU })
+  ) as Record<string, unknown>;
+  assert.equal("vatTypeId" in override, true);
+});
+
+test("unknown customer VAT type falls back to Domestic (BRC requires a VAT type)", () => {
   const payload = buildSalesInvoicePayload(invoiceArgs()) as Record<
     string,
     unknown
   >;
 
-  // The field is omitted entirely rather than silently set to Domestic (1).
-  assert.equal("vatTypeId" in payload, false);
-  assert.notEqual(payload.vatTypeId, DOMESTIC);
+  // Domestic is only the last-resort default; the customer/override values
+  // (covered above) still take priority, preserving the foreign/EU fix.
+  assert.equal(payload.vatTypeId, DOMESTIC);
 });
 
 test("resolveSalesDocumentVatTypeId prefers override, then customer, else undefined", () => {
