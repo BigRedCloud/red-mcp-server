@@ -2,7 +2,9 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   clearRedAuditLog,
+  ensureCredentialsForCurrentSession,
   getRedAuditLog,
+  listConnectedCompanyNames,
   RED_ACTIVITY_SCOPE_INSTRUCTION,
   textResponse,
 } from "../shared.js";
@@ -18,18 +20,32 @@ export function registerAuditTools(server: McpServer) {
         .describe("Only set this to true if the user asks for technical details. Sensitive values are still redacted."),
     },
     async ({ includeTechnicalDetails }) => {
-      const entries = getRedAuditLog({ includeTechnicalDetails });
+      await ensureCredentialsForCurrentSession();
+      const connectedCompanyNames = listConnectedCompanyNames();
+
+      if (connectedCompanyNames.length === 0) {
+        return textResponse(
+          "No companies are currently connected in this Red session. Connect a company before viewing Red activity."
+        );
+      }
+
+      const entries = getRedAuditLog({
+        includeTechnicalDetails,
+        connectedCompanyNames,
+        toolName: "brc_list_audit_log",
+      });
 
       if (entries.length === 0) {
         return textResponse(
-          "No company changes have been recorded in this Red session yet."
+          "No company changes have been recorded for the currently connected companies in this Red session. I can only see Red activity for this current session/connection and for companies currently connected. For broader history, check Big Red Cloud directly."
         );
       }
 
       return textResponse(
         JSON.stringify(
           {
-            message: "Here is the Red audit log for this MCP server session.",
+            message:
+              "Here is the Red audit log for this MCP server session, scoped to the current session/connection and currently connected companies only.",
             count: entries.length,
             entries,
           },

@@ -436,7 +436,7 @@ export function describeWriteStatusForUser(status, options) {
  * history (MCP debugging, Mistral debugging, coding work, or other non-BRC
  * conversations) unless the user explicitly asks for broader chat history.
  */
-export const RED_ACTIVITY_SCOPE_INSTRUCTION = 'When the user asks what they did "in Red" (or in Big Red Cloud), answer only from Red/BRC activity: the Red/BRC audit log, BRC session actions, and connector-visible BRC activity. Do not include unrelated Claude chat history such as MCP debugging, Mistral debugging, coding work, or other non-BRC conversations unless the user explicitly asks for broader chat history.';
+export const RED_ACTIVITY_SCOPE_INSTRUCTION = 'When the user asks what they did "in Red" (or in Big Red Cloud), answer only from Red/BRC activity for the current Red session and for companies currently connected in this session: the Red/BRC audit log, BRC session actions, and connector-visible BRC activity. Never include activity from other MCP sessions, other users, other connections, or companies that are not currently connected (including ones that were disconnected or cleared). For "what did I do today/yesterday/last week in Red", only summarise current-session audit entries for currently connected companies; if older entries exist outside this scope, ignore them completely rather than reporting them. Do not include unrelated Claude chat history such as MCP debugging, Mistral debugging, coding work, or other non-BRC conversations unless the user explicitly asks for broader chat history.';
 export function cloneJson(value) {
     return JSON.parse(JSON.stringify(value));
 }
@@ -478,6 +478,48 @@ function parseRequestBody(init) {
     catch {
         return body;
     }
+}
+function resolveCurrentAuditScope() {
+    return {
+        mcpSessionId: resolveActiveMcpSessionId(),
+        connectionId: getCurrentConnectionId(),
+    };
+}
+/**
+ * True only when an audit entry belongs to the supplied session/connection
+ * scope. Requires a known, matching MCP session id; when a connection id is
+ * known on both sides it must match too. With no current session scope nothing
+ * matches, so global/other-session entries are never leaked.
+ */
+export function auditEntryMatchesScope(entry, scope) {
+    if (!scope.mcpSessionId) {
+        return false;
+    }
+    if (entry.mcpSessionId !== scope.mcpSessionId) {
+        return false;
+    }
+    if (scope.connectionId &&
+        entry.connectionId &&
+        entry.connectionId !== scope.connectionId) {
+        return false;
+    }
+    return true;
+}
+function normaliseConnectedCompanySet(names) {
+    return new Set(names.map((name) => normaliseCompanyName(name)));
+}
+function readCompanyIdFromBodies(requestBody, responseBody) {
+    for (const body of [responseBody, requestBody]) {
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+            continue;
+        }
+        const record = body;
+        const candidate = record.companyId ?? record.CompanyId;
+        if (typeof candidate === "string" || typeof candidate === "number") {
+            return candidate;
+        }
+    }
+    return undefined;
 }
 const redAuditLog = [];
 let redAuditCounter = 1;
@@ -691,6 +733,7 @@ function buildAuditSummary(args) {
 export function recordRedAuditEntry(args) {
     const meta = buildAuditSummary(args);
     const pathname = args.path.split("?")[0] ?? args.path;
+    const scope = resolveCurrentAuditScope();
     const entry = {
         id: redAuditCounter++,
         timestamp: new Date().toISOString(),
@@ -703,6 +746,10 @@ export function recordRedAuditEntry(args) {
         summary: meta.summary,
         requestBody: args.requestBody,
         responseBody: args.responseBody,
+        mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
+        connectionId: args.connectionId ?? scope.connectionId,
+        companyId: args.companyId ??
+            readCompanyIdFromBodies(args.requestBody, args.responseBody),
     };
     redAuditLog.push(entry);
     const maxAuditEntries = getMaxAuditEntries();
@@ -820,15 +867,55 @@ function redactSensitiveValues(value) {
     }
     return value;
 }
+function logAuditScopeDiagnostic(details) {
+    // Metadata only — never logs API keys, tokens, credentials, or company data.
+    console.info("Red audit scope diagnostic:", JSON.stringify({
+        tool: details.tool ?? "getRedAuditLog",
+        mcpSessionId: details.scope.mcpSessionId ?? null,
+        connectionId: details.scope.connectionId ?? null,
+        connectedCompanyCount: details.connectedCompanyCount,
+        totalAuditEntries: details.totalEntries,
+        afterSessionConnectionFilter: details.afterSessionConnectionFilter,
+        afterConnectedCompanyFilter: details.afterConnectedCompanyFilter,
+    }));
+}
+/**
+ * Returns audit entries for the current MCP session/connection scope, further
+ * restricted to companies currently connected in this session.
+ *
+ * Security rules (no global fallback):
+ * - If the current session scope cannot be resolved, returns no entries.
+ * - If no companies are currently connected, returns no entries.
+ * - Entries from other sessions/connections, or for companies not currently
+ *   connected (including disconnected/cleared companies), are never returned.
+ */
 export function getRedAuditLog(options) {
+    const scope = options?.scope ?? resolveCurrentAuditScope();
+    const connectedNames = options?.connectedCompanyNames ?? listConnectedCompanyNames();
+    const connectedSet = normaliseConnectedCompanySet(connectedNames);
+    const totalEntries = redAuditLog.length;
+    const afterScope = scope.mcpSessionId
+        ? redAuditLog.filter((entry) => auditEntryMatchesScope(entry, scope))
+        : [];
+    const scoped = connectedSet.size === 0
+        ? []
+        : afterScope.filter((entry) => connectedSet.has(normaliseCompanyName(entry.companyName)));
+    logAuditScopeDiagnostic({
+        tool: options?.toolName,
+        scope,
+        connectedCompanyCount: connectedSet.size,
+        totalEntries,
+        afterSessionConnectionFilter: afterScope.length,
+        afterConnectedCompanyFilter: scoped.length,
+    });
     if (options?.includeTechnicalDetails) {
-        return redAuditLog.map((entry) => ({
+        return scoped.map((entry) => ({
             ...entry,
             requestBody: redactSensitiveValues(entry.requestBody),
             responseBody: redactSensitiveValues(entry.responseBody),
         }));
     }
-    return redAuditLog.map((entry) => ({
+    return scoped.map((entry) => ({
         id: entry.id,
         timestamp: entry.timestamp,
         companyName: entry.companyName,
@@ -840,10 +927,31 @@ export function getRedAuditLog(options) {
         path: entry.path,
     }));
 }
-export function clearRedAuditLog() {
-    const clearedCount = redAuditLog.length;
-    redAuditLog.length = 0;
+/**
+ * Clears audit entries for the current session/connection scope only. Entries
+ * from other sessions, users, or connections are left untouched.
+ */
+export function clearRedAuditLog(scopeOverride) {
+    const scope = scopeOverride ?? resolveCurrentAuditScope();
+    if (!scope.mcpSessionId) {
+        return 0;
+    }
+    let clearedCount = 0;
+    for (let index = redAuditLog.length - 1; index >= 0; index--) {
+        if (auditEntryMatchesScope(redAuditLog[index], scope)) {
+            redAuditLog.splice(index, 1);
+            clearedCount++;
+        }
+    }
     return clearedCount;
+}
+/**
+ * Test seam: removes every audit entry regardless of scope so test cases start
+ * from a clean, deterministic log.
+ */
+export function __resetRedAuditLogForTests() {
+    redAuditLog.length = 0;
+    redAuditCounter = 1;
 }
 //requested by SM
 export function evidenceAnalysisResponse(args) {
