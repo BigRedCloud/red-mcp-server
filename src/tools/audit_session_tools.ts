@@ -22,14 +22,15 @@ export function registerAuditTools(server: McpServer) {
 
       if (entries.length === 0) {
         return textResponse(
-          "No company changes have been recorded in this Red session yet."
+          "No company changes have been recorded in this Red session yet. I can only see Red activity recorded for this current session/connection. For broader history, check Big Red Cloud directly."
         );
       }
 
       return textResponse(
         JSON.stringify(
           {
-            message: "Here is the Red audit log for this MCP server session.",
+            message:
+              "Here is the Red audit log for this MCP server session. This is scoped to the current session/connection only. I can only see Red activity recorded for this current session/connection. For broader history, check Big Red Cloud directly.",
             count: entries.length,
             entries,
           },

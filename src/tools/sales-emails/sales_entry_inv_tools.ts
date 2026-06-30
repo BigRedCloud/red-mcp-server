@@ -7,9 +7,12 @@ import {
     companyNameSchema,
     getTimestampFromRecord,
     jsonResponse,
+    SALES_ENTRY_DATE_PERIOD_INSTRUCTION,
     type JsonRecord,
   }  from "../../shared.js";
-  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
+  import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_VAT_TYPE_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload, resolveSalesDocumentVatTypeId} from "../general/payloads_tools.js";
+  import { buildSalesDatePeriodSummary } from "../general/sales_date_period.js";
+  import { resolveCustomerVatType } from "../../guards/customer_vat_type.js";
 
   import {
     getTransactionSafetyWarnings,
@@ -17,6 +20,43 @@ import {
   } from "../../guards/company_processing_settings.js";
   import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
   import { enforceSalesVatCategoryOrThrow } from "../../guards/sales_vat_category.js";
+
+  function readSalesDocumentDate(
+    response: unknown,
+    keys: string[]
+  ): string | undefined {
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      return undefined;
+    }
+    const record = response as JsonRecord;
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  function buildSalesInvoiceDateSummary(
+    requestedProcDate: unknown,
+    createResponse: unknown
+  ) {
+    return buildSalesDatePeriodSummary({
+      requestedProcDate,
+      returnedProcDate: readSalesDocumentDate(createResponse, [
+        "procDate",
+        "ProcDate",
+      ]),
+      returnedEntryDate: readSalesDocumentDate(createResponse, [
+        "entryDate",
+        "EntryDate",
+      ]),
+    });
+  }
+
+  const SALES_INVOICE_VAT_TYPE_UNRESOLVED_WARNING =
+    "Could not determine the customer's VAT type, so the invoice was sent without a VAT type and Big Red Cloud will apply its own default. Red did not assume Domestic. Confirm the VAT type in Big Red Cloud, or re-run with an explicit vatTypeId, if a non-Domestic VAT type is expected.";
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
 // Sales entry tools ----------------------------------------------------------
@@ -89,7 +129,7 @@ server.tool(
   
   server.tool(
     "brc_create_sales_invoice",
-    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
+    `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. The invoice VAT type defaults from the selected customer's VAT type; do not assume Domestic. ${SALES_ENTRY_DATE_PERIOD_INSTRUCTION} ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_VAT_TYPE_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       customerId: z.number().int().positive(),
@@ -109,6 +149,12 @@ server.tool(
       netAmount: z.number().positive(),
       vatRateId: z.number().int().positive(),
       vatPercentage: z.number(),
+      vatTypeId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(SALES_DOCUMENT_VAT_TYPE_DESCRIPTION),
       productId: z.number().int().positive().describe(SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION),
       productCode: z.string().describe(SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION),
       quantity: z.number().int().positive(),
@@ -131,7 +177,16 @@ server.tool(
       let payload: unknown;
     
       try {
-        payload = buildSalesInvoicePayload(args);
+        const customerVatType = await resolveCustomerVatType(
+          String(companyName),
+          args.customerId
+        );
+        const resolvedVatTypeId = resolveSalesDocumentVatTypeId(
+          args.vatTypeId,
+          customerVatType
+        );
+
+        payload = buildSalesInvoicePayload({ ...args, customerVatType });
         enforceSalesProductLineProductIdOrThrow(payload);
         await enforceSalesVatCategoryOrThrow(String(companyName), payload);
         enforceSalesProductLineAnalysisOrThrow(payload, "sales_invoice", {
@@ -154,6 +209,10 @@ server.tool(
           ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
           ...referenceWarnings,
         ];
+
+        if (resolvedVatTypeId === undefined) {
+          settingsWarnings.push(SALES_INVOICE_VAT_TYPE_UNRESOLVED_WARNING);
+        }
     
         const createResponse = await brcJsonRequest(
           companyName,
@@ -161,11 +220,24 @@ server.tool(
           "/v1/salesInvoices",
           payload
         );
+
+        const dateSummary = buildSalesInvoiceDateSummary(
+          args.procDate,
+          createResponse
+        );
     
         return jsonResponse({
           message: "Sales invoice created using structured MCP fields.",
           companyName,
           payloadSent: payload,
+          vatType: resolvedVatTypeId,
+          vatTypeSource:
+            resolveSalesDocumentVatTypeId(args.vatTypeId, undefined) !== undefined
+              ? "user_override"
+              : resolvedVatTypeId !== undefined
+                ? "customer"
+                : "unresolved",
+          dateSummary,
           settingsWarnings:
             settingsWarnings.length > 0 ? settingsWarnings : undefined,
           createResponse,
@@ -184,7 +256,7 @@ server.tool(
   );
   server.tool(
     "brc_create_sales_invoice_gen_ref",
-    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. In the raw payload, the BRC "Note" field (JSON \`note\`) defaults to the customer name (BRC customer "Name" / JSON \`name\`) when omitted and must never be set to the product name; the BRC "Delivery To" address (JSON \`deliveryTo\`) is only included when explicitly provided. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
+    `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Draft previews include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. In the raw payload, the BRC "Note" field (JSON \`note\`) defaults to the customer name (BRC customer "Name" / JSON \`name\`) when omitted and must never be set to the product name; the BRC "Delivery To" address (JSON \`deliveryTo\`) is only included when explicitly provided. When the raw payload omits \`vatTypeId\`, Red defaults it from the selected customer's VAT type instead of assuming Domestic. ${SALES_ENTRY_DATE_PERIOD_INSTRUCTION} ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_VAT_TYPE_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
       payload: z.record(z.string(),z.unknown()),
@@ -204,6 +276,33 @@ server.tool(
         payload as Record<string, unknown>,
         priceBasis
       );
+
+      // Default the document VAT type from the selected customer when the raw
+      // payload did not supply one. Never assume Domestic.
+      const vatTypeExplicit =
+        resolveSalesDocumentVatTypeId(finalPayload.vatTypeId, undefined) !==
+        undefined;
+      let vatTypeSource: "user_override" | "customer" | "unresolved" =
+        vatTypeExplicit ? "user_override" : "unresolved";
+
+      if (!vatTypeExplicit) {
+        const customerVatType = await resolveCustomerVatType(
+          String(companyName),
+          finalPayload.customerId as number | string | undefined
+        );
+        const resolvedVatTypeId = resolveSalesDocumentVatTypeId(
+          undefined,
+          customerVatType
+        );
+        if (resolvedVatTypeId !== undefined) {
+          finalPayload.vatTypeId = resolvedVatTypeId;
+          vatTypeSource = "customer";
+        } else {
+          delete finalPayload.vatTypeId;
+          vatTypeSource = "unresolved";
+        }
+      }
+
       requireSalesRepInPayload(finalPayload);
       enforceSalesProductLineProductIdOrThrow(finalPayload);
       await enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
@@ -228,6 +327,10 @@ server.tool(
         ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
         ...referenceWarnings,
       ];
+
+      if (vatTypeSource === "unresolved") {
+        settingsWarnings.push(SALES_INVOICE_VAT_TYPE_UNRESOLVED_WARNING);
+      }
     
       const response = await brcJsonRequest(
         companyName,
@@ -235,11 +338,22 @@ server.tool(
         "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
         finalPayload
       );
+
+      const dateSummary = buildSalesInvoiceDateSummary(
+        finalPayload.procDate,
+        response
+      );
     
       return jsonResponse({
         message: "Sales invoice created with generated reference.",
         companyName,
         payloadSent: finalPayload,
+        vatType:
+          typeof finalPayload.vatTypeId === "number"
+            ? finalPayload.vatTypeId
+            : undefined,
+        vatTypeSource,
+        dateSummary,
         settingsWarnings:
           settingsWarnings.length > 0 ? settingsWarnings : undefined,
         response,
