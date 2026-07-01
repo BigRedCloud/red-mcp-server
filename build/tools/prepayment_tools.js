@@ -62,8 +62,8 @@ function buildQuery(args) {
 function buildPrepaymentSummary(args) {
     return [
         args.action === "create"
-            ? "Prepayment create draft — not posted yet"
-            : "Prepayment update draft — not posted yet",
+            ? "Prepayment create preview — not posted yet"
+            : "Prepayment update preview — not posted yet",
         "",
         `Company: ${args.companyName}`,
         args.id ? `Prepayment id: ${args.id}` : undefined,
@@ -115,7 +115,7 @@ export function registerPrepaymentTools(server) {
     server.tool("brc_create_prepayment", [
         "Creates a new parent Prepayment.",
         "The API accepts only the parent transaction shape and relies on shared logic to generate the reversing child transaction.",
-        "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed creation.",
+        "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed creation.",
     ].join(" "), {
         companyName: companyNameSchema,
         acCode: prepaymentCreateSchema.shape.acCode,
@@ -153,7 +153,7 @@ export function registerPrepaymentTools(server) {
         "Updates an existing parent Prepayment by id.",
         "Use brc_get_prepayment first to retrieve the current prepayment and timestamp.",
         "Child prepayments are not exposed by the public API.",
-        "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed the update.",
+        "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed the update.",
     ].join(" "), {
         companyName: companyNameSchema,
         id: prepaymentUpdateSchema.shape.id,
@@ -207,7 +207,7 @@ export function registerPrepaymentTools(server) {
     }, async ({ companyName, id, timestamp, confirmWrite }) => {
         if (confirmWrite !== true) {
             return textResponse([
-                "Prepayment delete draft — not deleted yet",
+                "Prepayment delete preview — not deleted yet",
                 "",
                 `Company: ${companyName}`,
                 `Prepayment id: ${id}`,

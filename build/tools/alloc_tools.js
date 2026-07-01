@@ -43,7 +43,7 @@ function buildAllocationSummary(args) {
     const totalAllocated = args.allocationResolvers.reduce((sum, item) => sum + item.allocated, 0);
     const totalDiscount = args.allocationResolvers.reduce((sum, item) => sum + item.discount, 0);
     return [
-        "Allocation update draft — not posted yet",
+        "Allocation update preview — not posted yet",
         "",
         `Company: ${args.companyName}`,
         `Sender book transaction id: ${args.bookTranId}`,
@@ -79,7 +79,7 @@ export function registerAllocationResolverTools(server) {
     server.tool("brc_update_allocations", [
         "Creates or updates allocations for a sender book transaction.",
         "Use brc_list_allocation_resolvers first to identify eligible receiver transactions.",
-        "Do not call with confirmWrite=true until the user has reviewed the allocation draft and explicitly confirmed posting.",
+        "Do not call with confirmWrite=true until the user has reviewed the allocation preview and explicitly confirmed posting.",
         "Required fields: bookTranId and allocationResolvers with allocated amounts and receiver book transaction ids.",
     ].join(" "), {
         companyName: companyNameSchema,
@@ -134,7 +134,7 @@ export function registerAllocationResolverTools(server) {
     }, async ({ companyName, id, confirmWrite }) => {
         if (confirmWrite !== true) {
             return textResponse([
-                "Allocation reversal draft — not posted yet",
+                "Allocation reversal preview — not posted yet",
                 "",
                 `Company: ${companyName}`,
                 `Allocation resolver id: ${id}`,

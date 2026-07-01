@@ -7,7 +7,7 @@ Instead of calling the Big Red Cloud REST API directly, users work in plain lang
 With Red, a connected user can:
 
 - **Review** Big Red Cloud data with read-only lookups (customers, suppliers, products, invoices, quotes, nominal reports, and more).
-- **Prepare drafts** of new records and see a plain-English preview before anything is sent.
+- **Review before posting** — see a plain-English preview of new records before anything is written to Big Red Cloud.
 - **Create, update, or delete** records only after explicit confirmation.
 
 ---
@@ -28,7 +28,7 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 - Read-only Big Red Cloud lookups
 - Customer, supplier, product, sales rep, VAT, and analysis category tools
 - Sales quotes, invoices, credit notes, purchases, payments, and cash tools
-- Draft-before-write confirmation flow for create, update, delete, batch, and email actions
+- Preview-before-posting confirmation flow for create, update, delete, batch, and email actions
 - VAT and transaction safety checks
 - Sales invoice safeguards, including Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
 - Session audit log of writes made through the MCP session
@@ -43,8 +43,8 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 - **No credentials in the repository.** API keys and secrets are never committed. Configuration is supplied at runtime through environment variables.
 - **No credentials in chat.** Customer credentials and API keys must not be pasted into chat. Companies are connected through the secure Red connection page instead.
 - **Session-scoped connections.** A connected company is available only within the current MCP session and is held in session memory, not persisted to disk in normal operation.
-- **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a draft has been shown.
-- **Draft previews before changes.** The first call to a write tool returns a draft/preview rather than performing the action.
+- **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a preview before posting has been shown.
+- **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
 - **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only calls are not logged.
 - **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment, in which case the matching tools return a permission message instead of calling Big Red Cloud.
@@ -55,7 +55,7 @@ Recent work hardened sales invoice handling:
 
 - **Gross Price Entry** requires an explicit `priceBasis` of `gross` or `net` so VAT is never guessed.
 - **Sales VAT rates only.** Sales invoices must use a Sales VAT category; purchase VAT rates are blocked, even when the percentage matches.
-- **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before a draft or post.
+- **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before preview-before-posting and post.
 - **`note`** defaults to the customer name unless a note is explicitly provided, and is never set to a product name.
 - **`deliveryTo`** is included only when a delivery address is explicitly provided.
 - **Plain-language results.** Technical HTTP status codes are translated into plain-language messages for users.
@@ -74,7 +74,7 @@ Two entry points share one tool registry:
 Key shared modules:
 
 - `src/server.ts` — MCP server factory and stdio singleton
-- `src/register_all_tools.ts` — central tool registration; wraps the server so disabled skills register a permission-message blocker instead of the real tool, and so write tools get draft/confirmation handling
+- `src/register_all_tools.ts` — central tool registration; wraps the server so disabled skills register a permission-message blocker instead of the real tool, and so write tools get preview-before-posting/confirmation handling
 - `src/config/server_config.ts` — deployment skill gating driven by the `BRC_ALLOW_*` flags
 - `src/config/mcp_config.ts` — MCP server instructions and connection-safety rules
 - `src/shared.ts` — Big Red Cloud HTTP client, session-scoped connections, audit log, and helpers

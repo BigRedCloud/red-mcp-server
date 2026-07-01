@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { brcFetch, companyNameSchema, jsonResponse } from "../../shared.js";
+import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "./payloads_tools.js";
 function buildListQuery(args) {
     const params = new URLSearchParams();
     if (args.page !== undefined)
@@ -102,8 +103,8 @@ export function registerTools(server) {
     // Book Transaction Types
     registerListTool(server, "brc_list_book_tran_types", "Lists BRC book transaction types.", "/v1/bookTranTypes");
     // Nominal Accounts
-    registerListTool(server, "brc_list_nominal_accounts", "Lists BRC nominal accounts.", "/v1/nominalAccounts");
-    registerGetTool(server, "brc_get_nominal_account_ledger_by_id", "Gets one BRC nominal account by id.", "/v1/nominalAccounts", "Nominal account");
+    registerListTool(server, "brc_list_nominal_accounts", `Lists BRC nominal accounts. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`, "/v1/nominalAccounts");
+    registerGetTool(server, "brc_get_nominal_account_ledger_by_id", `Gets one BRC nominal account by id. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`, "/v1/nominalAccounts", "Nominal account");
     // Quotes
     registerListTool(server, "brc_list_quotes", "Lists BRC quotes.", "/v1/quotes");
     registerGetTool(server, "brc_get_quote", "Gets one BRC quote by id.", "/v1/quotes", "Quote");

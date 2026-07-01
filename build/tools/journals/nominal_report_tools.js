@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { brcFetch, fetchAllNominalAccounts, jsonResponse, companyNameSchema, toNumber, } from "../../shared.js";
+import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "../general/payloads_tools.js";
 const nominalGroups = {
     "008": { groupCode: "1000G", description: "Sales - BRB Accounts Software" },
     "1000": { groupCode: "1000G", description: "Sales - BRB Accounts Software" },
@@ -161,7 +162,8 @@ function detectGroupedByField(nominalAccounts) {
     return nominalAccounts.length > 0 ? resolveNominalGroup(nominalAccounts[0]).groupedBy : "group";
 }
 export function registerNominalReportTools(server) {
-    server.tool("brc_get_nom_ac_ledger_by_ids", "Gets nominal accounts for specific ids by calling GET /v1/nominalAccounts/{id} for each id.", {
+    server.tool("brc_get_nom_ac_ledger_by_ids", "Gets nominal accounts for specific ids by calling GET /v1/nominalAccounts/{id} for each id. " +
+        NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION, {
         companyName: companyNameSchema,
         ids: z.string().describe("Comma-separated nominal account ids."),
     }, async ({ companyName, ids }) => {
@@ -192,7 +194,8 @@ export function registerNominalReportTools(server) {
             ...(errors.length > 0 ? { errors } : {}),
         });
     });
-    server.tool("brc_grouped_nominal_accounts_report", "Creates a grouped nominal accounts report from GET /v1/nominalAccounts, grouping by account group/type fields when available.", {
+    server.tool("brc_grouped_nominal_accounts_report", "Creates a grouped nominal accounts report from GET /v1/nominalAccounts, grouping by account group/type fields when available. " +
+        NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION, {
         companyName: companyNameSchema,
     }, async ({ companyName }) => {
         const nominalAccounts = await fetchAllNominalAccounts(companyName);
@@ -225,7 +228,8 @@ export function registerNominalReportTools(server) {
             rows: report,
         });
     });
-    server.tool("brc_multi_company_nom_ac_report", "Creates a grouped nominal accounts report for multiple companies using GET /v1/nominalAccounts for each company.", {
+    server.tool("brc_multi_company_nom_ac_report", "Creates a grouped nominal accounts report for multiple companies using GET /v1/nominalAccounts for each company. " +
+        NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION, {
         companyNames: z
             .array(companyNameSchema)
             .min(1)

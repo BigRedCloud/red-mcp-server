@@ -46,7 +46,7 @@ src/
 - **`src/server.ts`** — `createBrcMcpServer()` factory holding shared server metadata (name, version, instructions).
 - **`src/register_all_tools.ts`** — The single registration list used by both entry points. It wraps `server.tool(...)` so that:
   - disabled skill groups register a permission-message blocker instead of the real tool, and
-  - write tools receive draft/confirmation handling and the appropriate confirmation schema fields.
+  - write tools receive preview-before-posting/confirmation handling and the appropriate confirmation schema fields.
 - **`src/shared.ts`** — The Big Red Cloud HTTP client (`brcFetch`, JSON request helpers), session-scoped connection storage, the session audit log, list/response helpers, and user-facing status wording.
 - **`src/config/server_config.ts`** — Classifies each tool into a skill group and decides whether it is enabled, based on the `BRC_ALLOW_*` flags.
 - **`src/config/mcp_config.ts`** — Server instructions and connection-safety rules surfaced to MCP clients.
@@ -67,26 +67,26 @@ index.ts / remote.ts
 Registration details:
 
 - **Skill gating.** `registerAllTools` consults `isToolEnabled(toolName)`. If the tool's skill group is disabled by a deployment flag, a blocker is registered that returns a permission message instead of calling Big Red Cloud.
-- **Write confirmation.** For write tools (update/delete/email/batch and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a draft/preview response. The underlying handler runs only after explicit confirmation.
+- **Write confirmation.** For write tools (update/delete/email/batch and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a preview-before-posting response. The underlying handler runs only after explicit confirmation.
 - **Generic helpers.** Most list/get/create/update/delete/batch tools are produced by helpers in `src/tools/general/` (`registerListTool`, `registerGetTool`, `registerSubresourceGetTool`, `registerRawCreateTool`, `registerRawUpdateTool`, `registerRawDeleteTool`, `registerRawBatchTool`). Payload normalisation lives in `payloads_tools.ts`.
 
 ---
 
 ## 4. Safety and guard modules
 
-Guards live in `src/guards/` and run before drafts and before posting.
+Guards live in `src/guards/` and run before preview-before-posting and before posting.
 
-- **`write_confirmation.ts`** — Draft-before-write flow; counterparty confirmation; placeholder product ID preflight; Sales VAT category preflight; single "Missing or not provided" presentation for missing contact details.
+- **`write_confirmation.ts`** — Preview-before-posting flow; counterparty confirmation; placeholder product ID preflight; Sales VAT category preflight; single "Missing or not provided" presentation for missing contact details.
 - **`company_processing_settings.ts`** — Reads company processing settings and enforces VAT-sensitive workflow rules, including Gross Price Entry `priceBasis` handling, margin VAT scheme blocking, VAT discrepancy tolerance wording, reverse-charge guidance, and cash receipt VAT (VOCR) handling.
 - **`company_reference_settings.ts`** — Enforces safe reference handling (manual vs auto-generated references) per workflow.
 - **`sales_vat_category.ts`** — Maps each VAT rate to its VAT category and blocks sales invoice lines that use a purchase/non-Sales VAT rate (even when the percentage matches).
-- **`document_draft_details.ts`** — Builds the draft contact details and the single missing-details section for quotes and sales invoices.
+- **`document_draft_details.ts`** — Builds the preview contact details and the single missing-details section for quotes and sales invoices.
 
 Sales invoice safeguards (summary):
 
 - Gross Price Entry requires an explicit `priceBasis` of `gross` or `net`.
 - Sales invoices must use a Sales VAT category; purchase VAT rates are blocked.
-- `productId` `0` and `1` are treated as placeholders and blocked before draft and post.
+- `productId` `0` and `1` are treated as placeholders and blocked before preview-before-posting and post.
 - `note` defaults to the customer name unless explicitly provided, and is never a product name.
 - `deliveryTo` is included only when explicitly provided.
 

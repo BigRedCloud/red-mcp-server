@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 /** Customer-safe suffix appended when a disabled skill blocker fires. */
 export const RED_DISABLED_ACTION_USER_MESSAGE = [
     "",
-    "You can still review data here, prepare a draft, or complete the action directly in Big Red Cloud if appropriate.",
+    "You can still review data here, review a preview before posting, or complete the action directly in Big Red Cloud if appropriate.",
 ].join("\n");
 function envFlag(name, defaultValue) {
     const value = process.env[name];
@@ -194,7 +194,7 @@ export function getDisabledSkillMessage(toolName) {
             "",
             "Sending sales invoice, quote, or statement emails has been disabled by the server administrator.",
             "",
-            "You can still view the document and prepare a draft message for review.",
+            "You can still view the document and prepare an email preview for review.",
             RED_DISABLED_ACTION_USER_MESSAGE,
         ].join("\n");
     }

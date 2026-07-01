@@ -59,7 +59,7 @@ const optionalEmailFields = {
     .boolean()
     .default(false)
     .describe(
-      "Must be true only after the user has reviewed the email draft and explicitly confirmed sending."
+      "Must be true only after the user has reviewed the email preview and explicitly confirmed sending."
     ),
 };
 
@@ -99,7 +99,7 @@ function buildMultiRecipientChoiceText(args: {
 }) {
   return textResponse(
     [
-      "Email draft — not sent yet",
+      "Email preview — not sent yet",
       "",
       `Document: ${args.documentLabel}`,
       "",
@@ -160,7 +160,7 @@ function buildEmailDraftText(args: {
 
   return textResponse(
     [
-      "Email draft — not sent yet",
+      "Email preview — not sent yet",
       "",
       `Document: ${args.documentLabel}`,
       ...recipientLines,
@@ -500,11 +500,11 @@ function registerEmailSendTool(
 
 export function registerEmailTools(server: ServerType) {
   const supportedEmailTypesNote =
-    "Supported document type only. Red email sending is available for sales invoices, quotes, and customer statements — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types. If the user asks to email an unsupported document type, say Red cannot email it through the current MCP tools, list the supported types, and stop without preparing a draft or attempting a workaround.";
+    "Supported document type only. Red email sending is available for sales invoices, quotes, and customer statements — not for cash receipts, purchases, payments, bank accounts, customers, suppliers, products, reports, or other document types. If the user asks to email an unsupported document type, say Red cannot email it through the current MCP tools, list the supported types, and stop without preparing an email preview or attempting a workaround.";
 
   //common email rules
   const commonEmailRule =
-    "Do not call this tool with confirmSend=true until the user has reviewed a plain-English email draft and explicitly confirmed they want to send it. The email draft must show the recipient email address clearly before asking for send confirmation. If there is no customer email on file and no recipient override, stop and ask for a recipient email address — do not send. Create/post confirmation and email send confirmation are separate steps. If the user provides multiple recipient addresses, ask whether to send one email using BCC or separate individual emails. Only use sendMode='separate' when the user explicitly chooses separate emails. Do not ask about BCC unless the user provides multiple recipients or asks to copy another address.";
+    "Do not call this tool with confirmSend=true until the user has reviewed a plain-English email preview and explicitly confirmed they want to send it. The email preview must show the recipient email address clearly before asking for send confirmation. If there is no customer email on file and no recipient override, stop and ask for a recipient email address — do not send. Create/post confirmation and email send confirmation are separate steps. If the user provides multiple recipient addresses, ask whether to send one email using BCC or separate individual emails. Only use sendMode='separate' when the user explicitly chooses separate emails. Do not ask about BCC unless the user provides multiple recipients or asks to copy another address.";
 
   registerEmailSendTool(
     server,

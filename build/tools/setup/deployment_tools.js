@@ -267,13 +267,13 @@ Safety reminders:
 - Company connection details are kept in server session memory for about 2 hours and are not shown back in chat.
 - Assistants must never repeat API keys from chat history.
 - Deleting or changing records should only happen after you confirm the details.
-- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare a draft or use a workaround.
+- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare an email preview or use a workaround.
 - If something you need is not available here, you can still review data in chat or work in Big Red Cloud directly.
 
 Recommended safe workflow:
 1. Ask the chat to check if the company is ready.
 2. Start with read-only questions.
-3. Ask for a draft before creating records.
+3. Ask for a preview before posting when creating records.
 4. Confirm the company, date, customer or supplier, VAT rate and totals.
 5. Only then confirm create, update, delete or batch actions in plain English — when this session allows them.`;
 }
@@ -308,12 +308,12 @@ Examples:
 "Summarise my VAT rates."
 "Show me nominal account groups."
 
-4. Ask for a draft before creating anything
-For safety, ask the chat to prepare a draft first. Only confirm when you are happy.
+4. Ask for a preview before creating anything
+For safety, ask the chat to show a preview before posting first. Only confirm when you are happy.
 
 Examples:
 "Prepare a quote for a customer, but do not create it yet."
-"Draft a sales invoice and show me the details before posting it."
+"Show me a sales invoice preview before posting it."
 "Check the transaction date before creating anything."
 
 5. Confirm before changing data
@@ -391,7 +391,7 @@ Reports:
 - "Compare nominal account groups across my connected companies."
 
 Safety:
-- "Do not create anything yet, just show me a draft."
+- "Do not create anything yet, just show me a preview before posting."
 - "Check the details before posting."
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
@@ -434,7 +434,7 @@ Never type company API keys into chat. Ask Red to start a secure company connect
 Useful prompts:
 - "Check if my company is ready."
 - "Validate this transaction date."
-- "Show me a draft before creating anything."
+- "Show me a preview before creating anything."
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
 `;
@@ -593,7 +593,7 @@ export function registerDeploymentTools(server) {
                 "Check whether a transaction date is valid.",
                 "Show me my VAT rates.",
                 "Show me recent sales invoices.",
-                "Prepare a quote draft, but do not create it yet.",
+                "Prepare a quote preview before posting, but do not create it yet.",
             ],
         });
     });
