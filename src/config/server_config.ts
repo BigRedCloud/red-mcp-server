@@ -35,7 +35,7 @@ function envList(name: string): string[] {
     .filter(Boolean);
 }
 
-const MAX_BATCH_ITEMS_CAP = 10;
+const MAX_BATCH_ITEMS_CAP = 100;
 
 export const redServerConfig = {
   sessionTtlMinutes: envNumber("BRC_MCP_SESSION_TTL_MINUTES", 120),
