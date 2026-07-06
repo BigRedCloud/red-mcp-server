@@ -151,17 +151,37 @@ export async function resolveConnectionIdForActiveSession(args: {
   sessionId: string;
   clientKey?: string;
 }): Promise<string | null> {
+  const result = await resolveConnectionIdForActiveSessionWithMeta(args);
+  return result.connectionId;
+}
+
+export async function resolveConnectionIdForActiveSessionWithMeta(args: {
+  sessionId: string;
+  clientKey?: string;
+}): Promise<{
+  connectionId: string | null;
+  sessionBindingFound: boolean;
+  clientClaimInherited: boolean;
+}> {
   await ensureConnectionStoreInitialized();
 
   const normalizedSessionId = args.sessionId.trim();
   const store = getConnectionStore();
   const bound = await store.getConnectionIdForSession(normalizedSessionId);
   if (bound) {
-    return bound;
+    return {
+      connectionId: bound,
+      sessionBindingFound: true,
+      clientClaimInherited: false,
+    };
   }
 
   if (!args.clientKey) {
-    return null;
+    return {
+      connectionId: null,
+      sessionBindingFound: false,
+      clientClaimInherited: false,
+    };
   }
 
   const inherited = await store.getRecentClientClaim(
@@ -169,11 +189,19 @@ export async function resolveConnectionIdForActiveSession(args: {
     CLIENT_CLAIM_INHERIT_TTL_MS
   );
   if (!inherited) {
-    return null;
+    return {
+      connectionId: null,
+      sessionBindingFound: false,
+      clientClaimInherited: false,
+    };
   }
 
   await store.bindSessionToConnection(normalizedSessionId, inherited);
-  return inherited;
+  return {
+    connectionId: inherited,
+    sessionBindingFound: false,
+    clientClaimInherited: true,
+  };
 }
 
 export async function ensureConnectionIdForSession(

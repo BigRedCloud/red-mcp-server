@@ -96,22 +96,42 @@ export async function getBoundConnectionIdForSession(sessionId) {
  * so hosted MCP clients that rotate MCP session ids can still access companies.
  */
 export async function resolveConnectionIdForActiveSession(args) {
+    const result = await resolveConnectionIdForActiveSessionWithMeta(args);
+    return result.connectionId;
+}
+export async function resolveConnectionIdForActiveSessionWithMeta(args) {
     await ensureConnectionStoreInitialized();
     const normalizedSessionId = args.sessionId.trim();
     const store = getConnectionStore();
     const bound = await store.getConnectionIdForSession(normalizedSessionId);
     if (bound) {
-        return bound;
+        return {
+            connectionId: bound,
+            sessionBindingFound: true,
+            clientClaimInherited: false,
+        };
     }
     if (!args.clientKey) {
-        return null;
+        return {
+            connectionId: null,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+        };
     }
     const inherited = await store.getRecentClientClaim(args.clientKey, CLIENT_CLAIM_INHERIT_TTL_MS);
     if (!inherited) {
-        return null;
+        return {
+            connectionId: null,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+        };
     }
     await store.bindSessionToConnection(normalizedSessionId, inherited);
-    return inherited;
+    return {
+        connectionId: inherited,
+        sessionBindingFound: false,
+        clientClaimInherited: true,
+    };
 }
 export async function ensureConnectionIdForSession(sessionId) {
     await ensureConnectionStoreInitialized();

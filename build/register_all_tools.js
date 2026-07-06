@@ -21,6 +21,7 @@ import { registerAllocationResolverTools } from "./tools/alloc_tools.js";
 import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
+import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import { appendWriteConfirmationDescription, confirmCounterpartyExplicitSchema, confirmWriteSchema, requiresCounterpartyConfirmation, requiresWriteConfirmation, wrapWriteToolHandler, } from "./guards/write_confirmation.js";
 function createFilteredServer(server) {
@@ -32,11 +33,13 @@ function createFilteredServer(server) {
             return undefined;
         }
         if (args.length < 3) {
-            return originalTool(toolName, ...args);
+            const [description, handler] = args;
+            return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler));
         }
         const [description, schema, handler] = args;
+        const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
         if (!requiresWriteConfirmation(toolName)) {
-            return originalTool(toolName, description, schema, handler);
+            return originalTool(toolName, description, schema, httpAwareHandler);
         }
         const wrappedSchema = {
             ...schema,
@@ -47,7 +50,7 @@ function createFilteredServer(server) {
                 }
                 : {}),
         };
-        const wrappedHandler = wrapWriteToolHandler(toolName, handler);
+        const wrappedHandler = wrapWriteToolHandler(toolName, httpAwareHandler);
         return originalTool(toolName, appendWriteConfirmationDescription(description, toolName), wrappedSchema, wrappedHandler);
     };
     return filteredServer;

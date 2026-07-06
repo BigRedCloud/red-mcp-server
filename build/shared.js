@@ -30,6 +30,9 @@ export function runWithHttpRequestSessionId(sessionId, fn) {
 export function enterHttpRequestSessionId(sessionId) {
     httpRequestSessionIdStorage.enterWith(sessionId);
 }
+export function runWithHttpClientKey(clientKey, fn) {
+    return httpClientKeyStorage.run(clientKey, fn);
+}
 export function enterHttpClientKey(clientKey) {
     httpClientKeyStorage.enterWith(clientKey);
 }
@@ -101,6 +104,13 @@ export function getCompanyApiContexts() {
     const fromAsyncLocal = sessionKeyStorage.getStore();
     if (fromAsyncLocal) {
         return fromAsyncLocal;
+    }
+    if (process.env.RED_CONNECT_HTTP_MODE) {
+        logCredentialDebug({
+            step: "getCompanyApiContexts",
+            reason: "http_mode_no_session_scope",
+        });
+        return new Map();
     }
     return globalContexts;
 }
