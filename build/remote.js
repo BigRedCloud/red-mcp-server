@@ -9,8 +9,8 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
-import { buildHttpClientKey, ensureMcpSessionReady, enterHttpClientKey, enterHttpRequestSessionId, enterSessionKeyStore, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
-import { enterMcpSessionContext } from "./auth/connection_store.js";
+import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
+import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
 import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
@@ -72,19 +72,29 @@ setInterval(() => {
 }, 60 * 1000).unref();
 async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
-    const clientKey = buildHttpClientKey(getClientIp(req));
+    const clientKey = buildHttpClientKeyFromRequest(req);
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
-    enterHttpRequestSessionId(normalizedSessionId);
-    enterHttpClientKey(clientKey);
-    enterSessionKeyStore(session.keyStore);
-    const context = await ensureMcpSessionReady(normalizedSessionId, session.keyStore);
-    enterMcpSessionContext(context);
-    if (body !== undefined) {
-        await session.transport.handleRequest(req, res, body);
-    }
-    else {
-        await session.transport.handleRequest(req, res);
-    }
+    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey);
+    return runWithHttpToolSession(scope, async () => {
+        const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
+        logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
+            transportSessionId: normalizedSessionId,
+            extra: {
+                requestInfo: {
+                    headers: req.headers,
+                },
+            },
+            resolution: scope.resolution,
+            credentialCount: companiesLoaded.length,
+            companiesLoaded,
+        }));
+        if (body !== undefined) {
+            await session.transport.handleRequest(req, res, body);
+        }
+        else {
+            await session.transport.handleRequest(req, res);
+        }
+    });
 }
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 app.set("trust proxy", true);
@@ -247,7 +257,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
 });
 app.post("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();
-    const sessionId = req.headers["mcp-session-id"]?.trim();
+    const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
         touchSession(session);
@@ -319,7 +329,7 @@ app.get("/connect", async (req, res) => {
 });
 app.get("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();
-    const sessionId = req.headers["mcp-session-id"]?.trim();
+    const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
         touchSession(session);
@@ -341,7 +351,7 @@ app.get("/mcp", async (req, res) => {
     });
 });
 app.delete("/mcp", async (req, res) => {
-    const sessionId = req.headers["mcp-session-id"]?.trim();
+    const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const { server, transport } = sessions.get(sessionId);
         await transport.close();
@@ -357,17 +367,20 @@ app.delete("/mcp", async (req, res) => {
     });
 });
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const httpServer = app.listen(PORT, async () => {
+const httpServer = app.listen(PORT);
+httpServer.on("listening", () => {
+    console.log(`BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`);
+});
+void (async () => {
     try {
         await ensureConnectionStoreInitialized();
         const storeType = getConnectionStore().getStoreType();
-        console.log(`BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`);
         console.log(`Red connection store: ${storeType}`);
     }
     catch (error) {
         console.error("Red connection store failed to initialize:", error instanceof Error ? error.message : error);
     }
-});
+})();
 const shutdown = () => {
     console.log("\nShutting down...");
     for (const { server, transport } of sessions.values()) {

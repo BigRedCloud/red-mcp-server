@@ -22,6 +22,7 @@ import { registerAllocationResolverTools } from "./tools/alloc_tools.js";
 import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
+import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import {
   appendWriteConfirmationDescription,
@@ -49,20 +50,28 @@ function createFilteredServer(server: McpServer): McpServer {
     }
 
     if (args.length < 3) {
+      const [description, handler] = args as [
+        string,
+        (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
+      ];
+
       return originalTool(
         toolName,
-        ...(args as [string, Record<string, unknown>, (args: Record<string, unknown>) => Promise<unknown> | unknown])
+        description,
+        wrapHttpSessionAwareToolHandler(handler)
       );
     }
 
     const [description, schema, handler] = args as [
       string,
       Record<string, unknown>,
-      (args: Record<string, unknown>) => Promise<unknown> | unknown,
+      (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
     ];
 
+    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
+
     if (!requiresWriteConfirmation(toolName)) {
-      return originalTool(toolName, description, schema, handler);
+      return originalTool(toolName, description, schema, httpAwareHandler);
     }
 
     const wrappedSchema = {
@@ -76,7 +85,7 @@ function createFilteredServer(server: McpServer): McpServer {
         : {}),
     };
 
-    const wrappedHandler = wrapWriteToolHandler(toolName, handler);
+    const wrappedHandler = wrapWriteToolHandler(toolName, httpAwareHandler);
 
     return originalTool(
       toolName,
