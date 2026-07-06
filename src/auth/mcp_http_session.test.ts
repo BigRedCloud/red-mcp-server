@@ -326,3 +326,90 @@ test("session diagnostic omits secrets and truncates identifiers", async () => {
   assert.equal(diagnostic.clientIdentityHeaderNamesPresent.includes("authorization"), true);
   assert.equal(JSON.stringify(diagnostic).includes("super-secret"), false);
 });
+
+test("tool-level diagnostic logs connectionRef resolution with loaded companies", async () => {
+  process.env.RED_CONNECT_SESSION_DEBUG = "true";
+
+  const {
+    getConnectionStore,
+    claimConnectionCodeForSession,
+    runHttpToolSessionFromExtra,
+  } = await loadModules();
+
+  const store = getConnectionStore();
+  const code = uniqueId("code");
+  const connectionId = uniqueId("connection");
+  const sessionA = uniqueId("session-a");
+  const keyStore = new Map();
+
+  await store.createPendingConnection({
+    code,
+    connectionId,
+    expiresAt: Date.now() + 60_000,
+  });
+  await store.completePendingConnection(code);
+  await store.saveConnectedCompanies(connectionId, [
+    {
+      companyName: "Company A",
+      apiKey: "test-api-key-a",
+      expiresAt: Date.now() + 60_000,
+    },
+    {
+      companyName: "Company B",
+      apiKey: "test-api-key-b",
+      expiresAt: Date.now() + 60_000,
+    },
+    {
+      companyName: "Company C",
+      apiKey: "test-api-key-c",
+      expiresAt: Date.now() + 60_000,
+    },
+    {
+      companyName: "Company D",
+      apiKey: "test-api-key-d",
+      expiresAt: Date.now() + 60_000,
+    },
+  ]);
+
+  const claim = await claimConnectionCodeForSession(code, sessionA);
+  const logs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+
+  try {
+    await runHttpToolSessionFromExtra(
+      sessionA,
+      keyStore,
+      undefined,
+      async () => "ok",
+      {
+        connectionRef: claim.connectionRef,
+        companyName: "Company C",
+        toolName: "brc_list_sales_invoices",
+      }
+    );
+  } finally {
+    console.info = originalInfo;
+    delete process.env.RED_CONNECT_SESSION_DEBUG;
+  }
+
+  const diagnosticLine = logs.find((line) => line.includes("Red MCP session:"));
+  assert.ok(diagnosticLine, "expected Red MCP session diagnostic log");
+
+  const payload = JSON.parse(diagnosticLine!.replace(/^Red MCP session:\s*/, ""));
+  assert.equal(payload.connectionRefPresent, true);
+  assert.equal(payload.connectionRefResolved, true);
+  assert.equal(payload.connectionIdPresent, true);
+  assert.equal(payload.credentialCount, 4);
+  assert.deepEqual(payload.companiesLoaded.sort(), [
+    "Company A",
+    "Company B",
+    "Company C",
+    "Company D",
+  ]);
+  assert.equal(payload.requestedCompany, "Company C");
+  assert.equal(payload.requestedCompanyLoaded, true);
+  assert.equal(payload.toolName, "brc_list_sales_invoices");
+});

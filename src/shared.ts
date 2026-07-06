@@ -10,6 +10,7 @@ import {
 } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
+import { enrichReadResponseBody } from "./read_connection_metadata.js";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -1215,6 +1216,8 @@ export async function brcFetch(
       requestBody,
       responseBody: parsedBody,
     });
+  } else {
+    return enrichReadResponseBody(parsedBody, companyName);
   }
 
   return parsedBody;

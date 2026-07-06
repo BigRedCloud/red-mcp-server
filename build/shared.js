@@ -5,6 +5,7 @@ import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
+import { enrichReadResponseBody } from "./read_connection_metadata.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
@@ -840,6 +841,9 @@ export async function brcFetch(companyName, path, init = {}) {
             requestBody,
             responseBody: parsedBody,
         });
+    }
+    else {
+        return enrichReadResponseBody(parsedBody, companyName);
     }
     return parsedBody;
 }

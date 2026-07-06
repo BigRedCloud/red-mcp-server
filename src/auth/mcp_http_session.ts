@@ -9,9 +9,10 @@ import {
 import {
   ensureCredentialsForCurrentSession,
   getActiveConnectionRef,
+  normaliseCompanyName,
+  resolveSessionKeyStore,
   runWithActiveConnectionRef,
   runWithHttpClientKey,
-  resolveSessionKeyStore,
   runWithHttpRequestSessionId,
   runWithSessionKeyStore,
 } from "../shared.js";
@@ -65,6 +66,9 @@ export type McpSessionDiagnostic = {
   mcpSessionHeaderNamesPresent: string[];
   credentialCount: number;
   companiesLoaded: string[];
+  requestedCompany?: string;
+  requestedCompanyLoaded?: boolean;
+  toolName?: string;
 };
 
 function sessionDebugEnabled(): boolean {
@@ -298,7 +302,11 @@ export async function runHttpToolSessionFromExtra<T>(
   keyStore: Map<string, import("../shared.js").CompanyApiContext> | undefined,
   extra: McpToolRequestExtra | undefined,
   fn: () => Promise<T> | T,
-  options?: { connectionRef?: string }
+  options?: {
+    connectionRef?: string;
+    companyName?: string;
+    toolName?: string;
+  }
 ): Promise<T> {
   if (!process.env.RED_CONNECT_HTTP_MODE) {
     return fn();
@@ -322,7 +330,20 @@ export async function runHttpToolSessionFromExtra<T>(
   );
 
   return runWithActiveConnectionRef(connectionRef, () =>
-    runWithHttpToolSession(scope, fn)
+    runWithHttpToolSession(scope, async () => {
+      await ensureCredentialsForCurrentSession(options?.companyName);
+      await logToolSessionDiagnosticIfNeeded({
+        transportSessionId,
+        sessionId,
+        keyStore: store,
+        scope,
+        extra,
+        connectionRef,
+        companyName: options?.companyName,
+        toolName: options?.toolName,
+      });
+      return fn();
+    })
   );
 }
 
@@ -339,6 +360,9 @@ export function buildMcpSessionDiagnostic(args: {
   connectionRef?: string;
   credentialCount?: number;
   companiesLoaded?: string[];
+  requestedCompany?: string;
+  requestedCompanyLoaded?: boolean;
+  toolName?: string;
 }): McpSessionDiagnostic {
   const headers = args.extra?.requestInfo?.headers ?? {};
 
@@ -381,7 +405,71 @@ export function buildMcpSessionDiagnostic(args: {
     ),
     credentialCount: args.credentialCount ?? 0,
     companiesLoaded: args.companiesLoaded ?? [],
+    requestedCompany: args.requestedCompany,
+    requestedCompanyLoaded: args.requestedCompanyLoaded,
+    toolName: args.toolName,
   };
+}
+
+function listLoadedCompanyNames(
+  keyStore: Map<string, import("../shared.js").CompanyApiContext>
+): string[] {
+  return Array.from(keyStore.values()).map((entry) => entry.companyName);
+}
+
+function shouldLogToolSessionDiagnostic(args: {
+  connectionRef?: string;
+  resolution: HttpToolSessionScope["resolution"];
+}): boolean {
+  return (
+    Boolean(args.connectionRef?.trim()) ||
+    args.resolution.connectionRefResolved ||
+    args.resolution.connectionRefInvalid
+  );
+}
+
+async function logToolSessionDiagnosticIfNeeded(args: {
+  transportSessionId?: string;
+  sessionId: string;
+  keyStore: Map<string, import("../shared.js").CompanyApiContext>;
+  scope: HttpToolSessionScope;
+  extra?: McpToolRequestExtra;
+  connectionRef?: string;
+  companyName?: string;
+  toolName?: string;
+}): Promise<void> {
+  if (!sessionDebugEnabled()) {
+    return;
+  }
+
+  if (
+    !shouldLogToolSessionDiagnostic({
+      connectionRef: args.connectionRef,
+      resolution: args.scope.resolution,
+    })
+  ) {
+    return;
+  }
+
+  const companiesLoaded = listLoadedCompanyNames(args.keyStore);
+  const requestedCompany = args.companyName?.trim();
+  const requestedCompanyLoaded = requestedCompany
+    ? args.keyStore.has(normaliseCompanyName(requestedCompany))
+    : undefined;
+
+  logMcpSessionDiagnostic(
+    buildMcpSessionDiagnostic({
+      transportSessionId: args.transportSessionId ?? args.sessionId,
+      extra: args.extra,
+      resolution: args.scope.resolution,
+      connectionRef: args.connectionRef,
+      credentialCount: companiesLoaded.length,
+      companiesLoaded,
+      requestedCompany,
+      requestedCompanyLoaded,
+      toolName: args.toolName,
+    })
+  );
 }
 
 /**
@@ -399,16 +487,24 @@ export function wrapHttpSessionAwareToolHandler<
   options?: {
     transportSessionId?: string;
     keyStore?: Map<string, import("../shared.js").CompanyApiContext>;
+    toolName?: string;
   }
 ): (args: TArgs, extra?: McpToolRequestExtra) => Promise<TResult> {
   return async (args, extra) => {
     const connectionRef = extractConnectionRefFromToolArgs(args);
+    const companyName =
+      typeof args.companyName === "string" ? args.companyName : undefined;
+
     return runHttpToolSessionFromExtra(
       options?.transportSessionId,
       options?.keyStore,
       extra,
       () => handler(args, extra),
-      { connectionRef }
+      {
+        connectionRef,
+        companyName,
+        toolName: options?.toolName,
+      }
     );
   };
 }

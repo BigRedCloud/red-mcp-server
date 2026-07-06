@@ -72,7 +72,7 @@ function createFilteredServer(server: McpServer): McpServer {
       return originalTool(
         toolName,
         description,
-        wrapHttpSessionAwareToolHandler(handler)
+        wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
 
@@ -82,7 +82,7 @@ function createFilteredServer(server: McpServer): McpServer {
       (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
     ];
 
-    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
+    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler, { toolName });
     const schemaWithConnectionRef = withConnectionRefSchema(schema);
 
     if (!requiresWriteConfirmation(toolName)) {

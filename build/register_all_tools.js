@@ -44,10 +44,10 @@ function createFilteredServer(server) {
         }
         if (args.length < 3) {
             const [description, handler] = args;
-            return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler));
+            return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
         const [description, schema, handler] = args;
-        const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
+        const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler, { toolName });
         const schemaWithConnectionRef = withConnectionRefSchema(schema);
         if (!requiresWriteConfirmation(toolName)) {
             return originalTool(toolName, description, schemaWithConnectionRef, httpAwareHandler);
