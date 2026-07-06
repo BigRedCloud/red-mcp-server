@@ -67,6 +67,15 @@ test("connection tools use 'confirmation code', not 'confirmation command'", () 
         assert.equal(/confirmation command/i.test(tool.description), false);
     }
 });
+test("brc_start_company_connection guides reconnect and fresh-link behaviour", () => {
+    const { description } = getTool("brc_start_company_connection");
+    assert.match(description, /reconnect/i);
+    assert.match(description, /generates a fresh one-time secure Red connection link/i);
+    assert.match(description, /never reuse a previous connection link/i);
+    assert.match(description, /expired session credentials/i);
+    assert.match(description, /stale secure connection link/i);
+    assert.match(description, /paste an API key into chat/i);
+});
 test("brc_list_company_contexts says connection credentials, not API keys", () => {
     const { description } = getTool("brc_list_company_contexts");
     assert.match(description, /connection credentials are never returned/i);

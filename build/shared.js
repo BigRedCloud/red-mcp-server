@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
+import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
@@ -318,14 +319,14 @@ export function getCredentialForCompany(companyName) {
         throw new Error([
             `No company connection is currently stored for "${companyName}".`,
             "",
-            "To continue, ask the user to connect the company using the secure Red connection page.",
+            FRESH_CONNECTION_ASSISTANT_GUIDANCE,
         ].join("\n"));
     }
     if (credential.expiresAt < Date.now()) {
         throw new Error([
             `The connection for "${companyName}" has expired.`,
             "",
-            "To continue, ask the user to reconnect the company using the secure Red connection page. Do not ask the user to paste an API key into chat.",
+            FRESH_CONNECTION_ASSISTANT_GUIDANCE,
         ].join("\n"));
     }
     if (credential.kind === "apiKey") {
@@ -775,7 +776,7 @@ export async function brcFetch(companyName, path, init = {}) {
     const text = await response.text();
     if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
-            throw new Error(`BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(response.status)}. Ask the user to reconnect the company using the secure Red connection page; do not ask the user to paste an API key into chat.`);
+            throw new Error(`BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(response.status)}. ${FRESH_CONNECTION_ASSISTANT_GUIDANCE}`);
         }
         throw new Error(`BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`);
     }

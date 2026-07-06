@@ -8,6 +8,7 @@ import {
   hydrateSessionKeyStoreFromConnectionStore,
   persistCompanyCredentialToConnectionStore,
 } from "./auth/connection_persistence.js";
+import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -495,7 +496,7 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
       [
         `No company connection is currently stored for "${companyName}".`,
         "",
-        "To continue, ask the user to connect the company using the secure Red connection page.",
+        FRESH_CONNECTION_ASSISTANT_GUIDANCE,
       ].join("\n")
     );
   }
@@ -505,7 +506,7 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
       [
         `The connection for "${companyName}" has expired.`,
         "",
-        "To continue, ask the user to reconnect the company using the secure Red connection page. Do not ask the user to paste an API key into chat.",
+        FRESH_CONNECTION_ASSISTANT_GUIDANCE,
       ].join("\n")
     );
   }
@@ -1132,7 +1133,7 @@ export async function brcFetch(
       throw new Error(
         `BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(
           response.status
-        )}. Ask the user to reconnect the company using the secure Red connection page; do not ask the user to paste an API key into chat.`
+        )}. ${FRESH_CONNECTION_ASSISTANT_GUIDANCE}`
       );
     }
 

@@ -9,6 +9,7 @@ import {
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import type { ConnectionStore } from "./connection_store_types.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
+import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -220,7 +221,7 @@ export async function claimConnectionCodeForSession(
   const trimmedCode = code.trim();
   if (!trimmedCode) {
     throw new ClaimConnectionError(
-      "A connection code is required. Please ask for a new secure Red connection link and try again.",
+      `A connection code is required. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
       "not_found"
     );
   }
@@ -230,14 +231,14 @@ export async function claimConnectionCodeForSession(
 
   if (!pending) {
     throw new ClaimConnectionError(
-      "That connection code is missing, incorrect, or has already been used. Please ask for a new secure Red connection link and try again.",
+      `That connection code is missing, incorrect, or has already been used. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
       "not_found"
     );
   }
 
   if (!pending.used) {
     throw new ClaimConnectionError(
-      "That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.",
+      "That connection code has not been completed yet. Open the secure Red connection page from your current fresh connection link, submit your company details, then return here and confirm the confirmation code. If that link no longer works, start a fresh company connection to generate a new secure Red connection link.",
       "not_completed"
     );
   }
@@ -245,7 +246,7 @@ export async function claimConnectionCodeForSession(
   const companies = await store.listConnectedCompanies(pending.connectionId);
   if (companies.length === 0) {
     throw new ClaimConnectionError(
-      "No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.",
+      `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
       "no_companies"
     );
   }
