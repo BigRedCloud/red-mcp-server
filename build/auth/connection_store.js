@@ -6,6 +6,7 @@ import { PENDING_CONNECTION_NEVER_EXPIRES_AT, } from "./connection_pending.js";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
+import { issueConnectionRef } from "./connection_ref.js";
 const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
@@ -103,12 +104,34 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args) {
     await ensureConnectionStoreInitialized();
     const normalizedSessionId = args.sessionId.trim();
     const store = getConnectionStore();
+    if (args.connectionRef?.trim()) {
+        const fromRef = await store.getConnectionIdForRef(args.connectionRef.trim());
+        if (!fromRef) {
+            return {
+                connectionId: null,
+                sessionBindingFound: false,
+                clientClaimInherited: false,
+                connectionRefResolved: false,
+                connectionRefInvalid: true,
+            };
+        }
+        await store.bindSessionToConnection(normalizedSessionId, fromRef);
+        return {
+            connectionId: fromRef,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+            connectionRefResolved: true,
+            connectionRefInvalid: false,
+        };
+    }
     const bound = await store.getConnectionIdForSession(normalizedSessionId);
     if (bound) {
         return {
             connectionId: bound,
             sessionBindingFound: true,
             clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
         };
     }
     if (!args.clientKey) {
@@ -116,6 +139,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args) {
             connectionId: null,
             sessionBindingFound: false,
             clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
         };
     }
     const inherited = await store.getRecentClientClaim(args.clientKey, CLIENT_CLAIM_INHERIT_TTL_MS);
@@ -124,6 +149,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args) {
             connectionId: null,
             sessionBindingFound: false,
             clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
         };
     }
     await store.bindSessionToConnection(normalizedSessionId, inherited);
@@ -131,6 +158,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args) {
         connectionId: inherited,
         sessionBindingFound: false,
         clientClaimInherited: true,
+        connectionRefResolved: false,
+        connectionRefInvalid: false,
     };
 }
 export async function ensureConnectionIdForSession(sessionId) {
@@ -181,9 +210,12 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
             claimedAt,
         });
     }
+    const { connectionRef, expiresAt: connectionRefExpiresAt } = await issueConnectionRef(pending.connectionId);
     return {
         connectionId: pending.connectionId,
         companyNames: companies.map((company) => company.companyName),
+        connectionRef,
+        connectionRefExpiresAt,
     };
 }
 export async function createPendingConnection(sessionId) {

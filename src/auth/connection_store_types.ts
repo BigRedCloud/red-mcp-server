@@ -66,6 +66,14 @@ export interface ConnectionStore {
     maxAgeMs: number
   ): Promise<string | null>;
 
+  createConnectionRef(args: {
+    ref: string;
+    connectionId: string;
+    expiresAt: number;
+  }): Promise<void>;
+
+  getConnectionIdForRef(ref: string): Promise<string | null>;
+
   saveConnectedCompanies(
     connectionId: string,
     companies: CompanyCredentialInput[]

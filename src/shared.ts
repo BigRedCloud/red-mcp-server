@@ -9,6 +9,7 @@ import {
   persistCompanyCredentialToConnectionStore,
 } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
+import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -61,6 +62,7 @@ export const BRC_API_BASE_URL = (
 const sessionKeyStorage = new AsyncLocalStorage<Map<string, CompanyApiContext>>();
 const httpRequestSessionIdStorage = new AsyncLocalStorage<string>();
 const httpClientKeyStorage = new AsyncLocalStorage<string>();
+const activeConnectionRefStorage = new AsyncLocalStorage<string>();
 const globalContexts = new Map<string, CompanyApiContext>();
 const httpSessionKeyStores = new Map<string, Map<string, CompanyApiContext>>();
 
@@ -93,6 +95,21 @@ export function enterHttpRequestSessionId(sessionId: string): void {
 
 export function runWithHttpClientKey<T>(clientKey: string, fn: () => T): T {
   return httpClientKeyStorage.run(clientKey, fn);
+}
+
+export function runWithActiveConnectionRef<T>(
+  connectionRef: string | undefined,
+  fn: () => T
+): T {
+  if (!connectionRef?.trim()) {
+    return fn();
+  }
+
+  return activeConnectionRefStorage.run(connectionRef.trim(), fn);
+}
+
+export function getActiveConnectionRef(): string | undefined {
+  return activeConnectionRefStorage.getStore();
 }
 
 export function enterHttpClientKey(clientKey: string): void {
@@ -361,6 +378,7 @@ export async function ensureCredentialsForCurrentSession(
   const connectionId = await resolveConnectionIdForActiveSession({
     sessionId,
     clientKey: resolveHttpClientKey(),
+    connectionRef: getActiveConnectionRef(),
   });
 
   if (!connectionId) {
@@ -369,7 +387,11 @@ export async function ensureCredentialsForCurrentSession(
       sessionId,
       connectionId: null,
       clientKeyPresent: Boolean(resolveHttpClientKey()),
-      reason: "no_bound_connection",
+      connectionRefPresent: Boolean(getActiveConnectionRef()),
+      connectionRefPrefix: getActiveConnectionRef()?.slice(0, 16),
+      reason: getActiveConnectionRef()
+        ? "invalid_or_expired_connection_ref"
+        : "no_bound_connection",
     });
     return;
   }
@@ -477,6 +499,7 @@ export async function ensureMcpSessionReady(
     (await resolveConnectionIdForActiveSession({
       sessionId,
       clientKey: resolveHttpClientKey(),
+      connectionRef: getActiveConnectionRef(),
     })) ?? "";
 
   await ensureCredentialsForCurrentSession();
@@ -497,6 +520,12 @@ export async function getCredentialForCompanyAsync(
   companyName: string
 ): Promise<BrcCredential> {
   await ensureCredentialsForCurrentSession(companyName);
+
+  const credential = companyCredentialProvider.getCredential(companyName);
+  if (!credential && getActiveConnectionRef()) {
+    throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+  }
+
   return getCredentialForCompany(companyName);
 }
 
@@ -768,6 +797,14 @@ export function auditEntryMatchesScope(
   entry: RedAuditEntry,
   scope: AuditScope
 ): boolean {
+  if (
+    scope.connectionId &&
+    entry.connectionId &&
+    entry.connectionId === scope.connectionId
+  ) {
+    return true;
+  }
+
   if (!scope.mcpSessionId) {
     return false;
   }

@@ -4,11 +4,13 @@ import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
+import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
 const httpRequestSessionIdStorage = new AsyncLocalStorage();
 const httpClientKeyStorage = new AsyncLocalStorage();
+const activeConnectionRefStorage = new AsyncLocalStorage();
 const globalContexts = new Map();
 const httpSessionKeyStores = new Map();
 function credentialDebugEnabled() {
@@ -32,6 +34,15 @@ export function enterHttpRequestSessionId(sessionId) {
 }
 export function runWithHttpClientKey(clientKey, fn) {
     return httpClientKeyStorage.run(clientKey, fn);
+}
+export function runWithActiveConnectionRef(connectionRef, fn) {
+    if (!connectionRef?.trim()) {
+        return fn();
+    }
+    return activeConnectionRefStorage.run(connectionRef.trim(), fn);
+}
+export function getActiveConnectionRef() {
+    return activeConnectionRefStorage.getStore();
 }
 export function enterHttpClientKey(clientKey) {
     httpClientKeyStorage.enterWith(clientKey);
@@ -218,6 +229,7 @@ export async function ensureCredentialsForCurrentSession(companyName) {
     const connectionId = await resolveConnectionIdForActiveSession({
         sessionId,
         clientKey: resolveHttpClientKey(),
+        connectionRef: getActiveConnectionRef(),
     });
     if (!connectionId) {
         logCredentialDebug({
@@ -225,7 +237,11 @@ export async function ensureCredentialsForCurrentSession(companyName) {
             sessionId,
             connectionId: null,
             clientKeyPresent: Boolean(resolveHttpClientKey()),
-            reason: "no_bound_connection",
+            connectionRefPresent: Boolean(getActiveConnectionRef()),
+            connectionRefPrefix: getActiveConnectionRef()?.slice(0, 16),
+            reason: getActiveConnectionRef()
+                ? "invalid_or_expired_connection_ref"
+                : "no_bound_connection",
         });
         return;
     }
@@ -308,6 +324,7 @@ export async function ensureMcpSessionReady(sessionId, keyStore) {
     const connectionId = (await resolveConnectionIdForActiveSession({
         sessionId,
         clientKey: resolveHttpClientKey(),
+        connectionRef: getActiveConnectionRef(),
     })) ?? "";
     await ensureCredentialsForCurrentSession();
     return { sessionId, connectionId };
@@ -321,6 +338,10 @@ export function normaliseCompanyName(companyName) {
 }
 export async function getCredentialForCompanyAsync(companyName) {
     await ensureCredentialsForCurrentSession(companyName);
+    const credential = companyCredentialProvider.getCredential(companyName);
+    if (!credential && getActiveConnectionRef()) {
+        throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+    }
     return getCredentialForCompany(companyName);
 }
 export function getCredentialForCompany(companyName) {
@@ -503,6 +524,11 @@ function resolveCurrentAuditScope() {
  * matches, so global/other-session entries are never leaked.
  */
 export function auditEntryMatchesScope(entry, scope) {
+    if (scope.connectionId &&
+        entry.connectionId &&
+        entry.connectionId === scope.connectionId) {
+        return true;
+    }
     if (!scope.mcpSessionId) {
         return false;
     }

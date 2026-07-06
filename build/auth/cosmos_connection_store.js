@@ -21,6 +21,9 @@ function connectionPartitionKey(connectionId) {
 function clientPartitionKey(clientKey) {
     return `client:${clientKey}`;
 }
+function connectionRefPartitionKey(ref) {
+    return `ref:${ref}`;
+}
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
 }
@@ -199,6 +202,42 @@ export class CosmosConnectionStore {
             if (Date.now() - resource.claimedAt > maxAgeMs) {
                 await this.getContainer()
                     .item("lastClaim", clientPartitionKey(clientKey))
+                    .delete()
+                    .catch(() => { });
+                return null;
+            }
+            return resource.connectionId;
+        }
+        catch {
+            return null;
+        }
+    }
+    async createConnectionRef(args) {
+        const now = Date.now();
+        const ttlSeconds = Math.max(60, Math.ceil((args.expiresAt - now) / 1000));
+        const doc = {
+            pk: connectionRefPartitionKey(args.ref),
+            id: "handoff",
+            type: "connectionRef",
+            ref: args.ref,
+            connectionId: args.connectionId,
+            expiresAt: args.expiresAt,
+            createdAt: now,
+            ttl: ttlSeconds,
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getConnectionIdForRef(ref) {
+        try {
+            const { resource } = await this.getContainer()
+                .item("handoff", connectionRefPartitionKey(ref.trim()))
+                .read();
+            if (!resource || resource.type !== "connectionRef") {
+                return null;
+            }
+            if (resource.expiresAt < Date.now()) {
+                await this.getContainer()
+                    .item("handoff", connectionRefPartitionKey(ref.trim()))
                     .delete()
                     .catch(() => { });
                 return null;

@@ -314,6 +314,8 @@ test("session diagnostic omits secrets and truncates identifiers", async () => {
       connectionId: "connection-12345678",
       sessionBindingFound: true,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     },
     credentialCount: 2,
     companiesLoaded: ["Company A", "Company B"],

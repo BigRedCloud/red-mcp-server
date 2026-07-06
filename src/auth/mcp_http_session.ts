@@ -8,11 +8,17 @@ import {
 } from "./connection_store.js";
 import {
   ensureCredentialsForCurrentSession,
+  getActiveConnectionRef,
+  runWithActiveConnectionRef,
   runWithHttpClientKey,
   resolveSessionKeyStore,
   runWithHttpRequestSessionId,
   runWithSessionKeyStore,
 } from "../shared.js";
+import {
+  extractConnectionRefFromToolArgs,
+  prefixConnectionRef,
+} from "./connection_ref.js";
 
 export const MCP_SESSION_HEADER_NAMES = [
   "mcp-session-id",
@@ -50,6 +56,10 @@ export type McpSessionDiagnostic = {
   connectionIdPrefix?: string;
   sessionBindingFound: boolean;
   clientClaimInherited: boolean;
+  connectionRefResolved: boolean;
+  connectionRefInvalid: boolean;
+  connectionRefPresent: boolean;
+  connectionRefPrefix?: string;
   clientKeyPresent: boolean;
   clientIdentityHeaderNamesPresent: string[];
   mcpSessionHeaderNamesPresent: string[];
@@ -217,19 +227,23 @@ export type HttpToolSessionScope = {
     connectionId: string | null;
     sessionBindingFound: boolean;
     clientClaimInherited: boolean;
+    connectionRefResolved: boolean;
+    connectionRefInvalid: boolean;
   };
 };
 
 export async function prepareHttpToolSessionScope(
   sessionId: string,
   keyStore: Map<string, import("../shared.js").CompanyApiContext>,
-  clientKey?: string
+  clientKey?: string,
+  connectionRef?: string
 ): Promise<HttpToolSessionScope> {
   await ensureConnectionStoreInitialized();
 
   const resolution = await resolveConnectionIdForActiveSessionWithMeta({
     sessionId,
     clientKey,
+    connectionRef,
   });
 
   return {
@@ -283,7 +297,8 @@ export async function runHttpToolSessionFromExtra<T>(
   transportSessionId: string | undefined,
   keyStore: Map<string, import("../shared.js").CompanyApiContext> | undefined,
   extra: McpToolRequestExtra | undefined,
-  fn: () => Promise<T> | T
+  fn: () => Promise<T> | T,
+  options?: { connectionRef?: string }
 ): Promise<T> {
   if (!process.env.RED_CONNECT_HTTP_MODE) {
     return fn();
@@ -298,9 +313,17 @@ export async function runHttpToolSessionFromExtra<T>(
 
   const store = keyStore ?? resolveSessionKeyStore(sessionId);
   const clientKey = buildHttpClientKeyFromExtra(extra);
-  const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey);
+  const connectionRef = options?.connectionRef;
+  const scope = await prepareHttpToolSessionScope(
+    sessionId,
+    store,
+    clientKey,
+    connectionRef
+  );
 
-  return runWithHttpToolSession(scope, fn);
+  return runWithActiveConnectionRef(connectionRef, () =>
+    runWithHttpToolSession(scope, fn)
+  );
 }
 
 export function buildMcpSessionDiagnostic(args: {
@@ -310,7 +333,10 @@ export function buildMcpSessionDiagnostic(args: {
     connectionId: string | null;
     sessionBindingFound: boolean;
     clientClaimInherited: boolean;
+    connectionRefResolved: boolean;
+    connectionRefInvalid: boolean;
   };
+  connectionRef?: string;
   credentialCount?: number;
   companiesLoaded?: string[];
 }): McpSessionDiagnostic {
@@ -340,6 +366,10 @@ export function buildMcpSessionDiagnostic(args: {
     connectionIdPrefix: prefixId(args.resolution?.connectionId ?? undefined),
     sessionBindingFound: args.resolution?.sessionBindingFound ?? false,
     clientClaimInherited: args.resolution?.clientClaimInherited ?? false,
+    connectionRefResolved: args.resolution?.connectionRefResolved ?? false,
+    connectionRefInvalid: args.resolution?.connectionRefInvalid ?? false,
+    connectionRefPresent: Boolean(args.connectionRef?.trim()),
+    connectionRefPrefix: prefixConnectionRef(args.connectionRef),
     clientKeyPresent: Boolean(buildHttpClientKeyFromExtra(args.extra)),
     clientIdentityHeaderNamesPresent: listPresentHeaderNames(
       headers,
@@ -371,11 +401,14 @@ export function wrapHttpSessionAwareToolHandler<
     keyStore?: Map<string, import("../shared.js").CompanyApiContext>;
   }
 ): (args: TArgs, extra?: McpToolRequestExtra) => Promise<TResult> {
-  return async (args, extra) =>
-    runHttpToolSessionFromExtra(
+  return async (args, extra) => {
+    const connectionRef = extractConnectionRefFromToolArgs(args);
+    return runHttpToolSessionFromExtra(
       options?.transportSessionId,
       options?.keyStore,
       extra,
-      () => handler(args, extra)
+      () => handler(args, extra),
+      { connectionRef }
     );
+  };
 }

@@ -7,6 +7,7 @@ const pendingConnections = new Map();
 const sessionBindings = new Map();
 const companiesByConnection = new Map();
 const clientLastClaims = new Map();
+const connectionRefs = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -104,6 +105,23 @@ export class MemoryConnectionStore {
         }
         if (Date.now() - entry.claimedAt > maxAgeMs) {
             clientLastClaims.delete(clientKey);
+            return null;
+        }
+        return entry.connectionId;
+    }
+    async createConnectionRef(args) {
+        connectionRefs.set(args.ref.trim(), {
+            connectionId: args.connectionId,
+            expiresAt: args.expiresAt,
+        });
+    }
+    async getConnectionIdForRef(ref) {
+        const entry = connectionRefs.get(ref.trim());
+        if (!entry) {
+            return null;
+        }
+        if (entry.expiresAt < Date.now()) {
+            connectionRefs.delete(ref.trim());
             return null;
         }
         return entry.connectionId;

@@ -22,8 +22,18 @@ import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journ
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
+import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import { appendWriteConfirmationDescription, confirmCounterpartyExplicitSchema, confirmWriteSchema, requiresCounterpartyConfirmation, requiresWriteConfirmation, wrapWriteToolHandler, } from "./guards/write_confirmation.js";
+function withConnectionRefSchema(schema) {
+    if (schema.connectionRef) {
+        return schema;
+    }
+    return {
+        connectionRef: connectionRefSchema,
+        ...schema,
+    };
+}
 function createFilteredServer(server) {
     const originalTool = server.tool.bind(server);
     const filteredServer = Object.create(server);
@@ -38,11 +48,12 @@ function createFilteredServer(server) {
         }
         const [description, schema, handler] = args;
         const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
+        const schemaWithConnectionRef = withConnectionRefSchema(schema);
         if (!requiresWriteConfirmation(toolName)) {
-            return originalTool(toolName, description, schema, httpAwareHandler);
+            return originalTool(toolName, description, schemaWithConnectionRef, httpAwareHandler);
         }
         const wrappedSchema = {
-            ...schema,
+            ...schemaWithConnectionRef,
             confirmWrite: schema.confirmWrite ?? confirmWriteSchema,
             ...(requiresCounterpartyConfirmation(toolName)
                 ? {

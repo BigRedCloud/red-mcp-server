@@ -10,6 +10,7 @@ import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import type { ConnectionStore } from "./connection_store_types.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
+import { issueConnectionRef } from "./connection_ref.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -150,6 +151,7 @@ export async function getBoundConnectionIdForSession(
 export async function resolveConnectionIdForActiveSession(args: {
   sessionId: string;
   clientKey?: string;
+  connectionRef?: string;
 }): Promise<string | null> {
   const result = await resolveConnectionIdForActiveSessionWithMeta(args);
   return result.connectionId;
@@ -158,21 +160,49 @@ export async function resolveConnectionIdForActiveSession(args: {
 export async function resolveConnectionIdForActiveSessionWithMeta(args: {
   sessionId: string;
   clientKey?: string;
+  connectionRef?: string;
 }): Promise<{
   connectionId: string | null;
   sessionBindingFound: boolean;
   clientClaimInherited: boolean;
+  connectionRefResolved: boolean;
+  connectionRefInvalid: boolean;
 }> {
   await ensureConnectionStoreInitialized();
 
   const normalizedSessionId = args.sessionId.trim();
   const store = getConnectionStore();
+
+  if (args.connectionRef?.trim()) {
+    const fromRef = await store.getConnectionIdForRef(args.connectionRef.trim());
+    if (!fromRef) {
+      return {
+        connectionId: null,
+        sessionBindingFound: false,
+        clientClaimInherited: false,
+        connectionRefResolved: false,
+        connectionRefInvalid: true,
+      };
+    }
+
+    await store.bindSessionToConnection(normalizedSessionId, fromRef);
+    return {
+      connectionId: fromRef,
+      sessionBindingFound: false,
+      clientClaimInherited: false,
+      connectionRefResolved: true,
+      connectionRefInvalid: false,
+    };
+  }
+
   const bound = await store.getConnectionIdForSession(normalizedSessionId);
   if (bound) {
     return {
       connectionId: bound,
       sessionBindingFound: true,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -181,6 +211,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
       connectionId: null,
       sessionBindingFound: false,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -193,6 +225,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
       connectionId: null,
       sessionBindingFound: false,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -201,6 +235,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
     connectionId: inherited,
     sessionBindingFound: false,
     clientClaimInherited: true,
+    connectionRefResolved: false,
+    connectionRefInvalid: false,
   };
 }
 
@@ -224,6 +260,8 @@ export async function ensureConnectionIdForSession(
 export type ClaimConnectionResult = {
   connectionId: string;
   companyNames: string[];
+  connectionRef: string;
+  connectionRefExpiresAt: number;
 };
 
 export class ClaimConnectionError extends Error {
@@ -291,9 +329,14 @@ export async function claimConnectionCodeForSession(
     });
   }
 
+  const { connectionRef, expiresAt: connectionRefExpiresAt } =
+    await issueConnectionRef(pending.connectionId);
+
   return {
     connectionId: pending.connectionId,
     companyNames: companies.map((company) => company.companyName),
+    connectionRef,
+    connectionRefExpiresAt,
   };
 }
 

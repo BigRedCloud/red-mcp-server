@@ -67,6 +67,11 @@ test("connection tools use 'confirmation code', not 'confirmation command'", () 
         assert.equal(/confirmation command/i.test(tool.description), false);
     }
 });
+test("brc_confirm_company_connection returns connectionRef guidance", () => {
+    const confirm = getTool("brc_confirm_company_connection");
+    assert.match(confirm.description, /connectionRef/i);
+    assert.match(confirm.description, /rotates session ids/i);
+});
 test("brc_start_company_connection guides reconnect and fresh-link behaviour", () => {
     const { description } = getTool("brc_start_company_connection");
     assert.match(description, /reconnect/i);

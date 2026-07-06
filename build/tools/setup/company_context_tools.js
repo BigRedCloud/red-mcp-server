@@ -19,7 +19,7 @@ export function registerCompanyContextTools(server) {
         const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
         return textResponse(formatStartConnectionResponse(url));
     });
-    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.", {
+    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral). Never exposes connection credentials.", {
         code: z
             .string()
             .min(1)
@@ -49,6 +49,11 @@ export function registerCompanyContextTools(server) {
                 "",
                 summary,
                 ...result.companyNames.map((name) => `- ${name}`),
+                "",
+                "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
+                result.connectionRef,
+                "",
+                "Vibe and other clients that rotate MCP session ids need connectionRef on each tool call. It is opaque, not an API key, and expires after about 2 hours.",
                 "",
                 "You can now ask for connected companies or work with your company records.",
             ].join("\n"));

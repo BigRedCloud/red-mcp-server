@@ -36,6 +36,10 @@ function clientPartitionKey(clientKey: string): string {
   return `client:${clientKey}`;
 }
 
+function connectionRefPartitionKey(ref: string): string {
+  return `ref:${ref}`;
+}
+
 function companyDocumentId(normalisedName: string): string {
   return `company:${normalisedName}`;
 }
@@ -87,6 +91,15 @@ type ClientLastClaimDocument = CosmosRecord & {
   clientKey: string;
   connectionId: string;
   claimedAt: number;
+  ttl: number;
+};
+
+type ConnectionRefDocument = CosmosRecord & {
+  type: "connectionRef";
+  ref: string;
+  connectionId: string;
+  expiresAt: number;
+  createdAt: number;
   ttl: number;
 };
 
@@ -311,6 +324,52 @@ export class CosmosConnectionStore implements ConnectionStore {
       if (Date.now() - resource.claimedAt > maxAgeMs) {
         await this.getContainer()
           .item("lastClaim", clientPartitionKey(clientKey))
+          .delete()
+          .catch(() => {});
+        return null;
+      }
+
+      return resource.connectionId;
+    } catch {
+      return null;
+    }
+  }
+
+  async createConnectionRef(args: {
+    ref: string;
+    connectionId: string;
+    expiresAt: number;
+  }): Promise<void> {
+    const now = Date.now();
+    const ttlSeconds = Math.max(60, Math.ceil((args.expiresAt - now) / 1000));
+
+    const doc: ConnectionRefDocument = {
+      pk: connectionRefPartitionKey(args.ref),
+      id: "handoff",
+      type: "connectionRef",
+      ref: args.ref,
+      connectionId: args.connectionId,
+      expiresAt: args.expiresAt,
+      createdAt: now,
+      ttl: ttlSeconds,
+    };
+
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getConnectionIdForRef(ref: string): Promise<string | null> {
+    try {
+      const { resource } = await this.getContainer()
+        .item("handoff", connectionRefPartitionKey(ref.trim()))
+        .read<ConnectionRefDocument>();
+
+      if (!resource || resource.type !== "connectionRef") {
+        return null;
+      }
+
+      if (resource.expiresAt < Date.now()) {
+        await this.getContainer()
+          .item("handoff", connectionRefPartitionKey(ref.trim()))
           .delete()
           .catch(() => {});
         return null;

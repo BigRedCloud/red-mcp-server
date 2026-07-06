@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSessionWithMeta, runWithMcpSessionContext, } from "./connection_store.js";
-import { ensureCredentialsForCurrentSession, runWithHttpClientKey, resolveSessionKeyStore, runWithHttpRequestSessionId, runWithSessionKeyStore, } from "../shared.js";
+import { ensureCredentialsForCurrentSession, runWithActiveConnectionRef, runWithHttpClientKey, resolveSessionKeyStore, runWithHttpRequestSessionId, runWithSessionKeyStore, } from "../shared.js";
+import { extractConnectionRefFromToolArgs, prefixConnectionRef, } from "./connection_ref.js";
 export const MCP_SESSION_HEADER_NAMES = [
     "mcp-session-id",
     "x-mcp-session-id",
@@ -117,11 +118,12 @@ export function logMcpSessionDiagnostic(details) {
     }
     console.info("Red MCP session:", JSON.stringify(details));
 }
-export async function prepareHttpToolSessionScope(sessionId, keyStore, clientKey) {
+export async function prepareHttpToolSessionScope(sessionId, keyStore, clientKey, connectionRef) {
     await ensureConnectionStoreInitialized();
     const resolution = await resolveConnectionIdForActiveSessionWithMeta({
         sessionId,
         clientKey,
+        connectionRef,
     });
     return {
         sessionId,
@@ -147,7 +149,7 @@ export async function runWithHttpToolSession(scope, fn) {
         connectionId: scope.connectionId,
     }, runScoped)));
 }
-export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, extra, fn) {
+export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, extra, fn, options) {
     if (!process.env.RED_CONNECT_HTTP_MODE) {
         return fn();
     }
@@ -157,8 +159,9 @@ export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, 
     }
     const store = keyStore ?? resolveSessionKeyStore(sessionId);
     const clientKey = buildHttpClientKeyFromExtra(extra);
-    const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey);
-    return runWithHttpToolSession(scope, fn);
+    const connectionRef = options?.connectionRef;
+    const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey, connectionRef);
+    return runWithActiveConnectionRef(connectionRef, () => runWithHttpToolSession(scope, fn));
 }
 export function buildMcpSessionDiagnostic(args) {
     const headers = args.extra?.requestInfo?.headers ?? {};
@@ -186,6 +189,10 @@ export function buildMcpSessionDiagnostic(args) {
         connectionIdPrefix: prefixId(args.resolution?.connectionId ?? undefined),
         sessionBindingFound: args.resolution?.sessionBindingFound ?? false,
         clientClaimInherited: args.resolution?.clientClaimInherited ?? false,
+        connectionRefResolved: args.resolution?.connectionRefResolved ?? false,
+        connectionRefInvalid: args.resolution?.connectionRefInvalid ?? false,
+        connectionRefPresent: Boolean(args.connectionRef?.trim()),
+        connectionRefPrefix: prefixConnectionRef(args.connectionRef),
         clientKeyPresent: Boolean(buildHttpClientKeyFromExtra(args.extra)),
         clientIdentityHeaderNamesPresent: listPresentHeaderNames(headers, MCP_CLIENT_IDENTITY_HEADER_NAMES),
         mcpSessionHeaderNamesPresent: listPresentHeaderNames(headers, MCP_SESSION_HEADER_NAMES),
@@ -198,5 +205,8 @@ export function buildMcpSessionDiagnostic(args) {
  * transport session id and/or MCP SDK request extra metadata.
  */
 export function wrapHttpSessionAwareToolHandler(handler, options) {
-    return async (args, extra) => runHttpToolSessionFromExtra(options?.transportSessionId, options?.keyStore, extra, () => handler(args, extra));
+    return async (args, extra) => {
+        const connectionRef = extractConnectionRefFromToolArgs(args);
+        return runHttpToolSessionFromExtra(options?.transportSessionId, options?.keyStore, extra, () => handler(args, extra), { connectionRef });
+    };
 }
