@@ -15,7 +15,7 @@ variables:
   webAppName: 'brc-live-mcp-app'
 
   # Environment name
-  environmentName: 'brc-live-mcp-app'
+  environmentName: 'brc-live-mcp-app-staging'
 
   # Agent VM image name
   vmImageName: 'ubuntu-latest'
