@@ -12,10 +12,10 @@ variables:
   azureSubscription: '9a8304e4-74dd-466f-a1d9-2a206e59a38e'
 
   # Web app name
-  webAppName: 'brc-live-mcp-app-staging'
+  webAppName: 'brc-live-mcp-app'
 
   # Environment name
-  environmentName: 'brc-live-mcp-app-staging'
+  environmentName: 'brc-live-mcp-app'
 
   # Agent VM image name
   vmImageName: 'ubuntu-latest'
@@ -73,6 +73,8 @@ stages:
               azureSubscription: $(azureSubscription)
               appType: webAppLinux
               appName: $(webAppName)
+              deployToSlotOrASE: true
+              slotName: staging
               runtimeStack: 'NODE|24-lts'
               package: $(Pipeline.Workspace)/drop/$(Build.BuildId).zip
               startUpCommand: 'npm run start'
