@@ -3,7 +3,7 @@ import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
-import { formatStartConnectionResponse, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, } from "../../auth/connection_wording.js";
+import { formatStartConnectionResponse, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, CONFIRM_CONNECTION_SUCCESS_LINES, } from "../../auth/connection_wording.js";
 export function registerCompanyContextTools(server) {
     server.tool("brc_start_company_connection", START_COMPANY_CONNECTION_TOOL_DESCRIPTION, {}, async () => {
         await ensureConnectionStoreInitialized();
@@ -19,7 +19,7 @@ export function registerCompanyContextTools(server) {
         const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
         return textResponse(formatStartConnectionResponse(url));
     });
-    server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral). Never exposes connection credentials.", {
+    server.tool("brc_confirm_company_connection", CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, {
         code: z
             .string()
             .min(1)
@@ -53,7 +53,7 @@ export function registerCompanyContextTools(server) {
                 "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
                 result.connectionRef,
                 "",
-                "Vibe and other clients that rotate MCP session ids need connectionRef on each tool call. It is opaque, not an API key, and expires after about 2 hours.",
+                ...CONFIRM_CONNECTION_SUCCESS_LINES,
                 "",
                 "You can now ask for connected companies or work with your company records.",
             ].join("\n"));
@@ -136,7 +136,7 @@ export function registerCompanyContextTools(server) {
             });
         });
     }
-    server.tool("brc_list_company_contexts", "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. Connection credentials are never returned.", {}, async () => {
+    server.tool("brc_list_company_contexts", LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, {}, async () => {
         await ensureCredentialsForCurrentSession();
         const companies = listConnectedCompanyNames().map((companyName) => {
             const credential = getCredentialForCompany(companyName);
@@ -151,7 +151,7 @@ export function registerCompanyContextTools(server) {
             .filter((company) => company.connected)
             .map((company) => company.companyName);
         const customerMessage = connectedNames.length === 0
-            ? "No companies are connected in this session yet. Start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
+            ? "No companies are connected in this session yet. If you have a connectionRef from brc_confirm_company_connection, pass it on this call. If other tools already succeeded with that connectionRef, the connection is active — do not start a new connection. Otherwise start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
             : [
                 "You have the following companies connected in this session:",
                 ...connectedNames.map((name) => `- ${name}`),

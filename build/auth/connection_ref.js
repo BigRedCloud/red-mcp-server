@@ -6,7 +6,7 @@ export const CONNECTION_REF_PREFIX = "redconn_";
 export const connectionRefSchema = z
     .string()
     .optional()
-    .describe("Opaque Red connection reference returned by brc_confirm_company_connection. Pass this exact value on every later tool call when the MCP client rotates session ids (for example Vibe/Mistral). It is not an API key and does not contain credentials.");
+    .describe("Opaque Red connection reference returned by brc_confirm_company_connection. Pass this exact value on every later tool call when the MCP client rotates session ids (for example Vibe/Mistral). Keep reusing the same connectionRef after successful tool calls — do not start a new connection because a lookup returned empty or partial data. It is not an API key and does not contain credentials.");
 export const CONNECTION_REF_INVALID_MESSAGE = [
     "The Red connection reference is missing, invalid, or has expired.",
     "If you just connected companies, run brc_confirm_company_connection again and pass the new connectionRef on subsequent tool calls.",
