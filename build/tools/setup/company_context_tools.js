@@ -3,30 +3,21 @@ import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
+import { formatStartConnectionResponse, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, } from "../../auth/connection_wording.js";
 export function registerCompanyContextTools(server) {
-    server.tool("brc_start_company_connection", "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL (no time expiry, but each link works only once). On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. After completing the secure page, the user should return to this chat and provide (copy/paste) the confirmation code shown on the success page. To connect more companies later, start a new connection. Do not ask the user to type credentials into chat.", {}, async () => {
+    server.tool("brc_start_company_connection", START_COMPANY_CONNECTION_TOOL_DESCRIPTION, {}, async () => {
         await ensureConnectionStoreInitialized();
         const sessionId = resolveActiveMcpSessionId();
         if (!sessionId) {
             return textResponse([
                 "Red could not determine the current MCP session.",
                 "",
-                "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+                "Please try again from your MCP client. If the problem continues, start a fresh company connection to generate a new secure Red connection link.",
             ].join("\n"));
         }
         const { code } = await createPendingConnection(sessionId);
         const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
-        return textResponse([
-            "To connect your Big Red Cloud companies, open this secure Red connection page:",
-            "",
-            url,
-            "",
-            "On that page you can connect one company using the form, or connect several at once by uploading a CSV file. Credentials are not sent through chat.",
-            "",
-            "This link is for one-time use only. After you use it, ask for a new secure connection link if you want to connect more companies.",
-            "",
-            "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
-        ].join("\n"));
+        return textResponse(formatStartConnectionResponse(url));
     });
     server.tool("brc_confirm_company_connection", "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.", {
         code: z
@@ -40,7 +31,7 @@ export function registerCompanyContextTools(server) {
             return textResponse([
                 "Red could not determine the current MCP session.",
                 "",
-                "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+                "Please try again from your MCP client. If the problem continues, start a fresh company connection to generate a new secure Red connection link.",
             ].join("\n"));
         }
         try {
@@ -155,7 +146,7 @@ export function registerCompanyContextTools(server) {
             .filter((company) => company.connected)
             .map((company) => company.companyName);
         const customerMessage = connectedNames.length === 0
-            ? "No companies are connected in this session yet. Use the secure Red connection page to connect a company, then tell me which company you would like to work with."
+            ? "No companies are connected in this session yet. Start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
             : [
                 "You have the following companies connected in this session:",
                 ...connectedNames.map((name) => `- ${name}`),

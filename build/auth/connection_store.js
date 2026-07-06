@@ -5,6 +5,7 @@ import { redServerConfig } from "../config/server_config.js";
 import { PENDING_CONNECTION_NEVER_EXPIRES_AT, } from "./connection_pending.js";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
+import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
@@ -136,19 +137,19 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     await ensureConnectionStoreInitialized();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
-        throw new ClaimConnectionError("A connection code is required. Please ask for a new secure Red connection link and try again.", "not_found");
+        throw new ClaimConnectionError(`A connection code is required. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     const store = getConnectionStore();
     const pending = await store.getConnectionByCode(trimmedCode);
     if (!pending) {
-        throw new ClaimConnectionError("That connection code is missing, incorrect, or has already been used. Please ask for a new secure Red connection link and try again.", "not_found");
+        throw new ClaimConnectionError(`That connection code is missing, incorrect, or has already been used. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     if (!pending.used) {
-        throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.", "not_completed");
+        throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page from your current fresh connection link, submit your company details, then return here and confirm the confirmation code. If that link no longer works, start a fresh company connection to generate a new secure Red connection link.", "not_completed");
     }
     const companies = await store.listConnectedCompanies(pending.connectionId);
     if (companies.length === 0) {
-        throw new ClaimConnectionError("No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.", "no_companies");
+        throw new ClaimConnectionError(`No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "no_companies");
     }
     const normalizedSessionId = sessionId.trim();
     await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);

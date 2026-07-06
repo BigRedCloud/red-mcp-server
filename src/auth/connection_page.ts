@@ -1,4 +1,5 @@
 import { RED_LOGO_URL } from "./red_assets.js";
+import { EXPIRED_CONNECTION_LINK_PAGE_MESSAGE } from "./connection_wording.js";
 
 export function escapeHtml(value: string): string {
   return value
@@ -497,10 +498,10 @@ export function renderExpiredLinkPage(): string {
         <div class="status-icon warning" aria-hidden="true">!</div>
         <h2>Connection link not available</h2>
         <p class="centered">
-          This connection link is invalid or has already been used. Each secure connection link works only once. Ask Red in chat for a new secure connection link.
+          ${escapeHtml(EXPIRED_CONNECTION_LINK_PAGE_MESSAGE)}
         </p>
         <div class="next-step">
-          Return to your chat and ask Red to <strong>start a new company connection</strong>.
+          Return to your chat and ask Red to <strong>start a fresh company connection</strong> to generate a new secure Red connection link.
         </div>
       </div>`;
 

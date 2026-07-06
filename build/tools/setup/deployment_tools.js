@@ -286,7 +286,7 @@ WARNING: Red is currently in beta. Please double-check all information before re
 Red may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
 
 1. Connect your companies
-Ask the chat to start a secure company connection. Red returns a one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for about 2 hours. Each link works only once — ask for a new link to connect more companies later.
+Ask the chat to start a secure company connection. Red returns a fresh one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for about 2 hours. Each link works only once — to reconnect, try again, or fix an expired or stale connection, ask for a fresh link. Never reuse an old connection link.
 
 Example:
 "Connect my companies."
