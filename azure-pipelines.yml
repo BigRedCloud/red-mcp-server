@@ -4,7 +4,7 @@
 # https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
 
 trigger:
-- main
+- none
 
 variables:
 
@@ -68,11 +68,13 @@ stages:
         deploy:
           steps:
           - task: AzureWebApp@1
-            displayName: 'Azure Web App Deploy: brc-live-mcp-app'
+            displayName: 'Azure Web App Deploy: brc-live-mcp-app-staging'
             inputs:
               azureSubscription: $(azureSubscription)
               appType: webAppLinux
               appName: $(webAppName)
+              deployToSlotOrASE: true
+              slotName: staging
               runtimeStack: 'NODE|24-lts'
               package: $(Pipeline.Workspace)/drop/$(Build.BuildId).zip
               startUpCommand: 'npm run start'
