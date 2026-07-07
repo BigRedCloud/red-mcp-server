@@ -3,6 +3,7 @@ import { getCompanyProcessingSettings } from "../../guards/company_processing_se
 import { formatReferenceMode, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
 import { brcFetch, companyNameSchema, extractListItems, getCompanyApiContexts, jsonResponse, normaliseCompanyName, textResponse, } from "../../shared.js";
 import { getCustomerDeploymentCapabilities, redServerConfig, } from "../../config/server_config.js";
+import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 function asNumber(value) {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
@@ -264,7 +265,7 @@ Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
 - When no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. Do not ask for credentials in chat.
 - Never show company data from prior test runs, saved reports, or cached results — only live data from the current connected session.
-- Company connection details are kept in server session memory for about 2 hours and are not shown back in chat.
+- Company connection details are kept in server session memory for ${formatCredentialTtlForUser()} and are not shown back in chat.
 - Assistants must never repeat API keys from chat history.
 - Deleting or changing records should only happen after you confirm the details.
 - Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare an email preview or use a workaround.
@@ -277,7 +278,9 @@ Recommended safe workflow:
 4. Confirm the company, date, customer or supplier, VAT rate and totals.
 5. Only then confirm create, update, delete or batch actions in plain English — when this session allows them.`;
 }
-const gettingStartedText = `Welcome to Red. Big Red Cloud's conversational assistant.
+function buildGettingStartedText() {
+    const sessionDuration = formatCredentialTtlForUser();
+    return `Welcome to Red. Big Red Cloud's conversational assistant.
 
 You can use this chat to ask questions about your company's data and, where enabled, prepare or carry out accounting actions.
 
@@ -286,7 +289,7 @@ WARNING: Red is currently in beta. Please double-check all information before re
 Red may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
 
 1. Connect your companies
-Ask the chat to start a secure company connection. Red returns a fresh one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for about 2 hours. Each link works only once — to reconnect, try again, or fix an expired or stale connection, ask for a fresh link. Never reuse an old connection link.
+Ask the chat to start a secure company connection. Red returns a fresh one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for ${sessionDuration}. Each link works only once — to reconnect, try again, or fix an expired or stale connection, ask for a fresh link. Never reuse an old connection link.
 
 Example:
 "Connect my companies."
@@ -334,6 +337,7 @@ Good starter prompts:
 - "Check if my company is ready."
 - "Show me examples of what I can ask."
 `;
+}
 const examplesText = `Example prompts you can type into the chat:
 
 Getting started:
@@ -396,7 +400,9 @@ Safety:
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
 `;
-const safetyText = `Red assistant safety guide:
+function buildSafetyText() {
+    const sessionDuration = formatCredentialTtlForUser();
+    return `Red assistant safety guide:
 
 This assistant can help read company data and, if enabled, prepare or carry out accounting actions.
 
@@ -420,7 +426,7 @@ Some accounting actions only work inside the company's current financial year. I
 Some generated documents, such as creating an invoice from a quote, may use Big Red Cloud's internal transaction date. If the company financial year is not current, this may fail.
 
 6. Use the secure connection page for credentials
-Never type company API keys into chat. Ask Red to start a secure company connection and enter your company name and API key only on the connection page Red provides. Connections stay in server session memory for about 2 hours.
+Never type company API keys into chat. Ask Red to start a secure company connection and enter your company name and API key only on the connection page Red provides. Connections stay in server session memory for ${sessionDuration}.
 
 7. API keys must never appear in assistant replies
 - MCP tools never return API key values.
@@ -438,12 +444,13 @@ Useful prompts:
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
 `;
+}
 export function registerDeploymentTools(server) {
     server.tool("brc_getting_started", [
         "Use this whenever the user asks how to start, says start, says getting started, or asks for help using Big Red Cloud.",
         "Return simple customer-friendly setup steps and example prompts.",
         "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
-    ].join(" "), {}, async () => textResponse(gettingStartedText));
+    ].join(" "), {}, async () => textResponse(buildGettingStartedText()));
     server.tool("brc_get_deployment_policy", [
         "Authoritative customer-facing permission and output policy summary for this Red session.",
         "Use when the user asks what they can do, what tools they have, what permissions are enabled, or whether technical details/code should be shown.",
@@ -602,7 +609,7 @@ export function registerDeploymentTools(server) {
         description: "Simple getting-started guide for using Big Red Cloud in chat.",
         mimeType: "text/markdown",
     }, async (uri) => ({
-        contents: [{ uri: uri.href, mimeType: "text/markdown", text: gettingStartedText }],
+        contents: [{ uri: uri.href, mimeType: "text/markdown", text: buildGettingStartedText() }],
     }));
     server.registerResource("brc_examples", "brc://examples", {
         title: "Big Red Cloud Example Prompts",
@@ -616,7 +623,7 @@ export function registerDeploymentTools(server) {
         description: "Guidance for safely reading and changing company data.",
         mimeType: "text/markdown",
     }, async (uri) => ({
-        contents: [{ uri: uri.href, mimeType: "text/markdown", text: safetyText }],
+        contents: [{ uri: uri.href, mimeType: "text/markdown", text: buildSafetyText() }],
     }));
     server.registerPrompt("brc_setup_company", {
         title: "Connect a BRC company",

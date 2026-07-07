@@ -1,7 +1,9 @@
+import { CONNECTION_REF_SILENT_USE_INSTRUCTION, buildConnectionRefPresentationFields, } from "./auth/connection_presentation.js";
 export const ACTIVE_CONNECTION_STATUS = "active";
 export const EMPTY_RESULT_REASON = "no_matching_records";
 export const EMPTY_READ_RESULT_MESSAGE = "The Red connection is active. No matching records were returned for this company/filter.";
-export const CONNECTION_REF_REMINDER = "Keep passing activeConnectionRef as connectionRef on every later Red tool call in this chat. Do not reconnect while this works.";
+/** Model-facing — pass connectionRef silently; do not show to normal users. */
+export const CONNECTION_REF_REMINDER = CONNECTION_REF_SILENT_USE_INSTRUCTION;
 export function appendConnectionPersistenceMetadata(metadata, options = {}) {
     const companyName = options.companyName?.trim();
     const activeRef = options.activeConnectionRef?.trim();
@@ -14,8 +16,11 @@ export function appendConnectionPersistenceMetadata(metadata, options = {}) {
         ...(companyName ? { companyName } : {}),
     };
     if (activeRef && connectionRefUsed) {
+        const presentation = buildConnectionRefPresentationFields();
         result.activeConnectionRef = activeRef;
-        result.connectionRefReminder = CONNECTION_REF_REMINDER;
+        result.connectionRefReminder = presentation.connectionRefReminder;
+        result.assistantInstruction = presentation.assistantInstruction;
+        result.presentationHint = presentation.presentationHint;
     }
     return result;
 }

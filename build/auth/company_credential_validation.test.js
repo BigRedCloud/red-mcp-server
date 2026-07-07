@@ -3,6 +3,7 @@ import test, { after } from "node:test";
 process.env.RED_CONNECT_CONNECTION_STORE = "memory";
 import { resetCompanyCredentialValidator, resetValidationFetch, setCompanyCredentialValidator, setValidationFetch, } from "./credential_validation.js";
 import { validateAndPersistConnectedCompanies } from "./connection_persistence.js";
+import { buildConfirmConnectionCustomerMessage } from "./connection_presentation.js";
 import { claimConnectionCodeForSession, getConnectionStore, } from "./connection_store.js";
 import { CompanyNotConnectedError, buildCompanyCredentialInvalidResponse, buildCompanyNotConnectedResponse, } from "./company_connection_errors.js";
 import { brcFetch, jsonResponse, listConnectedCompanyNames, runWithSessionKeyStore, setApiKeyForCompany, } from "../shared.js";
@@ -241,6 +242,13 @@ test("confirm json response includes connectedCompanies and failedCompanies with
     assert.equal(body.failedCompanies[0]?.companyName, "Company A");
     assert.equal(text.includes("bad-key"), false);
     assert.match(body.connectionRef, /^redconn_/);
+    const confirmCustomerMessage = buildConfirmConnectionCustomerMessage({
+        connectedCompanies: result.connectedCompanies,
+        failedCompanies: result.failedCompanies,
+        connectionExpiresAt: result.connectionRefExpiresAt,
+    });
+    assert.equal(confirmCustomerMessage.includes("redconn_"), false);
+    assert.equal(confirmCustomerMessage.includes("connectionRef"), false);
 });
 test("later 401 for one company returns company_credential_invalid and removes it", async () => {
     const originalFetch = globalThis.fetch;

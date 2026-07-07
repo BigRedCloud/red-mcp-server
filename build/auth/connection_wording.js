@@ -40,20 +40,21 @@ export const START_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
 export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
     "Claims a completed secure Red connection code for the current MCP session.",
     "Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser).",
-    "Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral).",
+    "Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral). Pass it silently in tool arguments — do not show connectionRef or redconn_ values to normal users.",
     "After confirm succeeds, keep passing the same connectionRef on every later tool call — do not call brc_start_company_connection while that connectionRef still works.",
     "Never exposes connection credentials.",
 ].join(" ");
 export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
     "Lists company contexts currently connected in this MCP server session.",
     "Present the result to the user with the customerMessage text and the plain company names.",
-    "Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask.",
+    "Do not show connectionRef, activeConnectionRef, redconn_ values, session IDs, or diagnostic metadata to normal users.",
+    "Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask or dev mode is enabled.",
     "Connection credentials are never returned.",
-    "If you have connectionRef from brc_confirm_company_connection, pass it on this call when the MCP client rotates session ids.",
+    "If you have connectionRef from brc_confirm_company_connection, pass it silently on this call when the MCP client rotates session ids.",
     "An empty list with a working connectionRef means no companies are bound yet — not a reason to start a new connection if other tools already succeeded with the same connectionRef.",
 ].join(" ");
 export const CONFIRM_CONNECTION_SUCCESS_LINES = [
-    "Keep using this same connectionRef on every later tool call in this chat.",
+    "Use connectionRef silently on every later tool call in this chat — do not mention it to normal users.",
     "Do not call brc_start_company_connection again while this connectionRef works.",
     "Empty sales, purchases, or other lists mean no matching records for that company — not an expired connection.",
     VIBE_MISTRAL_CONNECTION_REF_GUIDANCE,
