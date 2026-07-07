@@ -12,8 +12,14 @@ import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.j
 import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
 import {
   CompanyNotConnectedError,
+  buildCompanyCredentialInvalidResponse,
   buildCompanyNotConnectedResponse,
 } from "./auth/company_connection_errors.js";
+import {
+  evaluateBrcCredentialResponse,
+  isBrcCredentialHttpFailure,
+  responseBodyIndicatesInvalidCredential,
+} from "./auth/credential_validation.js";
 import {
   enrichReadResponseBody,
   enrichWriteResponseBody,
@@ -546,6 +552,13 @@ async function clearPersistedCompanyCredential(companyName: string): Promise<voi
   if (!connectionId) return;
 
   await clearCompanyFromConnectionStore(connectionId, companyName);
+}
+
+export async function invalidateCompanyCredential(
+  companyName: string
+): Promise<void> {
+  clearCredentialForCompany(companyName);
+  await clearPersistedCompanyCredential(companyName);
 }
 
 async function clearAllPersistedCompanyCredentials(): Promise<void> {
@@ -1274,12 +1287,23 @@ export async function brcFetch(
   const text = await response.text();
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(
-        `BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(
-          response.status
-        )}. ${FRESH_CONNECTION_ASSISTANT_GUIDANCE}`
-      );
+    const credentialFailure =
+      isBrcCredentialHttpFailure(response.status) ||
+      responseBodyIndicatesInvalidCredential(text) ||
+      !evaluateBrcCredentialResponse(response.status, text).valid;
+
+    if (credentialFailure) {
+      await invalidateCompanyCredential(companyName);
+      const otherCompaniesConnected = listConnectedCompanyNames().length > 0;
+      const payload = buildCompanyCredentialInvalidResponse(companyName, {
+        otherCompaniesConnected,
+      });
+
+      if (isWriteHttpMethod(method)) {
+        return enrichToolResponseData(payload, { companyName });
+      }
+
+      return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
     }
 
     throw new Error(

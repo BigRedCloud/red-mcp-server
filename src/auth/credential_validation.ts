@@ -5,7 +5,12 @@ const BRC_API_BASE_URL = (
   process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api"
 ).replace(/\/$/, "");
 
-export const COMPANY_CREDENTIAL_VALIDATION_PATH =
+/** Primary validation — same class of read access Red tools use. */
+export const COMPANY_DATA_ACCESS_VALIDATION_PATH =
+  "/v1/customers?page=1&pageSize=1";
+
+/** Secondary validation — must also pass; not sufficient on its own. */
+export const COMPANY_FINANCIAL_YEAR_VALIDATION_PATH =
   "/v1/companySetupConfig/getFinancialYear";
 
 export type CompanyCredentialValidationReason =
@@ -28,6 +33,18 @@ export type CompanyCredentialValidator = (
   apiKey: string
 ) => Promise<CompanyCredentialValidationResult>;
 
+type ValidationFetch = typeof fetch;
+
+let validationFetch: ValidationFetch = fetch;
+
+export function setValidationFetch(fetchImpl: ValidationFetch): void {
+  validationFetch = fetchImpl;
+}
+
+export function resetValidationFetch(): void {
+  validationFetch = fetch;
+}
+
 export function buildApiKeyAuthorizationHeader(apiKey: string): string {
   const auth = Buffer.from(`${apiKey}:`, "utf8").toString("base64");
   return `Basic ${auth}`;
@@ -49,6 +66,48 @@ export function mapValidationHttpStatusToReason(
   }
 
   return "validation_failed";
+}
+
+export function responseBodyIndicatesInvalidCredential(text: string): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+
+  return /unauthori[sz]ed|invalid.*api.*key|expired.*key|access.*denied|forbidden|authentication.*failed|api key.*invalid|credential.*invalid/i.test(
+    text
+  );
+}
+
+export function evaluateBrcCredentialResponse(
+  status: number,
+  bodyText: string
+): CompanyCredentialValidationResult | { valid: true } {
+  if (status >= 200 && status < 300) {
+    if (responseBodyIndicatesInvalidCredential(bodyText)) {
+      return {
+        valid: false,
+        reason: "invalid_or_expired_api_key",
+        message: "",
+      };
+    }
+
+    return { valid: true };
+  }
+
+  if (responseBodyIndicatesInvalidCredential(bodyText)) {
+    return {
+      valid: false,
+      reason: mapValidationHttpStatusToReason(status === 404 ? 401 : status),
+      message: "",
+    };
+  }
+
+  const reason = mapValidationHttpStatusToReason(status);
+  return {
+    valid: false,
+    reason,
+    message: "",
+  };
 }
 
 export function buildFailedCompanyConnection(
@@ -85,50 +144,31 @@ export async function validateCompanyApiKeyCredential(
   return credentialValidator(companyName, apiKey);
 }
 
-export async function validateCompanyApiKeyCredentialViaBrc(
+async function validateApiKeyAgainstBrcPath(
   companyName: string,
-  apiKey: string
+  apiKey: string,
+  path: string
 ): Promise<CompanyCredentialValidationResult> {
   const trimmedName = companyName.trim();
-  const trimmedKey = apiKey.trim();
-
-  if (!trimmedName || !trimmedKey) {
-    return {
-      valid: false,
-      reason: "validation_failed",
-      message: buildFailedCompanyConnection(trimmedName || companyName, "validation_failed")
-        .message,
-    };
-  }
+  const safePath = path.startsWith("/") ? path : `/${path}`;
 
   try {
-    assertApiKeyAllowed(trimmedKey);
-  } catch (error) {
-    return {
-      valid: false,
-      reason: "forbidden",
-      message: buildFailedCompanyConnection(trimmedName, "forbidden").message,
-    };
-  }
-
-  const safePath = COMPANY_CREDENTIAL_VALIDATION_PATH.startsWith("/")
-    ? COMPANY_CREDENTIAL_VALIDATION_PATH
-    : `/${COMPANY_CREDENTIAL_VALIDATION_PATH}`;
-
-  try {
-    const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
+    const response = await validationFetch(`${BRC_API_BASE_URL}${safePath}`, {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: buildApiKeyAuthorizationHeader(trimmedKey),
+        Authorization: buildApiKeyAuthorizationHeader(apiKey),
       },
     });
 
-    if (response.ok) {
+    const bodyText = await response.text();
+    const evaluated = evaluateBrcCredentialResponse(response.status, bodyText);
+
+    if (evaluated.valid) {
       return { valid: true };
     }
 
-    const reason = mapValidationHttpStatusToReason(response.status);
+    const reason = evaluated.reason;
     return {
       valid: false,
       reason,
@@ -141,6 +181,57 @@ export async function validateCompanyApiKeyCredentialViaBrc(
       message: buildFailedCompanyConnection(trimmedName, "validation_failed").message,
     };
   }
+}
+
+export async function validateCompanyApiKeyCredentialViaBrc(
+  companyName: string,
+  apiKey: string
+): Promise<CompanyCredentialValidationResult> {
+  const trimmedName = companyName.trim();
+  const trimmedKey = apiKey.trim();
+
+  if (!trimmedName || !trimmedKey) {
+    return {
+      valid: false,
+      reason: "validation_failed",
+      message: buildFailedCompanyConnection(
+        trimmedName || companyName,
+        "validation_failed"
+      ).message,
+    };
+  }
+
+  try {
+    assertApiKeyAllowed(trimmedKey);
+  } catch {
+    return {
+      valid: false,
+      reason: "forbidden",
+      message: buildFailedCompanyConnection(trimmedName, "forbidden").message,
+    };
+  }
+
+  const dataAccessResult = await validateApiKeyAgainstBrcPath(
+    trimmedName,
+    trimmedKey,
+    COMPANY_DATA_ACCESS_VALIDATION_PATH
+  );
+
+  if (!dataAccessResult.valid) {
+    return dataAccessResult;
+  }
+
+  const financialYearResult = await validateApiKeyAgainstBrcPath(
+    trimmedName,
+    trimmedKey,
+    COMPANY_FINANCIAL_YEAR_VALIDATION_PATH
+  );
+
+  if (!financialYearResult.valid) {
+    return financialYearResult;
+  }
+
+  return { valid: true };
 }
 
 export async function partitionCompanyCredentials(
@@ -175,4 +266,8 @@ export async function partitionCompanyCredentials(
   }
 
   return { validated, failed };
+}
+
+export function isBrcCredentialHttpFailure(status: number): boolean {
+  return status === 401 || status === 403;
 }

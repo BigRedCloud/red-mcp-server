@@ -5,7 +5,8 @@ import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
-import { CompanyNotConnectedError, buildCompanyNotConnectedResponse, } from "./auth/company_connection_errors.js";
+import { CompanyNotConnectedError, buildCompanyCredentialInvalidResponse, buildCompanyNotConnectedResponse, } from "./auth/company_connection_errors.js";
+import { evaluateBrcCredentialResponse, isBrcCredentialHttpFailure, responseBodyIndicatesInvalidCredential, } from "./auth/credential_validation.js";
 import { enrichReadResponseBody, enrichWriteResponseBody, isListPayload, } from "./read_connection_metadata.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
@@ -351,6 +352,10 @@ async function clearPersistedCompanyCredential(companyName) {
     if (!connectionId)
         return;
     await clearCompanyFromConnectionStore(connectionId, companyName);
+}
+export async function invalidateCompanyCredential(companyName) {
+    clearCredentialForCompany(companyName);
+    await clearPersistedCompanyCredential(companyName);
 }
 async function clearAllPersistedCompanyCredentials() {
     const connectionId = getCurrentConnectionId();
@@ -875,8 +880,19 @@ export async function brcFetch(companyName, path, init = {}) {
     });
     const text = await response.text();
     if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-            throw new Error(`BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(response.status)}. ${FRESH_CONNECTION_ASSISTANT_GUIDANCE}`);
+        const credentialFailure = isBrcCredentialHttpFailure(response.status) ||
+            responseBodyIndicatesInvalidCredential(text) ||
+            !evaluateBrcCredentialResponse(response.status, text).valid;
+        if (credentialFailure) {
+            await invalidateCompanyCredential(companyName);
+            const otherCompaniesConnected = listConnectedCompanyNames().length > 0;
+            const payload = buildCompanyCredentialInvalidResponse(companyName, {
+                otherCompaniesConnected,
+            });
+            if (isWriteHttpMethod(method)) {
+                return enrichToolResponseData(payload, { companyName });
+            }
+            return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
         }
         throw new Error(`BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`);
     }

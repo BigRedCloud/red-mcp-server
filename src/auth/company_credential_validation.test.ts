@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 
 process.env.RED_CONNECT_CONNECTION_STORE = "memory";
 
 import {
   resetCompanyCredentialValidator,
+  resetValidationFetch,
   setCompanyCredentialValidator,
+  setValidationFetch,
+  COMPANY_DATA_ACCESS_VALIDATION_PATH,
+  COMPANY_FINANCIAL_YEAR_VALIDATION_PATH,
 } from "./credential_validation.js";
 import { validateAndPersistConnectedCompanies } from "./connection_persistence.js";
 import {
@@ -14,6 +18,7 @@ import {
 } from "./connection_store.js";
 import {
   CompanyNotConnectedError,
+  buildCompanyCredentialInvalidResponse,
   buildCompanyNotConnectedResponse,
 } from "./company_connection_errors.js";
 import {
@@ -21,11 +26,37 @@ import {
   jsonResponse,
   listConnectedCompanyNames,
   runWithSessionKeyStore,
+  setApiKeyForCompany,
 } from "../shared.js";
 import { hydrateSessionKeyStoreFromConnectionStore } from "./connection_persistence.js";
 
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function mockBrcValidationFetchForKeys(
+  validKeys: Set<string>,
+  invalidKeys: Set<string>
+) {
+  setValidationFetch(async (_input, init) => {
+    const authHeader = String(
+      (init?.headers as Record<string, string> | undefined)?.Authorization ?? ""
+    );
+    const isInvalid = Array.from(invalidKeys).some((key) =>
+      authHeader.includes(Buffer.from(`${key}:`, "utf8").toString("base64"))
+    );
+    const isValid = Array.from(validKeys).some((key) =>
+      authHeader.includes(Buffer.from(`${key}:`, "utf8").toString("base64"))
+    );
+
+    if (isInvalid || !isValid) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    return new Response(JSON.stringify({ Items: [], Count: 0 }), {
+      status: 200,
+    });
+  });
 }
 
 function mockValidator(
@@ -73,12 +104,11 @@ test("all valid company credentials are connected", async () => {
 
 test("one invalid API key among multiple companies excludes only that company", async () => {
   resetCompanyCredentialValidator();
-  mockValidator({
-    "Company A": "invalid_or_expired_api_key",
-    "Company B": "valid",
-    "Company C": "valid",
-    "Company D": "valid",
-  });
+  resetValidationFetch();
+  mockBrcValidationFetchForKeys(
+    new Set(["key-b", "key-c", "key-d"]),
+    new Set(["bad-key"])
+  );
 
   const connectionId = uniqueId("connection");
   const outcome = await validateAndPersistConnectedCompanies({
@@ -300,4 +330,86 @@ test("confirm json response includes connectedCompanies and failedCompanies with
   assert.equal(body.failedCompanies[0]?.companyName, "Company A");
   assert.equal(text.includes("bad-key"), false);
   assert.match(body.connectionRef, /^redconn_/);
+});
+
+test("later 401 for one company returns company_credential_invalid and removes it", async () => {
+  const originalFetch = globalThis.fetch;
+  const badKey = "bad-runtime-key";
+  const goodKey = "good-runtime-key";
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    const auth = String(
+      (init?.headers as Record<string, string> | undefined)?.Authorization ?? ""
+    );
+
+    if (auth.includes(Buffer.from(`${badKey}:`, "utf8").toString("base64"))) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    if (url.includes("/v1/customers")) {
+      return new Response(JSON.stringify({ Items: [{ id: 1 }], Count: 1 }), {
+        status: 200,
+      });
+    }
+
+    return new Response("{}", { status: 200 });
+  };
+
+  try {
+    const keyStore = new Map();
+    await runWithSessionKeyStore(keyStore, async () => {
+      setApiKeyForCompany({
+        companyName: "Company A",
+        apiKey: badKey,
+        expiresAt: Date.now() + 60_000,
+      });
+      setApiKeyForCompany({
+        companyName: "Company B",
+        apiKey: goodKey,
+        expiresAt: Date.now() + 60_000,
+      });
+
+      const failed = (await brcFetch(
+        "Company A",
+        "/v1/customers?page=1&pageSize=1"
+      )) as Record<string, unknown>;
+
+      assert.equal(failed.errorType, "company_credential_invalid");
+      assert.equal(failed.shouldReconnect, false);
+      assert.equal(failed.companyConnected, false);
+      assert.match(String(failed.message), /invalid or expired/i);
+      assert.match(
+        String(failed.assistantInstruction),
+        /Do not say the full Red connection expired/i
+      );
+      assert.equal(listConnectedCompanyNames().includes("Company A"), false);
+
+      const success = (await brcFetch(
+        "Company B",
+        "/v1/customers?page=1&pageSize=1"
+      )) as Record<string, unknown>;
+
+      assert.equal(success.errorType, undefined);
+      assert.equal(Array.isArray(success.Items) || success.Items !== undefined, true);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("company credential invalid response never includes API keys", () => {
+  const payload = buildCompanyCredentialInvalidResponse("Company A", {
+    otherCompaniesConnected: true,
+  });
+  const serialised = JSON.stringify(payload);
+
+  assert.equal(serialised.includes("apiKey"), false);
+  assert.equal(serialised.includes("secret"), false);
+  assert.equal(payload.errorType, "company_credential_invalid");
+});
+
+after(() => {
+  resetCompanyCredentialValidator();
+  resetValidationFetch();
 });
