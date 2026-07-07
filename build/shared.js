@@ -4,8 +4,8 @@ import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
-import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
-import { enrichReadResponseBody } from "./read_connection_metadata.js";
+import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import { enrichReadResponseBody, enrichWriteResponseBody, isListPayload, } from "./read_connection_metadata.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 const sessionKeyStorage = new AsyncLocalStorage();
@@ -44,6 +44,45 @@ export function runWithActiveConnectionRef(connectionRef, fn) {
 }
 export function getActiveConnectionRef() {
     return activeConnectionRefStorage.getStore();
+}
+function isHttpMcpMode() {
+    return process.env.RED_CONNECT_HTTP_MODE === "true";
+}
+function buildConnectionMetadataOptions(companyName) {
+    const activeRef = getActiveConnectionRef()?.trim();
+    return {
+        ...(companyName ? { companyName } : {}),
+        connectionRefUsed: Boolean(activeRef),
+        ...(activeRef ? { activeConnectionRef: activeRef } : {}),
+    };
+}
+function extractCompanyNameFromResponseData(data) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+        return undefined;
+    }
+    const companyName = data.companyName;
+    return typeof companyName === "string" ? companyName : undefined;
+}
+export function enrichToolResponseData(data, options) {
+    const companyName = options?.companyName ?? extractCompanyNameFromResponseData(data);
+    const metadataOptions = buildConnectionMetadataOptions(companyName);
+    if (!metadataOptions.connectionRefUsed) {
+        if (data &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            ("connectionStatus" in data ||
+                isListPayload(data))) {
+            return enrichReadResponseBody(data, metadataOptions);
+        }
+        return data;
+    }
+    if (data &&
+        typeof data === "object" &&
+        !Array.isArray(data) &&
+        isListPayload(data)) {
+        return enrichReadResponseBody(data, metadataOptions);
+    }
+    return enrichWriteResponseBody(data, metadataOptions);
 }
 export function enterHttpClientKey(clientKey) {
     httpClientKeyStorage.enterWith(clientKey);
@@ -348,6 +387,13 @@ export async function getCredentialForCompanyAsync(companyName) {
 export function getCredentialForCompany(companyName) {
     const credential = companyCredentialProvider.getCredential(companyName);
     if (!credential) {
+        if (isHttpMcpMode() && !getActiveConnectionRef()) {
+            throw new Error([
+                `No company connection is currently stored for "${companyName}".`,
+                "",
+                CONNECTION_REF_NOT_PASSED_MESSAGE,
+            ].join("\n"));
+        }
         throw new Error([
             `No company connection is currently stored for "${companyName}".`,
             "",
@@ -423,8 +469,8 @@ export function textResponse(text) {
         ],
     };
 }
-export function jsonResponse(data) {
-    return textResponse(JSON.stringify(data, null, 2));
+export function jsonResponse(data, options) {
+    return textResponse(JSON.stringify(enrichToolResponseData(data, options), null, 2));
 }
 /**
  * Converts an HTTP status into plain, customer-facing wording so responses do
@@ -841,14 +887,9 @@ export async function brcFetch(companyName, path, init = {}) {
             requestBody,
             responseBody: parsedBody,
         });
+        return enrichToolResponseData(parsedBody, { companyName });
     }
-    else {
-        return enrichReadResponseBody(parsedBody, {
-            companyName,
-            connectionRefUsed: Boolean(getActiveConnectionRef()?.trim()),
-        });
-    }
-    return parsedBody;
+    return enrichReadResponseBody(parsedBody, buildConnectionMetadataOptions(companyName));
 }
 export async function brcJsonRequest(companyName, method, path, body) {
     return brcFetch(companyName, path, {

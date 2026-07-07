@@ -13,9 +13,15 @@ export const connectionRefSchema = z
     "Opaque Red connection reference returned by brc_confirm_company_connection. Pass this exact value on every later tool call when the MCP client rotates session ids (for example Vibe/Mistral). Keep reusing the same connectionRef after successful tool calls — do not start a new connection because a lookup returned empty or partial data. It is not an API key and does not contain credentials."
   );
 
+export const CONNECTION_REF_NOT_PASSED_MESSAGE = [
+  "Your Red connection may still be active, but Vibe did not pass connectionRef on this tool call.",
+  "Use the most recent activeConnectionRef from this chat as connectionRef.",
+  "Only start a new connection if no activeConnectionRef is available in this chat or the ref is rejected as expired/invalid.",
+].join(" ");
+
 export const CONNECTION_REF_INVALID_MESSAGE = [
-  "The Red connection reference is missing, invalid, or has expired.",
-  "If you just connected companies, run brc_confirm_company_connection again and pass the new connectionRef on subsequent tool calls.",
+  "The Red connection reference was passed but is invalid or has expired.",
+  "Run brc_confirm_company_connection again and pass the new connectionRef on subsequent tool calls.",
   "If the MCP client keeps rotating sessions without preserving connectionRef, explain that this platform cannot keep a stable Red MCP session and the user may need a client that preserves MCP sessions.",
 ].join(" ");
 

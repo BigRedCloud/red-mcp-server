@@ -9,8 +9,12 @@ import {
   persistCompanyCredentialToConnectionStore,
 } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
-import { CONNECTION_REF_INVALID_MESSAGE } from "./auth/connection_ref.js";
-import { enrichReadResponseBody } from "./read_connection_metadata.js";
+import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import {
+  enrichReadResponseBody,
+  enrichWriteResponseBody,
+  isListPayload,
+} from "./read_connection_metadata.js";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -111,6 +115,65 @@ export function runWithActiveConnectionRef<T>(
 
 export function getActiveConnectionRef(): string | undefined {
   return activeConnectionRefStorage.getStore();
+}
+
+function isHttpMcpMode(): boolean {
+  return process.env.RED_CONNECT_HTTP_MODE === "true";
+}
+
+function buildConnectionMetadataOptions(companyName?: string): {
+  companyName?: string;
+  connectionRefUsed: boolean;
+  activeConnectionRef?: string;
+} {
+  const activeRef = getActiveConnectionRef()?.trim();
+  return {
+    ...(companyName ? { companyName } : {}),
+    connectionRefUsed: Boolean(activeRef),
+    ...(activeRef ? { activeConnectionRef: activeRef } : {}),
+  };
+}
+
+function extractCompanyNameFromResponseData(data: unknown): string | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return undefined;
+  }
+
+  const companyName = (data as Record<string, unknown>).companyName;
+  return typeof companyName === "string" ? companyName : undefined;
+}
+
+export function enrichToolResponseData(
+  data: unknown,
+  options?: { companyName?: string }
+): unknown {
+  const companyName = options?.companyName ?? extractCompanyNameFromResponseData(data);
+  const metadataOptions = buildConnectionMetadataOptions(companyName);
+
+  if (!metadataOptions.connectionRefUsed) {
+    if (
+      data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      ("connectionStatus" in (data as Record<string, unknown>) ||
+        isListPayload(data))
+    ) {
+      return enrichReadResponseBody(data, metadataOptions);
+    }
+
+    return data;
+  }
+
+  if (
+    data &&
+    typeof data === "object" &&
+    !Array.isArray(data) &&
+    isListPayload(data)
+  ) {
+    return enrichReadResponseBody(data, metadataOptions);
+  }
+
+  return enrichWriteResponseBody(data, metadataOptions);
 }
 
 export function enterHttpClientKey(clientKey: string): void {
@@ -534,6 +597,16 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
   const credential = companyCredentialProvider.getCredential(companyName);
 
   if (!credential) {
+    if (isHttpMcpMode() && !getActiveConnectionRef()) {
+      throw new Error(
+        [
+          `No company connection is currently stored for "${companyName}".`,
+          "",
+          CONNECTION_REF_NOT_PASSED_MESSAGE,
+        ].join("\n")
+      );
+    }
+
     throw new Error(
       [
         `No company connection is currently stored for "${companyName}".`,
@@ -646,8 +719,8 @@ export function textResponse(text: string) {
   };
 }
 
-export function jsonResponse(data: unknown) {
-  return textResponse(JSON.stringify(data, null, 2));
+export function jsonResponse(data: unknown, options?: { companyName?: string }) {
+  return textResponse(JSON.stringify(enrichToolResponseData(data, options), null, 2));
 }
 
 /**
@@ -1216,14 +1289,11 @@ export async function brcFetch(
       requestBody,
       responseBody: parsedBody,
     });
-  } else {
-    return enrichReadResponseBody(parsedBody, {
-      companyName,
-      connectionRefUsed: Boolean(getActiveConnectionRef()?.trim()),
-    });
+
+    return enrichToolResponseData(parsedBody, { companyName });
   }
 
-  return parsedBody;
+  return enrichReadResponseBody(parsedBody, buildConnectionMetadataOptions(companyName));
 }
 
 export async function brcJsonRequest(

@@ -1,6 +1,24 @@
 export const ACTIVE_CONNECTION_STATUS = "active";
 export const EMPTY_RESULT_REASON = "no_matching_records";
 export const EMPTY_READ_RESULT_MESSAGE = "The Red connection is active. No matching records were returned for this company/filter.";
+export const CONNECTION_REF_REMINDER = "Keep passing activeConnectionRef as connectionRef on every later Red tool call in this chat. Do not reconnect while this works.";
+export function appendConnectionPersistenceMetadata(metadata, options = {}) {
+    const companyName = options.companyName?.trim();
+    const activeRef = options.activeConnectionRef?.trim();
+    const connectionRefUsed = options.connectionRefUsed ?? Boolean(activeRef);
+    const result = {
+        ...metadata,
+        connectionStatus: ACTIVE_CONNECTION_STATUS,
+        shouldReconnect: false,
+        connectionRefUsed,
+        ...(companyName ? { companyName } : {}),
+    };
+    if (activeRef && connectionRefUsed) {
+        result.activeConnectionRef = activeRef;
+        result.connectionRefReminder = CONNECTION_REF_REMINDER;
+    }
+    return result;
+}
 function extractListItems(data) {
     if (Array.isArray(data)) {
         return data;
@@ -45,18 +63,11 @@ export function isEmptyListResponse(data) {
     return items.length === 0;
 }
 export function buildReadConnectionMetadata(data, options = {}) {
-    const companyName = options.companyName?.trim();
-    const metadata = {
-        connectionStatus: ACTIVE_CONNECTION_STATUS,
-        shouldReconnect: false,
-        ...(companyName ? { companyName } : {}),
-        ...(options.connectionRefUsed !== undefined
-            ? { connectionRefUsed: options.connectionRefUsed }
-            : {}),
-    };
+    const metadata = appendConnectionPersistenceMetadata({}, options);
     if (!isEmptyListResponse(data)) {
         return metadata;
     }
+    const companyName = options.companyName?.trim();
     const companySuffix = companyName
         ? ` for ${companyName}`
         : " for this company/filter";
@@ -64,6 +75,19 @@ export function buildReadConnectionMetadata(data, options = {}) {
         ...metadata,
         emptyResultReason: EMPTY_RESULT_REASON,
         message: `The Red connection is active. No matching records were returned${companySuffix}.`,
+    };
+}
+export function enrichWriteResponseBody(data, options = {}) {
+    const metadata = appendConnectionPersistenceMetadata({}, options);
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+        return {
+            ...data,
+            ...metadata,
+        };
+    }
+    return {
+        result: data,
+        ...metadata,
     };
 }
 export function enrichReadResponseBody(data, options = {}) {

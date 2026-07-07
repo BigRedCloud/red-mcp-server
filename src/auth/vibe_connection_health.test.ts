@@ -128,13 +128,13 @@ test("invalid expired connectionRef returns clear reconnect message", async () =
         )
       ),
     (error: Error) => {
-      assert.match(error.message, /connection reference is missing, invalid, or has expired/i);
+      assert.match(error.message, /invalid or has expired/i);
       assert.match(error.message, /brc_confirm_company_connection/i);
       return true;
     }
   );
 
-  assert.match(CONNECTION_REF_INVALID_MESSAGE, /connection reference is missing, invalid, or has expired/i);
+  assert.match(CONNECTION_REF_INVALID_MESSAGE, /invalid or has expired/i);
 });
 
 test("valid connectionRef across rotated MCP sessions never falls back to global credentials", async () => {

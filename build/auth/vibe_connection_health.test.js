@@ -88,11 +88,11 @@ test("invalid expired connectionRef returns clear reconnect message", async () =
     const scope = await prepareHttpToolSessionScope(uniqueId("session"), new Map(), undefined, connectionRef);
     assert.equal(scope.resolution.connectionRefInvalid, true);
     await assert.rejects(() => runWithActiveConnectionRef(connectionRef, () => runWithHttpToolSession(scope, () => getCredentialForCompanyAsync("Company A"))), (error) => {
-        assert.match(error.message, /connection reference is missing, invalid, or has expired/i);
+        assert.match(error.message, /invalid or has expired/i);
         assert.match(error.message, /brc_confirm_company_connection/i);
         return true;
     });
-    assert.match(CONNECTION_REF_INVALID_MESSAGE, /connection reference is missing, invalid, or has expired/i);
+    assert.match(CONNECTION_REF_INVALID_MESSAGE, /invalid or has expired/i);
 });
 test("valid connectionRef across rotated MCP sessions never falls back to global credentials", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, runWithActiveConnectionRef, listConnectedCompanyNames, getCompanyApiContexts, } = await loadModules();
