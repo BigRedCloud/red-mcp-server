@@ -11,6 +11,10 @@ import {
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
 import {
+  CompanyNotConnectedError,
+  buildCompanyNotConnectedResponse,
+} from "./auth/company_connection_errors.js";
+import {
   enrichReadResponseBody,
   enrichWriteResponseBody,
   isListPayload,
@@ -597,6 +601,11 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
   const credential = companyCredentialProvider.getCredential(companyName);
 
   if (!credential) {
+    const connectedNames = listConnectedCompanyNames();
+    if (connectedNames.length > 0) {
+      throw new CompanyNotConnectedError(companyName);
+    }
+
     if (isHttpMcpMode() && !getActiveConnectionRef()) {
       throw new Error(
         [
@@ -1237,7 +1246,20 @@ export async function brcFetch(
   const safePath = path.startsWith("/") ? path : `/${path}`;
   const method = normalizeHttpMethod(init);
   const requestBody = parseRequestBody(init);
-  const authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+
+  let authorization: string;
+  try {
+    authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+  } catch (error) {
+    if (error instanceof CompanyNotConnectedError) {
+      const payload = buildCompanyNotConnectedResponse(error.companyName, {
+        otherCompaniesConnected: listConnectedCompanyNames().length > 0,
+      });
+      return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
+    }
+
+    throw error;
+  }
 
   const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
     ...init,

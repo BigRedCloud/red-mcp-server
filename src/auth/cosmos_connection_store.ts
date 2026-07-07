@@ -6,6 +6,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -42,6 +43,10 @@ function connectionRefPartitionKey(ref: string): string {
 
 function companyDocumentId(normalisedName: string): string {
   return `company:${normalisedName}`;
+}
+
+function failedValidationDocumentId(normalisedName: string): string {
+  return `failed:${normalisedName}`;
 }
 
 function apiKeyTtlSeconds(): number {
@@ -99,6 +104,16 @@ type ConnectionRefDocument = CosmosRecord & {
   ref: string;
   connectionId: string;
   expiresAt: number;
+  createdAt: number;
+  ttl: number;
+};
+
+type FailedCompanyValidationDocument = CosmosRecord & {
+  type: "failedCompanyValidation";
+  connectionId: string;
+  companyName: string;
+  reason: FailedCompanyConnection["reason"];
+  message: string;
   createdAt: number;
   ttl: number;
 };
@@ -512,6 +527,72 @@ export class CosmosConnectionStore implements ConnectionStore {
     }
 
     return count;
+  }
+
+  async saveFailedCompanyValidations(
+    connectionId: string,
+    failures: FailedCompanyConnection[]
+  ): Promise<void> {
+    const now = Date.now();
+    const ttlSeconds = apiKeyTtlSeconds();
+
+    for (const failure of failures) {
+      const normalised = normaliseCompanyName(failure.companyName);
+      const doc: FailedCompanyValidationDocument = {
+        pk: connectionPartitionKey(connectionId),
+        id: failedValidationDocumentId(normalised),
+        type: "failedCompanyValidation",
+        connectionId,
+        companyName: failure.companyName.trim(),
+        reason: failure.reason,
+        message: failure.message,
+        createdAt: now,
+        ttl: ttlSeconds,
+      };
+
+      await this.getContainer().items.upsert(doc);
+    }
+  }
+
+  async listFailedCompanyValidations(
+    connectionId: string
+  ): Promise<FailedCompanyConnection[]> {
+    const query = {
+      query:
+        "SELECT * FROM c WHERE c.pk = @pk AND c.type = @type ORDER BY c.createdAt ASC",
+      parameters: [
+        { name: "@pk", value: connectionPartitionKey(connectionId) },
+        { name: "@type", value: "failedCompanyValidation" },
+      ],
+    };
+
+    const { resources } = await this.getContainer()
+      .items.query<FailedCompanyValidationDocument>(query)
+      .fetchAll();
+
+    return resources.map((resource) => ({
+      companyName: resource.companyName,
+      connected: false as const,
+      reason: resource.reason,
+      message: resource.message,
+    }));
+  }
+
+  async clearFailedCompanyValidations(connectionId: string): Promise<void> {
+    const failures = await this.listFailedCompanyValidations(connectionId);
+
+    for (const failure of failures) {
+      try {
+        await this.getContainer()
+          .item(
+            failedValidationDocumentId(normaliseCompanyName(failure.companyName)),
+            connectionPartitionKey(connectionId)
+          )
+          .delete();
+      } catch {
+        // already removed
+      }
+    }
   }
 
   async getDiagnostics(args: {

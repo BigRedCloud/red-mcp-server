@@ -499,7 +499,7 @@ export function renderExpiredLinkPage() {
       </div>`;
     return pageShell("Connection link not available", brandBar(), content);
 }
-export function renderSuccessPage(connectedNames, code) {
+export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
     const count = connectedNames.length;
     const summary = count === 1
         ? "1 company was connected to Red for this session."
@@ -507,12 +507,24 @@ export function renderSuccessPage(connectedNames, code) {
     const listItems = connectedNames
         .map((name) => `<li>${escapeHtml(name)}</li>`)
         .join("");
+    const failedSection = failedCompanies.length > 0
+        ? `
+        <div class="next-step">
+          <strong>These companies were not connected:</strong>
+          <ul class="company-list">
+            ${failedCompanies
+            .map((failure) => `<li>${escapeHtml(failure.companyName)} — ${escapeHtml(failure.message)}</li>`)
+            .join("")}
+          </ul>
+        </div>`
+        : "";
     const content = `
       <div class="card">
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
+        ${failedSection}
         <div class="next-step">
           Connection complete. Return to this chat and copy/paste this confirmation code: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>

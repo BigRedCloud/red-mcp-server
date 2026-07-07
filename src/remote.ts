@@ -41,6 +41,7 @@ import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
 } from "./auth/connection_store.js";
+import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
 import {
   renderConnectPage,
@@ -49,7 +50,7 @@ import {
   renderSuccessPage,
 } from "./auth/connection_page.js";
 
-import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./config/server_config.js";
+import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
 import multer from "multer";
 import { parse } from "csv-parse/sync";
@@ -353,19 +354,21 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   }
 
   try {
-    for (const company of companies) {
-      assertApiKeyAllowed(company.apiKey);
-    }
+    const outcome = await validateAndPersistConnectedCompanies({
+      connectionId: pending.connectionId,
+      companies,
+      expiresAt: Date.now() + getApiKeyExpirationMs(),
+    });
 
-    const expiresAt = Date.now() + getApiKeyExpirationMs();
-    await getConnectionStore().saveConnectedCompanies(
-      pending.connectionId,
-      companies.map((company) => ({
-        companyName: company.companyName,
-        apiKey: company.apiKey,
-        expiresAt,
-      }))
-    );
+    if (outcome.connectedCompanies.length === 0) {
+      const message =
+        outcome.failedCompanies.length > 0
+          ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+          : "No companies could be connected because the submitted credentials could not be validated.";
+
+      res.status(400).send(renderConnectionFailedPage(message));
+      return;
+    }
 
     for (const session of sessions.values()) {
       const sessionId = session.transport.sessionId;
@@ -382,9 +385,13 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
       }
     }
 
-    const connectedNames = companies.map((company) => company.companyName);
-
-    res.send(renderSuccessPage(connectedNames, code));
+    res.send(
+      renderSuccessPage(
+        outcome.connectedCompanies,
+        code,
+        outcome.failedCompanies
+      )
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
 

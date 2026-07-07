@@ -13,8 +13,9 @@ import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCreden
 import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
+import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
-import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./config/server_config.js";
+import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
@@ -229,15 +230,18 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         return;
     }
     try {
-        for (const company of companies) {
-            assertApiKeyAllowed(company.apiKey);
+        const outcome = await validateAndPersistConnectedCompanies({
+            connectionId: pending.connectionId,
+            companies,
+            expiresAt: Date.now() + getApiKeyExpirationMs(),
+        });
+        if (outcome.connectedCompanies.length === 0) {
+            const message = outcome.failedCompanies.length > 0
+                ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+                : "No companies could be connected because the submitted credentials could not be validated.";
+            res.status(400).send(renderConnectionFailedPage(message));
+            return;
         }
-        const expiresAt = Date.now() + getApiKeyExpirationMs();
-        await getConnectionStore().saveConnectedCompanies(pending.connectionId, companies.map((company) => ({
-            companyName: company.companyName,
-            apiKey: company.apiKey,
-            expiresAt,
-        })));
         for (const session of sessions.values()) {
             const sessionId = session.transport.sessionId;
             if (!sessionId)
@@ -247,8 +251,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
                 await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
             }
         }
-        const connectedNames = companies.map((company) => company.companyName);
-        res.send(renderSuccessPage(connectedNames, code));
+        res.send(renderSuccessPage(outcome.connectedCompanies, code, outcome.failedCompanies));
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";

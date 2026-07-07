@@ -22,6 +22,18 @@ export type CompanyCredentialInput = {
   expiresAt: number;
 };
 
+export type FailedCompanyConnection = {
+  companyName: string;
+  connected: false;
+  reason:
+    | "invalid_or_expired_api_key"
+    | "unauthorized"
+    | "forbidden"
+    | "not_found"
+    | "validation_failed";
+  message: string;
+};
+
 export type ConnectionStoreDiagnostics = {
   storeType: string;
   connectionIdPresent: boolean;
@@ -94,6 +106,17 @@ export interface ConnectionStore {
   ): Promise<boolean>;
 
   clearAllConnectedCompanies(connectionId: string): Promise<number>;
+
+  saveFailedCompanyValidations(
+    connectionId: string,
+    failures: FailedCompanyConnection[]
+  ): Promise<void>;
+
+  listFailedCompanyValidations(
+    connectionId: string
+  ): Promise<FailedCompanyConnection[]>;
+
+  clearFailedCompanyValidations(connectionId: string): Promise<void>;
 
   getDiagnostics(args: {
     connectionId?: string;

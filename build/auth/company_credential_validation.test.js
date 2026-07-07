@@ -1,0 +1,235 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+process.env.RED_CONNECT_CONNECTION_STORE = "memory";
+import { resetCompanyCredentialValidator, setCompanyCredentialValidator, } from "./credential_validation.js";
+import { validateAndPersistConnectedCompanies } from "./connection_persistence.js";
+import { claimConnectionCodeForSession, getConnectionStore, } from "./connection_store.js";
+import { CompanyNotConnectedError, buildCompanyNotConnectedResponse, } from "./company_connection_errors.js";
+import { brcFetch, jsonResponse, listConnectedCompanyNames, runWithSessionKeyStore, } from "../shared.js";
+import { hydrateSessionKeyStoreFromConnectionStore } from "./connection_persistence.js";
+function uniqueId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+function mockValidator(outcomes) {
+    setCompanyCredentialValidator(async (companyName, apiKey) => {
+        void apiKey;
+        const outcome = outcomes[companyName.trim()];
+        if (outcome === "valid") {
+            return { valid: true };
+        }
+        return {
+            valid: false,
+            reason: "invalid_or_expired_api_key",
+            message: `${companyName.trim()} was not connected because the credential could not be validated.`,
+        };
+    });
+}
+test("all valid company credentials are connected", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "valid",
+        "Company B": "valid",
+    });
+    const connectionId = uniqueId("connection");
+    const outcome = await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "key-a" },
+            { companyName: "Company B", apiKey: "key-b" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    assert.deepEqual(outcome.connectedCompanies.sort(), ["Company A", "Company B"]);
+    assert.deepEqual(outcome.failedCompanies, []);
+    const store = getConnectionStore();
+    const stored = await store.listConnectedCompanies(connectionId);
+    assert.equal(stored.length, 2);
+});
+test("one invalid API key among multiple companies excludes only that company", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+        "Company C": "valid",
+        "Company D": "valid",
+    });
+    const connectionId = uniqueId("connection");
+    const outcome = await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "bad-key" },
+            { companyName: "Company B", apiKey: "key-b" },
+            { companyName: "Company C", apiKey: "key-c" },
+            { companyName: "Company D", apiKey: "key-d" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    assert.deepEqual(outcome.connectedCompanies.sort(), [
+        "Company B",
+        "Company C",
+        "Company D",
+    ]);
+    assert.equal(outcome.failedCompanies.length, 1);
+    assert.equal(outcome.failedCompanies[0]?.companyName, "Company A");
+    assert.equal(outcome.failedCompanies[0]?.connected, false);
+    assert.equal(outcome.failedCompanies[0]?.reason, "invalid_or_expired_api_key");
+    assert.match(outcome.failedCompanies[0]?.message ?? "", /could not be validated/i);
+});
+test("claim returns connected and failed companies separately", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+    });
+    const store = getConnectionStore();
+    const code = uniqueId("code");
+    const connectionId = uniqueId("connection");
+    const sessionId = uniqueId("session");
+    await store.createPendingConnection({
+        code,
+        connectionId,
+        expiresAt: Date.now() + 60_000,
+    });
+    await store.completePendingConnection(code);
+    await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "bad-key" },
+            { companyName: "Company B", apiKey: "good-key" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    const result = await claimConnectionCodeForSession(code, sessionId);
+    assert.deepEqual(result.connectedCompanies, ["Company B"]);
+    assert.equal(result.failedCompanies.length, 1);
+    assert.equal(result.failedCompanies[0]?.companyName, "Company A");
+});
+test("list contexts only includes validated connected companies", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+    });
+    const connectionId = uniqueId("connection");
+    const keyStore = new Map();
+    await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "bad-key" },
+            { companyName: "Company B", apiKey: "good-key" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    await runWithSessionKeyStore(keyStore, async () => {
+        await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+        const names = listConnectedCompanyNames();
+        assert.deepEqual(names, ["Company B"]);
+        assert.equal(names.includes("Company A"), false);
+    });
+});
+test("asking for an invalid company returns company_not_connected, not expired connection", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+    });
+    const connectionId = uniqueId("connection");
+    const keyStore = new Map();
+    await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "bad-key" },
+            { companyName: "Company B", apiKey: "good-key" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    await runWithSessionKeyStore(keyStore, async () => {
+        await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+        const body = (await brcFetch("Company A", "/v1/customers?page=1&pageSize=1"));
+        assert.equal(body.connectionStatus, "active");
+        assert.equal(body.shouldReconnect, false);
+        assert.equal(body.companyConnected, false);
+        assert.equal(body.errorType, "company_not_connected");
+        assert.match(String(body.message), /Company A is not connected/i);
+        assert.equal(String(body.message).includes("expired"), false);
+    });
+});
+test("company not connected response never includes API keys", async () => {
+    const payload = buildCompanyNotConnectedResponse("Company A", {
+        otherCompaniesConnected: true,
+    });
+    const serialised = JSON.stringify(payload);
+    assert.equal(serialised.includes("apiKey"), false);
+    assert.equal(serialised.includes("secret"), false);
+    assert.equal(serialised.includes("token"), false);
+});
+test("validation partition responses never include API keys", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+    });
+    const outcome = await validateAndPersistConnectedCompanies({
+        connectionId: uniqueId("connection"),
+        companies: [
+            { companyName: "Company A", apiKey: "super-secret-key-value" },
+            { companyName: "Company B", apiKey: "another-secret-key" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    const serialised = JSON.stringify(outcome);
+    assert.equal(serialised.includes("super-secret-key-value"), false);
+    assert.equal(serialised.includes("another-secret-key"), false);
+});
+test("CompanyNotConnectedError is thrown when other companies are connected", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({ "Company B": "valid" });
+    const connectionId = uniqueId("connection");
+    const keyStore = new Map();
+    await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [{ companyName: "Company B", apiKey: "good-key" }],
+        expiresAt: Date.now() + 60_000,
+    });
+    await runWithSessionKeyStore(keyStore, async () => {
+        await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+        const { getCredentialForCompany } = await import("../shared.js");
+        assert.throws(() => getCredentialForCompany("Company A"), (error) => error instanceof CompanyNotConnectedError);
+    });
+});
+test("confirm json response includes connectedCompanies and failedCompanies without secrets", async () => {
+    resetCompanyCredentialValidator();
+    mockValidator({
+        "Company A": "invalid_or_expired_api_key",
+        "Company B": "valid",
+    });
+    const store = getConnectionStore();
+    const code = uniqueId("code");
+    const connectionId = uniqueId("connection");
+    await store.createPendingConnection({
+        code,
+        connectionId,
+        expiresAt: Date.now() + 60_000,
+    });
+    await store.completePendingConnection(code);
+    await validateAndPersistConnectedCompanies({
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "bad-key" },
+            { companyName: "Company B", apiKey: "good-key" },
+        ],
+        expiresAt: Date.now() + 60_000,
+    });
+    const result = await claimConnectionCodeForSession(code, uniqueId("session"));
+    const payload = jsonResponse({
+        connectedCompanies: result.connectedCompanies,
+        failedCompanies: result.failedCompanies,
+        connectionRef: result.connectionRef,
+    });
+    const text = payload.content[0]?.text ?? "";
+    const body = JSON.parse(text);
+    assert.deepEqual(body.connectedCompanies, ["Company B"]);
+    assert.equal(body.failedCompanies[0]?.companyName, "Company A");
+    assert.equal(text.includes("bad-key"), false);
+    assert.match(body.connectionRef, /^redconn_/);
+});

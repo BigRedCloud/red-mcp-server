@@ -8,6 +8,7 @@ const sessionBindings = new Map();
 const companiesByConnection = new Map();
 const clientLastClaims = new Map();
 const connectionRefs = new Map();
+const failedValidationsByConnection = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -172,6 +173,15 @@ export class MemoryConnectionStore {
         const count = map.size;
         companiesByConnection.delete(connectionId);
         return count;
+    }
+    async saveFailedCompanyValidations(connectionId, failures) {
+        failedValidationsByConnection.set(connectionId, failures.map((failure) => ({ ...failure })));
+    }
+    async listFailedCompanyValidations(connectionId) {
+        return (failedValidationsByConnection.get(connectionId) ?? []).map((failure) => ({ ...failure }));
+    }
+    async clearFailedCompanyValidations(connectionId) {
+        failedValidationsByConnection.delete(connectionId);
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

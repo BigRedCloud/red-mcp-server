@@ -27,6 +27,9 @@ function connectionRefPartitionKey(ref) {
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
 }
+function failedValidationDocumentId(normalisedName) {
+    return `failed:${normalisedName}`;
+}
 function apiKeyTtlSeconds() {
     return redServerConfig.apiKeyTtlMinutes * 60;
 }
@@ -346,6 +349,56 @@ export class CosmosConnectionStore {
                 count += 1;
         }
         return count;
+    }
+    async saveFailedCompanyValidations(connectionId, failures) {
+        const now = Date.now();
+        const ttlSeconds = apiKeyTtlSeconds();
+        for (const failure of failures) {
+            const normalised = normaliseCompanyName(failure.companyName);
+            const doc = {
+                pk: connectionPartitionKey(connectionId),
+                id: failedValidationDocumentId(normalised),
+                type: "failedCompanyValidation",
+                connectionId,
+                companyName: failure.companyName.trim(),
+                reason: failure.reason,
+                message: failure.message,
+                createdAt: now,
+                ttl: ttlSeconds,
+            };
+            await this.getContainer().items.upsert(doc);
+        }
+    }
+    async listFailedCompanyValidations(connectionId) {
+        const query = {
+            query: "SELECT * FROM c WHERE c.pk = @pk AND c.type = @type ORDER BY c.createdAt ASC",
+            parameters: [
+                { name: "@pk", value: connectionPartitionKey(connectionId) },
+                { name: "@type", value: "failedCompanyValidation" },
+            ],
+        };
+        const { resources } = await this.getContainer()
+            .items.query(query)
+            .fetchAll();
+        return resources.map((resource) => ({
+            companyName: resource.companyName,
+            connected: false,
+            reason: resource.reason,
+            message: resource.message,
+        }));
+    }
+    async clearFailedCompanyValidations(connectionId) {
+        const failures = await this.listFailedCompanyValidations(connectionId);
+        for (const failure of failures) {
+            try {
+                await this.getContainer()
+                    .item(failedValidationDocumentId(normaliseCompanyName(failure.companyName)), connectionPartitionKey(connectionId))
+                    .delete();
+            }
+            catch {
+                // already removed
+            }
+        }
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

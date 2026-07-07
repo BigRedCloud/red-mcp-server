@@ -197,8 +197,11 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page from your current fresh connection link, submit your company details, then return here and confirm the confirmation code. If that link no longer works, start a fresh company connection to generate a new secure Red connection link.", "not_completed");
     }
     const companies = await store.listConnectedCompanies(pending.connectionId);
+    const failedCompanies = await store.listFailedCompanyValidations(pending.connectionId);
     if (companies.length === 0) {
-        throw new ClaimConnectionError(`No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "no_companies");
+        throw new ClaimConnectionError(failedCompanies.length > 0
+            ? "No companies could be connected because every submitted credential failed validation. Reconnect with current API keys on a fresh secure Red connection link, then confirm the confirmation code again."
+            : `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "no_companies");
     }
     const normalizedSessionId = sessionId.trim();
     await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);
@@ -211,9 +214,12 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         });
     }
     const { connectionRef, expiresAt: connectionRefExpiresAt } = await issueConnectionRef(pending.connectionId);
+    const connectedCompanies = companies.map((company) => company.companyName);
     return {
         connectionId: pending.connectionId,
-        companyNames: companies.map((company) => company.companyName),
+        connectedCompanies,
+        failedCompanies,
+        companyNames: connectedCompanies,
         connectionRef,
         connectionRefExpiresAt,
     };

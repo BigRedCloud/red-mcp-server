@@ -4,6 +4,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -33,6 +34,7 @@ const connectionRefs = new Map<
   string,
   { connectionId: string; expiresAt: number }
 >();
+const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -260,6 +262,28 @@ export class MemoryConnectionStore implements ConnectionStore {
     const count = map.size;
     companiesByConnection.delete(connectionId);
     return count;
+  }
+
+  async saveFailedCompanyValidations(
+    connectionId: string,
+    failures: FailedCompanyConnection[]
+  ): Promise<void> {
+    failedValidationsByConnection.set(
+      connectionId,
+      failures.map((failure) => ({ ...failure }))
+    );
+  }
+
+  async listFailedCompanyValidations(
+    connectionId: string
+  ): Promise<FailedCompanyConnection[]> {
+    return (failedValidationsByConnection.get(connectionId) ?? []).map(
+      (failure) => ({ ...failure })
+    );
+  }
+
+  async clearFailedCompanyValidations(connectionId: string): Promise<void> {
+    failedValidationsByConnection.delete(connectionId);
   }
 
   async getDiagnostics(args: {

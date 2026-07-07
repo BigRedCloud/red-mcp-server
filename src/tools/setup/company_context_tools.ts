@@ -31,13 +31,15 @@ import {
   getConnectionStore,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
+  CONFIRM_CONNECTION_SUCCESS_LINES,
   formatStartConnectionResponse,
   START_COMPANY_CONNECTION_TOOL_DESCRIPTION,
   CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
   LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
-  CONFIRM_CONNECTION_SUCCESS_LINES,
 } from "../../auth/connection_wording.js";
+import { CONNECTION_REF_REMINDER } from "../../read_connection_metadata.js";
 
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
@@ -96,7 +98,7 @@ export function registerCompanyContextTools(server: ServerType) {
         });
         await ensureCredentialsForCurrentSession();
 
-        const count = result.companyNames.length;
+        const count = result.connectedCompanies.length;
         const summary =
           count === 1
             ? "1 company is now connected in this session:"
@@ -104,21 +106,37 @@ export function registerCompanyContextTools(server: ServerType) {
 
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
 
-        return textResponse(
-          [
-            "Connection confirmed.",
-            "",
-            summary,
-            ...result.companyNames.map((name) => `- ${name}`),
-            "",
-            "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
-            result.connectionRef,
-            "",
-            ...CONFIRM_CONNECTION_SUCCESS_LINES,
-            "",
-            "You can now ask for connected companies or work with your company records.",
-          ].join("\n")
-        );
+        const customerMessage = [
+          "Connection confirmed.",
+          "",
+          summary,
+          ...result.connectedCompanies.map((name) => `- ${name}`),
+          ...(result.failedCompanies.length > 0
+            ? [
+                "",
+                "These companies were not connected:",
+                ...result.failedCompanies.map(
+                  (failure) => `- ${failure.companyName}: ${failure.message}`
+                ),
+              ]
+            : []),
+          "",
+          "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
+          result.connectionRef,
+          "",
+          ...CONFIRM_CONNECTION_SUCCESS_LINES,
+          "",
+          "You can now ask for connected companies or work with your company records.",
+        ].join("\n");
+
+        return jsonResponse({
+          message: "Connection confirmed.",
+          connectedCompanies: result.connectedCompanies,
+          failedCompanies: result.failedCompanies,
+          connectionRef: result.connectionRef,
+          connectionRefReminder: CONNECTION_REF_REMINDER,
+          customerMessage,
+        });
       } catch (error) {
         if (error instanceof ClaimConnectionError) {
           return textResponse(error.message);
@@ -154,7 +172,16 @@ export function registerCompanyContextTools(server: ServerType) {
             expiresAt: new Date(credential.expiresAt).toISOString(),
             message: API_KEY_REFUSAL_MESSAGE,
           });
-        } catch {
+        } catch (error) {
+          const connectedNames = listConnectedCompanyNames();
+          if (connectedNames.length > 0) {
+            return jsonResponse({
+              ...buildCompanyNotConnectedResponse(companyName, {
+                otherCompaniesConnected: true,
+              }),
+            });
+          }
+
           return jsonResponse({
             companyName: companyName.trim(),
             connected: false,

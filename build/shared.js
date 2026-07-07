@@ -5,6 +5,7 @@ import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import { CompanyNotConnectedError, buildCompanyNotConnectedResponse, } from "./auth/company_connection_errors.js";
 import { enrichReadResponseBody, enrichWriteResponseBody, isListPayload, } from "./read_connection_metadata.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
@@ -387,6 +388,10 @@ export async function getCredentialForCompanyAsync(companyName) {
 export function getCredentialForCompany(companyName) {
     const credential = companyCredentialProvider.getCredential(companyName);
     if (!credential) {
+        const connectedNames = listConnectedCompanyNames();
+        if (connectedNames.length > 0) {
+            throw new CompanyNotConnectedError(companyName);
+        }
         if (isHttpMcpMode() && !getActiveConnectionRef()) {
             throw new Error([
                 `No company connection is currently stored for "${companyName}".`,
@@ -846,7 +851,19 @@ export async function brcFetch(companyName, path, init = {}) {
     const safePath = path.startsWith("/") ? path : `/${path}`;
     const method = normalizeHttpMethod(init);
     const requestBody = parseRequestBody(init);
-    const authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+    let authorization;
+    try {
+        authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+    }
+    catch (error) {
+        if (error instanceof CompanyNotConnectedError) {
+            const payload = buildCompanyNotConnectedResponse(error.companyName, {
+                otherCompaniesConnected: listConnectedCompanyNames().length > 0,
+            });
+            return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
+        }
+        throw error;
+    }
     const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
         ...init,
         headers: {

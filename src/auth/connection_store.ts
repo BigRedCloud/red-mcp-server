@@ -11,6 +11,7 @@ import type { ConnectionStore } from "./connection_store_types.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 import { issueConnectionRef } from "./connection_ref.js";
+import type { FailedCompanyConnection } from "./connection_store_types.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -259,6 +260,9 @@ export async function ensureConnectionIdForSession(
 
 export type ClaimConnectionResult = {
   connectionId: string;
+  connectedCompanies: string[];
+  failedCompanies: FailedCompanyConnection[];
+  /** @deprecated Use connectedCompanies */
   companyNames: string[];
   connectionRef: string;
   connectionRefExpiresAt: number;
@@ -310,9 +314,15 @@ export async function claimConnectionCodeForSession(
   }
 
   const companies = await store.listConnectedCompanies(pending.connectionId);
+  const failedCompanies = await store.listFailedCompanyValidations(
+    pending.connectionId
+  );
+
   if (companies.length === 0) {
     throw new ClaimConnectionError(
-      `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
+      failedCompanies.length > 0
+        ? "No companies could be connected because every submitted credential failed validation. Reconnect with current API keys on a fresh secure Red connection link, then confirm the confirmation code again."
+        : `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
       "no_companies"
     );
   }
@@ -332,9 +342,13 @@ export async function claimConnectionCodeForSession(
   const { connectionRef, expiresAt: connectionRefExpiresAt } =
     await issueConnectionRef(pending.connectionId);
 
+  const connectedCompanies = companies.map((company) => company.companyName);
+
   return {
     connectionId: pending.connectionId,
-    companyNames: companies.map((company) => company.companyName),
+    connectedCompanies,
+    failedCompanies,
+    companyNames: connectedCompanies,
     connectionRef,
     connectionRefExpiresAt,
   };
