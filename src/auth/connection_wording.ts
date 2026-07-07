@@ -57,9 +57,11 @@ export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
 
 export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
   "Lists company contexts currently connected in this MCP server session.",
-  "Present the result to the user with the customerMessage text and the plain company names.",
+  "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, or when the session expires.",
+  "Present the result to the user with the customerMessage text, company names, and expiryMessage when connected.",
+  "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeText, and expiryMessage from the response — do not say you do not know the current time.",
   "Do not show connectionRef, activeConnectionRef, redconn_ values, session IDs, or diagnostic metadata to normal users.",
-  "Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask or dev mode is enabled.",
+  "Do not show raw ISO expiresAt or credentialType to normal users unless they specifically ask or dev mode is enabled.",
   "Connection credentials are never returned.",
   "If you have connectionRef from brc_confirm_company_connection, pass it silently on this call when the MCP client rotates session ids.",
   "An empty list with a working connectionRef means no companies are bound yet — not a reason to start a new connection if other tools already succeeded with the same connectionRef.",

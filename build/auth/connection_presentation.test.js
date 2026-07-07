@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getApiKeyExpirationMs, redServerConfig, } from "../config/server_config.js";
-import { buildApiKeyRefusalMessage, buildConfirmConnectionCustomerMessage, buildCompaniesStayConnectedUserMessage, buildConnectionRefPresentationFields, buildListCompanyContextsCustomerMessage, formatCredentialTtlForUser, getCredentialTtlMinutes, isDevModeEnabled, shouldShowDeveloperConnectionDetails, CONNECTION_REF_ASSISTANT_INSTRUCTION, CONNECTION_REF_PRESENTATION_HINT, } from "./connection_presentation.js";
+import { buildApiKeyRefusalMessage, buildConfirmConnectionCustomerMessage, buildCompaniesStayConnectedUserMessage, buildConnectionExpiryMetadata, buildConnectionPresentationInstructions, buildListCompanyContextsCustomerMessage, buildListCompanyContextsExpiryFields, formatCredentialTtlForUser, getCredentialTtlMinutes, isDevModeEnabled, selectEarliestCompanyExpiry, shouldShowDeveloperConnectionDetails, CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION, CONNECTION_REF_ASSISTANT_INSTRUCTION, CONNECTION_REF_PRESENTATION_HINT, } from "./connection_presentation.js";
 test("formatCredentialTtlForUser returns about 4 hours when TTL is 240 minutes", () => {
     assert.equal(formatCredentialTtlForUser(240), "about 4 hours");
 });
 test("formatCredentialTtlForUser returns about 2 hours when TTL is 120 minutes", () => {
+    assert.equal(formatCredentialTtlForUser(120), "about 2 hours");
+});
+test("connectionDurationText is about 4 hours when TTL is 240 minutes", () => {
+    assert.equal(formatCredentialTtlForUser(240), "about 4 hours");
+    assert.equal(buildConnectionExpiryMetadata({
+        earliestExpiresAtMs: Date.now() + 240 * 60_000,
+        durationMinutes: 240,
+    }).connectionDurationText, "about 4 hours");
+});
+test("connectionDurationText is about 2 hours when TTL is 120 minutes", () => {
     assert.equal(formatCredentialTtlForUser(120), "about 2 hours");
 });
 test("getCredentialTtlMinutes uses server config default", () => {
@@ -30,10 +40,11 @@ test("customerMessage does not include raw redconn_ value", () => {
     assert.match(message, /Company B/);
 });
 test("confirm presentation fields include instruction not to display connectionRef", () => {
-    const fields = buildConnectionRefPresentationFields();
+    const fields = buildConnectionPresentationInstructions();
     assert.match(fields.assistantInstruction, /Do not show connectionRef/i);
-    assert.match(fields.presentationHint, /Do not display them/i);
+    assert.match(fields.presentationHint, /Do not display/i);
     assert.match(fields.connectionRefReminder, /Do not mention it to normal users/i);
+    assert.match(fields.assistantInstruction, /Do not say you do not know the current time/i);
 });
 test("list company contexts customer message does not mention connectionRef", () => {
     const empty = buildListCompanyContextsCustomerMessage([]);
@@ -55,11 +66,67 @@ test("dev mode may expose technical connection details when explicitly requested
 test("isDevModeEnabled reflects server dev mode configuration", () => {
     assert.equal(typeof isDevModeEnabled(), "boolean");
 });
-test("connected company expiry phrase can use until wording", () => {
-    const expiresAt = Date.parse("2030-06-01T15:30:00.000Z");
-    const message = buildCompaniesStayConnectedUserMessage(expiresAt);
-    assert.match(message, /until /i);
-    assert.equal(message.includes("redconn_"), false);
+test("expiryMessage includes both duration and exact expiry time", () => {
+    const nowMs = Date.parse("2026-07-07T15:00:00.000Z");
+    const expiresAtMs = Date.parse("2026-07-07T17:52:00.000Z");
+    const metadata = buildConnectionExpiryMetadata({
+        earliestExpiresAtMs: expiresAtMs,
+        nowMs,
+    });
+    assert.match(metadata.expiryMessage, /from confirmation/i);
+    assert.match(metadata.expiryMessage, /local time/i);
+    assert.match(metadata.expiryMessage, /unless you start a new chat or reconnect/i);
+    assert.match(metadata.expiryMessage, /remaining/i);
+    assert.equal(metadata.expiryMessage.includes("redconn_"), false);
+});
+test("buildConnectionExpiryMetadata includes timeRemainingText when expiresAt exists", () => {
+    const nowMs = Date.now();
+    const expiresAtMs = nowMs + 222 * 60_000;
+    const metadata = buildConnectionExpiryMetadata({
+        earliestExpiresAtMs: expiresAtMs,
+        nowMs,
+    });
+    assert.ok(metadata.timeRemainingText);
+    assert.match(metadata.timeRemainingText ?? "", /remaining/i);
+    assert.equal(metadata.timeRemainingMinutes, 222);
+    assert.ok(metadata.expiryTimeText?.includes("local time"));
+});
+test("list company contexts expiry fields include timeRemainingText", () => {
+    const nowMs = Date.now();
+    const metadata = buildListCompanyContextsExpiryFields([
+        {
+            companyName: "Company B",
+            expiresAtMs: nowMs + 180 * 60_000,
+            connected: true,
+        },
+        {
+            companyName: "Company C",
+            expiresAtMs: nowMs + 240 * 60_000,
+            connected: true,
+        },
+    ], nowMs);
+    assert.ok(metadata);
+    assert.match(metadata?.timeRemainingText ?? "", /remaining/i);
+    assert.equal(metadata?.earliestExpiryApplies, true);
+    assert.match(metadata?.earliestExpiryNote ?? "", /Company B/i);
+});
+test("multiple connected companies use the earliest expiresAt", () => {
+    const nowMs = Date.now();
+    const earliest = nowMs + 90 * 60_000;
+    const later = nowMs + 240 * 60_000;
+    const selection = selectEarliestCompanyExpiry([
+        { companyName: "Company C", expiresAtMs: later, connected: true },
+        { companyName: "Company B", expiresAtMs: earliest, connected: true },
+    ]);
+    assert.equal(selection.earliestExpiresAtMs, earliest);
+    assert.equal(selection.earliestCompanyName, "Company B");
+    assert.equal(selection.multipleDifferentExpiries, true);
+});
+test("expiry assistant instruction tells models to use metadata not current-time guessing", () => {
+    assert.match(CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION, /connectionDurationText/i);
+    assert.match(CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION, /timeRemainingText/i);
+    assert.match(CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION, /expiryTimeText/i);
+    assert.match(CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION, /Do not say you do not know the current time/i);
 });
 test("assistant instruction constant matches presentation requirements", () => {
     assert.match(CONNECTION_REF_ASSISTANT_INSTRUCTION, /silently/i);
@@ -70,6 +137,6 @@ test("connected company expiry aligns with configured credential TTL", () => {
     const expiresAt = now + getApiKeyExpirationMs();
     const expectedMinutes = redServerConfig.apiKeyTtlMinutes;
     assert.equal(Math.round((expiresAt - now) / 60_000), expectedMinutes);
-    assert.match(buildCompaniesStayConnectedUserMessage(expiresAt), /until /i);
-    assert.match(buildCompaniesStayConnectedUserMessage(), new RegExp(formatCredentialTtlForUser(expectedMinutes)));
+    assert.match(buildCompaniesStayConnectedUserMessage(expiresAt, now), /local time/i);
+    assert.match(buildCompaniesStayConnectedUserMessage(undefined, now), new RegExp(formatCredentialTtlForUser(expectedMinutes)));
 });

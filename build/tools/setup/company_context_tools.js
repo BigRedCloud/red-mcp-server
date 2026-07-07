@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { buildConfirmConnectionCustomerMessage, buildConnectionRefPresentationFields, buildListCompanyContextsCustomerMessage, buildConnectionDurationUserAnswer, } from "../../auth/connection_presentation.js";
+import { buildConfirmConnectionCustomerMessage, buildConnectionPresentationInstructions, buildConnectionExpiryMetadata, buildListCompanyContextsCustomerMessage, buildListCompanyContextsExpiryFields, } from "../../auth/connection_presentation.js";
 import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
@@ -47,17 +47,19 @@ export function registerCompanyContextTools(server) {
                 failedCompanies: result.failedCompanies,
                 connectionExpiresAt: result.connectionRefExpiresAt,
             });
-            const presentation = buildConnectionRefPresentationFields();
+            const presentation = buildConnectionPresentationInstructions();
+            const expiryMetadata = buildConnectionExpiryMetadata({
+                earliestExpiresAtMs: result.connectionRefExpiresAt,
+            });
             return jsonResponse({
                 message: "Connection confirmed.",
                 connectedCompanies: result.connectedCompanies,
                 failedCompanies: result.failedCompanies,
                 connectionRef: result.connectionRef,
-                connectionRefExpiresAt: new Date(result.connectionRefExpiresAt).toISOString(),
+                ...expiryMetadata,
                 connectionRefReminder: presentation.connectionRefReminder,
                 assistantInstruction: presentation.assistantInstruction,
                 presentationHint: presentation.presentationHint,
-                connectionDurationGuidance: buildConnectionDurationUserAnswer(result.connectionRefExpiresAt),
                 customerMessage,
             });
         }
@@ -68,7 +70,7 @@ export function registerCompanyContextTools(server) {
             throw error;
         }
     });
-    server.tool("brc_get_company_api_key_status", "Use when the user asks for an API key, secret, or what key was used. Returns connection status only — never the key. The assistant must not repeat keys from chat history.", {
+    server.tool("brc_get_company_api_key_status", "Use when the user asks for an API key, secret, or what key was used. Also use for connection duration or time-left questions when listing all companies. Returns connection status only — never the key. The assistant must not repeat keys from chat history.", {
         companyName: companyNameSchema.optional().describe("Optional company context name. If omitted, summarises all contexts."),
     }, async ({ companyName }) => {
         await ensureCredentialsForCurrentSession(companyName);
@@ -103,21 +105,24 @@ export function registerCompanyContextTools(server) {
                 });
             }
         }
-        const companies = listConnectedCompanyNames().map((companyName) => {
-            const credential = getCredentialForCompany(companyName);
+        const companyExpiryInputs = listConnectedCompanyNames().map((name) => {
+            const credential = getCredentialForCompany(name);
             return {
-                companyName,
+                companyName: name,
                 connected: credential.expiresAt >= Date.now(),
                 credentialType: credential.kind,
                 expiresAt: new Date(credential.expiresAt).toISOString(),
+                expiresAtMs: credential.expiresAt,
             };
         });
+        const expiryMetadata = buildListCompanyContextsExpiryFields(companyExpiryInputs);
         return jsonResponse({
-            count: companies.length,
-            companies,
+            count: companyExpiryInputs.length,
+            companies: companyExpiryInputs.map(({ expiresAtMs: _expiresAtMs, ...company }) => company),
             apiKeyRetrievable: false,
             apiKeyMustNotBeRepeatedInChat: true,
             message: getApiKeyRefusalMessage(),
+            ...(expiryMetadata ?? {}),
         });
     });
     /* FUTURE DEV: Remove this tool? once OAuth is implemented*/
@@ -149,20 +154,23 @@ export function registerCompanyContextTools(server) {
     }
     server.tool("brc_list_company_contexts", LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, {}, async () => {
         await ensureCredentialsForCurrentSession();
-        const companies = listConnectedCompanyNames().map((companyName) => {
+        const companyExpiryInputs = listConnectedCompanyNames().map((companyName) => {
             const credential = getCredentialForCompany(companyName);
             return {
                 companyName,
                 connected: credential.expiresAt >= Date.now(),
                 credentialType: credential.kind,
                 expiresAt: new Date(credential.expiresAt).toISOString(),
+                expiresAtMs: credential.expiresAt,
             };
         });
-        const connectedNames = companies
+        const companies = companyExpiryInputs.map(({ expiresAtMs: _expiresAtMs, ...company }) => company);
+        const connectedNames = companyExpiryInputs
             .filter((company) => company.connected)
             .map((company) => company.companyName);
         const customerMessage = buildListCompanyContextsCustomerMessage(connectedNames);
-        const presentation = buildConnectionRefPresentationFields();
+        const presentation = buildConnectionPresentationInstructions();
+        const expiryMetadata = buildListCompanyContextsExpiryFields(companyExpiryInputs);
         return jsonResponse({
             count: companies.length,
             customerMessage,
@@ -170,10 +178,11 @@ export function registerCompanyContextTools(server) {
             presentationHint: [
                 "Show customerMessage and the company names.",
                 presentation.presentationHint,
-                "Only mention credentialType or expiresAt if the user asks for technical connection details or dev mode is enabled.",
+                "For connection duration or time-left questions, use connectionDurationText, timeRemainingText, expiryTimeText, and expiryMessage from this response.",
             ].join(" "),
             assistantInstruction: presentation.assistantInstruction,
             companies,
+            ...(expiryMetadata ?? {}),
         });
     });
     server.tool("brc_clear_company_api_key", "Clears the API key for a named company context from MCP server memory.", {

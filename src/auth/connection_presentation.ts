@@ -60,17 +60,20 @@ export function formatCredentialExpiryPhrase(expiresAt?: number): string {
 }
 
 export function buildCompaniesStayConnectedUserMessage(
-  expiresAt?: number
+  expiresAt?: number,
+  nowMs?: number
 ): string {
-  if (expiresAt && Number.isFinite(expiresAt)) {
-    return `Your companies stay connected ${formatCredentialExpiryPhrase(expiresAt)}, unless you start a new chat or reconnect.`;
-  }
-
-  return `Your companies stay connected for ${formatCredentialTtlForUser()} from confirmation, unless you start a new chat or reconnect.`;
+  return buildConnectionExpiryMetadata({
+    earliestExpiresAtMs: expiresAt,
+    nowMs,
+  }).expiryMessage;
 }
 
-export function buildConnectionDurationUserAnswer(expiresAt?: number): string {
-  return buildCompaniesStayConnectedUserMessage(expiresAt);
+export function buildConnectionDurationUserAnswer(
+  expiresAt?: number,
+  nowMs?: number
+): string {
+  return buildCompaniesStayConnectedUserMessage(expiresAt, nowMs);
 }
 
 export function buildApiKeyRefusalMessage(): string {
@@ -84,6 +87,169 @@ export function buildApiKeyRefusalMessage(): string {
 
 export function buildSessionCredentialDurationPhrase(): string {
   return formatCredentialTtlForUser();
+}
+
+export const CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION =
+  "For questions about how long the connection lasts, how much time is left, when companies disconnect, or when the session expires, answer using connectionDurationText, timeRemainingText, and expiryTimeText from this response. Do not say you do not know the current time.";
+
+export type ConnectionExpiryMetadata = {
+  connectionDurationMinutes: number;
+  connectionDurationHours: number;
+  connectionDurationText: string;
+  expiresAt?: string;
+  earliestExpiresAt?: string;
+  expiryTimeText?: string;
+  timeRemainingMinutes?: number;
+  timeRemainingHours?: number;
+  timeRemainingText?: string;
+  expiryMessage: string;
+  earliestExpiryApplies?: boolean;
+  earliestExpiryNote?: string;
+};
+
+export type CompanyExpiryInput = {
+  companyName: string;
+  expiresAtMs: number;
+  connected: boolean;
+};
+
+export function connectionDurationHoursFromMinutes(minutes: number): number {
+  if (minutes % 60 === 0) {
+    return minutes / 60;
+  }
+
+  return Math.round((minutes / 60) * 10) / 10;
+}
+
+export function formatExpiryTimeText(expiresAtMs: number): string {
+  return `${formatConnectionExpiryForUser(expiresAtMs)} local time`;
+}
+
+export function formatTimeRemainingText(remainingMs: number): string {
+  if (remainingMs <= 0) {
+    return "expired";
+  }
+
+  const totalMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return `about ${minutes} minute${minutes === 1 ? "" : "s"} remaining`;
+  }
+
+  if (minutes === 0) {
+    return `about ${hours} hour${hours === 1 ? "" : "s"} remaining`;
+  }
+
+  return `about ${hours} hour${hours === 1 ? "" : "s"} ${minutes} minute${minutes === 1 ? "" : "s"} remaining`;
+}
+
+export function selectEarliestCompanyExpiry(companies: CompanyExpiryInput[]): {
+  earliestExpiresAtMs?: number;
+  earliestCompanyName?: string;
+  multipleDifferentExpiries: boolean;
+} {
+  const connected = companies.filter((company) => company.connected);
+  if (connected.length === 0) {
+    return { multipleDifferentExpiries: false };
+  }
+
+  const sorted = [...connected].sort((a, b) => a.expiresAtMs - b.expiresAtMs);
+  const earliest = sorted[0];
+  if (!earliest) {
+    return { multipleDifferentExpiries: false };
+  }
+
+  const distinctExpiryTimes = new Set(
+    connected.map((company) => company.expiresAtMs)
+  );
+
+  return {
+    earliestExpiresAtMs: earliest.expiresAtMs,
+    earliestCompanyName: earliest.companyName,
+    multipleDifferentExpiries: distinctExpiryTimes.size > 1,
+  };
+}
+
+export function buildConnectionExpiryMetadata(options: {
+  earliestExpiresAtMs?: number;
+  nowMs?: number;
+  multipleDifferentExpiries?: boolean;
+  earliestCompanyName?: string;
+  /** Test override; production uses BRC_API_KEY_TTL_MINUTES. */
+  durationMinutes?: number;
+}): ConnectionExpiryMetadata {
+  const durationMinutes = options.durationMinutes ?? getCredentialTtlMinutes();
+  const durationText = formatCredentialTtlForUser(durationMinutes);
+  const durationHours = connectionDurationHoursFromMinutes(durationMinutes);
+  const nowMs = options.nowMs ?? Date.now();
+
+  const base: ConnectionExpiryMetadata = {
+    connectionDurationMinutes: durationMinutes,
+    connectionDurationHours: durationHours,
+    connectionDurationText: durationText,
+    expiryMessage: `Your connected companies stay connected for ${durationText} from confirmation, unless you start a new chat or reconnect.`,
+  };
+
+  if (!options.earliestExpiresAtMs || !Number.isFinite(options.earliestExpiresAtMs)) {
+    return base;
+  }
+
+  const expiresAtMs = options.earliestExpiresAtMs;
+  const expiryTimeText = formatExpiryTimeText(expiresAtMs);
+  const remainingMs = expiresAtMs - nowMs;
+  const timeRemainingMinutes = Math.max(0, Math.ceil(remainingMs / 60_000));
+  const timeRemainingHours =
+    Math.round((timeRemainingMinutes / 60) * 10) / 10;
+  const timeRemainingText = formatTimeRemainingText(remainingMs);
+  const expiresAtIso = new Date(expiresAtMs).toISOString();
+
+  let expiryMessage = `Your connected companies stay connected for ${durationText} from confirmation, until ${expiryTimeText}, unless you start a new chat or reconnect.`;
+  if (timeRemainingText !== "expired") {
+    expiryMessage += ` There ${timeRemainingText.startsWith("about 1 minute") ? "is" : "are"} ${timeRemainingText}.`;
+  }
+
+  const metadata: ConnectionExpiryMetadata = {
+    ...base,
+    expiresAt: expiresAtIso,
+    earliestExpiresAt: expiresAtIso,
+    expiryTimeText,
+    timeRemainingMinutes,
+    timeRemainingHours,
+    timeRemainingText,
+    expiryMessage,
+  };
+
+  if (options.multipleDifferentExpiries && options.earliestCompanyName) {
+    metadata.earliestExpiryApplies = true;
+    metadata.earliestExpiryNote = `The disconnect time below is based on the earliest company expiry (${options.earliestCompanyName}).`;
+  }
+
+  return metadata;
+}
+
+export function buildConnectionExpiryAssistantInstruction(): string {
+  return CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION;
+}
+
+export function buildConnectionPresentationInstructions(): {
+  assistantInstruction: string;
+  presentationHint: string;
+  connectionRefReminder: string;
+} {
+  const presentation = buildConnectionRefPresentationFields();
+  return {
+    assistantInstruction: [
+      presentation.assistantInstruction,
+      CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION,
+    ].join(" "),
+    presentationHint: [
+      presentation.presentationHint,
+      CONNECTION_EXPIRY_ASSISTANT_INSTRUCTION,
+    ].join(" "),
+    connectionRefReminder: presentation.connectionRefReminder,
+  };
 }
 
 export function buildConnectionRefPresentationFields(): {
@@ -102,12 +268,21 @@ export function buildConfirmConnectionCustomerMessage(args: {
   connectedCompanies: string[];
   failedCompanies: FailedCompanyConnection[];
   connectionExpiresAt?: number;
+  nowMs?: number;
 }): string {
   const count = args.connectedCompanies.length;
   const summary =
     count === 1
       ? "1 company is now connected in this session:"
       : `${count} companies are now connected in this session:`;
+
+  const expiryMetadata =
+    count > 0
+      ? buildConnectionExpiryMetadata({
+          earliestExpiresAtMs: args.connectionExpiresAt,
+          nowMs: args.nowMs,
+        })
+      : undefined;
 
   return [
     "Connection confirmed.",
@@ -124,10 +299,33 @@ export function buildConfirmConnectionCustomerMessage(args: {
         ]
       : []),
     "",
-    buildCompaniesStayConnectedUserMessage(args.connectionExpiresAt),
+    expiryMetadata?.expiryMessage ??
+      buildCompaniesStayConnectedUserMessage(undefined, args.nowMs),
     "",
     "You can now ask for connected companies or work with your company records.",
   ].join("\n");
+}
+
+export function buildListCompanyContextsExpiryFields(
+  companies: CompanyExpiryInput[],
+  nowMs?: number
+): ConnectionExpiryMetadata | undefined {
+  const connected = companies.filter((company) => company.connected);
+  if (connected.length === 0) {
+    return undefined;
+  }
+
+  const selection = selectEarliestCompanyExpiry(companies);
+  if (!selection.earliestExpiresAtMs) {
+    return undefined;
+  }
+
+  return buildConnectionExpiryMetadata({
+    earliestExpiresAtMs: selection.earliestExpiresAtMs,
+    nowMs,
+    multipleDifferentExpiries: selection.multipleDifferentExpiries,
+    earliestCompanyName: selection.earliestCompanyName,
+  });
 }
 
 export function buildListCompanyContextsCustomerMessage(
@@ -151,6 +349,6 @@ export function buildConnectionRefUserPresentationRules(): string {
     "- connectionRef, activeConnectionRef, Red connection reference, redconn_ values, MCP session IDs, internal session IDs, and connection diagnostic metadata are for MCP tool arguments only.",
     "- Pass connectionRef silently on later tool calls. Never mention connectionRef, redconn_..., activeConnectionRef, or internal session identifiers in natural-language answers to normal users.",
     "- Only show technical connection details when dev mode is enabled or the user explicitly asks for technical/debug details.",
-    `- When users ask how long companies stay connected, answer using the configured session duration (${formatCredentialTtlForUser()}) or the connected companies' expiresAt values — do not hardcode a different duration.`,
+    `- When users ask how long companies stay connected, how much time is left, when companies disconnect, or when the session expires, answer using connectionDurationText, timeRemainingText, expiryTimeText, and expiryMessage from brc_list_company_contexts or brc_confirm_company_connection — do not say you do not know the current time.`,
   ].join("\n");
 }
