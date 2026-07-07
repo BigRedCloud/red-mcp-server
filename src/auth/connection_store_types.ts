@@ -6,6 +6,8 @@ export type StoredCompanyCredential = {
   expiresAt: number;
   createdAt: number;
   updatedAt: number;
+  /** Set when BRC validation succeeded before persistence (CSV / connect form). */
+  credentialValidatedAt?: number;
 };
 
 export type PendingConnectionRecord = {
@@ -20,6 +22,7 @@ export type CompanyCredentialInput = {
   companyName: string;
   apiKey: string;
   expiresAt: number;
+  credentialValidatedAt?: number;
 };
 
 export type FailedCompanyConnection = {

@@ -7,6 +7,7 @@ import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 import { issueConnectionRef } from "./connection_ref.js";
+import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
 const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
@@ -196,9 +197,8 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     if (!pending.used) {
         throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page from your current fresh connection link, submit your company details, then return here and confirm the confirmation code. If that link no longer works, start a fresh company connection to generate a new secure Red connection link.", "not_completed");
     }
-    const companies = await store.listConnectedCompanies(pending.connectionId);
-    const failedCompanies = await store.listFailedCompanyValidations(pending.connectionId);
-    if (companies.length === 0) {
+    const { connectedCompanies, failedCompanies } = await revalidateStoredConnectionCompanies(pending.connectionId);
+    if (connectedCompanies.length === 0) {
         throw new ClaimConnectionError(failedCompanies.length > 0
             ? "No companies could be connected because every submitted credential failed validation. Reconnect with current API keys on a fresh secure Red connection link, then confirm the confirmation code again."
             : `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "no_companies");
@@ -214,12 +214,12 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         });
     }
     const { connectionRef, expiresAt: connectionRefExpiresAt } = await issueConnectionRef(pending.connectionId);
-    const connectedCompanies = companies.map((company) => company.companyName);
+    const connectedCompaniesList = connectedCompanies;
     return {
         connectionId: pending.connectionId,
-        connectedCompanies,
+        connectedCompanies: connectedCompaniesList,
         failedCompanies,
-        companyNames: connectedCompanies,
+        companyNames: connectedCompaniesList,
         connectionRef,
         connectionRefExpiresAt,
     };

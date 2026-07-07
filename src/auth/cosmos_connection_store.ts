@@ -88,6 +88,7 @@ type CompanyCredentialDocument = CosmosRecord & {
   expiresAt: number;
   createdAt: number;
   updatedAt: number;
+  credentialValidatedAt?: number;
   ttl: number;
 };
 
@@ -433,6 +434,7 @@ export class CosmosConnectionStore implements ConnectionStore {
         expiresAt: company.expiresAt,
         createdAt,
         updatedAt: now,
+        credentialValidatedAt: company.credentialValidatedAt,
         ttl: ttlSeconds,
       };
 
@@ -465,6 +467,7 @@ export class CosmosConnectionStore implements ConnectionStore {
       expiresAt: resource.expiresAt,
       createdAt: resource.createdAt,
       updatedAt: resource.updatedAt,
+      credentialValidatedAt: resource.credentialValidatedAt,
     }));
   }
 
@@ -491,6 +494,7 @@ export class CosmosConnectionStore implements ConnectionStore {
         expiresAt: resource.expiresAt,
         createdAt: resource.createdAt,
         updatedAt: resource.updatedAt,
+        credentialValidatedAt: resource.credentialValidatedAt,
       };
     } catch {
       return null;

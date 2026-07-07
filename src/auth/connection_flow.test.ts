@@ -36,6 +36,7 @@ test("completed connection code can be claimed and bound to a session", async ()
       companyName: "Company A",
       apiKey: "test-api-key-company-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 
@@ -163,6 +164,7 @@ test("connection credentials are isolated by connection ID", async () => {
       companyName: "Company A",
       apiKey: "api-key-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 
@@ -171,6 +173,7 @@ test("connection credentials are isolated by connection ID", async () => {
       companyName: "Company B",
       apiKey: "api-key-b",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 

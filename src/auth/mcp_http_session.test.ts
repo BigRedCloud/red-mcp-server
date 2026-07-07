@@ -43,21 +43,25 @@ test("confirm connection then list companies in the same detected session", asyn
       companyName: "Company A",
       apiKey: "test-api-key-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company B",
       apiKey: "test-api-key-b",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company C",
       apiKey: "test-api-key-c",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company D",
       apiKey: "test-api-key-d",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 
@@ -103,6 +107,7 @@ test("different session cannot see companies confirmed in another session", asyn
       companyName: "Company A",
       apiKey: "test-api-key-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 
@@ -160,6 +165,7 @@ test("same API keys in different sessions remain isolated without a shared clien
         companyName,
         apiKey: "shared-test-api-key",
         expiresAt: Date.now() + 60_000,
+        credentialValidatedAt: Date.now(),
       },
     ]);
 
@@ -217,6 +223,7 @@ test("rotated MCP session id inherits connection via stable client key", async (
       companyName: "Company C",
       apiKey: "test-api-key-c",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 
@@ -353,21 +360,25 @@ test("tool-level diagnostic logs connectionRef resolution with loaded companies"
       companyName: "Company A",
       apiKey: "test-api-key-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company B",
       apiKey: "test-api-key-b",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company C",
       apiKey: "test-api-key-c",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
     {
       companyName: "Company D",
       apiKey: "test-api-key-d",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 

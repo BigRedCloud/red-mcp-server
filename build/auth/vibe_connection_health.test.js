@@ -77,6 +77,7 @@ test("invalid expired connectionRef returns clear reconnect message", async () =
             companyName: "Company A",
             apiKey: "test-api-key-a",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     const { connectionRef } = await issueConnectionRef(connectionId);
@@ -112,6 +113,7 @@ test("valid connectionRef across rotated MCP sessions never falls back to global
             companyName: "Company A",
             apiKey: "test-api-key-a",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     const claim = await claimConnectionCodeForSession(code, confirmSession);
@@ -145,6 +147,7 @@ test("tool-level diagnostics log for session-bound tools without connectionRef",
             companyName: "Company A",
             apiKey: "test-api-key-a",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     await claimConnectionCodeForSession(code, sessionId);

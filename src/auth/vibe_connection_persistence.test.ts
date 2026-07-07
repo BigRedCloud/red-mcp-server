@@ -64,6 +64,7 @@ test("expired connectionRef still gives clear reconnect instruction", async () =
       companyName: "Company A",
       apiKey: "test-api-key-a",
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     },
   ]);
 

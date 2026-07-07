@@ -19,6 +19,7 @@ async function seedConnection(connectionId, companies) {
         companyName,
         apiKey: `test-api-key-${companyName}`,
         expiresAt: Date.now() + 60_000,
+        credentialValidatedAt: Date.now(),
     })));
 }
 test("confirm issues connectionRef and rotated Vibe session can reload companies with it", async () => {

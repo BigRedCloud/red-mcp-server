@@ -141,6 +141,7 @@ export class MemoryConnectionStore {
                 expiresAt: company.expiresAt,
                 createdAt: existing?.createdAt ?? now,
                 updatedAt: now,
+                credentialValidatedAt: company.credentialValidatedAt ?? existing?.credentialValidatedAt,
             });
         }
     }

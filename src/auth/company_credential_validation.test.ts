@@ -409,6 +409,173 @@ test("company credential invalid response never includes API keys", () => {
   assert.equal(payload.errorType, "company_credential_invalid");
 });
 
+test("CSV resubmit removes stale stored company when new API key fails validation", async () => {
+  resetCompanyCredentialValidator();
+  resetValidationFetch();
+  mockBrcValidationFetchForKeys(
+    new Set(["key-b", "key-c", "key-d"]),
+    new Set(["bad-key", "old-stale-key"])
+  );
+
+  const connectionId = uniqueId("connection");
+  const store = getConnectionStore();
+
+  await store.saveConnectedCompanies(connectionId, [
+    {
+      companyName: "Company A",
+      apiKey: "old-stale-key",
+      expiresAt: Date.now() + 60_000,
+    },
+    {
+      companyName: "Company B",
+      apiKey: "key-b",
+      expiresAt: Date.now() + 60_000,
+    },
+  ]);
+
+  const outcome = await validateAndPersistConnectedCompanies({
+    connectionId,
+    companies: [
+      { companyName: "Company A", apiKey: "bad-key" },
+      { companyName: "Company B", apiKey: "key-b" },
+      { companyName: "Company C", apiKey: "key-c" },
+      { companyName: "Company D", apiKey: "key-d" },
+    ],
+    expiresAt: Date.now() + 60_000,
+  });
+
+  assert.deepEqual(outcome.connectedCompanies.sort(), [
+    "Company B",
+    "Company C",
+    "Company D",
+  ]);
+  assert.equal(
+    outcome.failedCompanies.some((failure) => failure.companyName === "Company A"),
+    true
+  );
+
+  const stored = await store.listConnectedCompanies(connectionId);
+  assert.deepEqual(
+    stored.map((company) => company.companyName).sort(),
+    ["Company B", "Company C", "Company D"]
+  );
+});
+
+test("confirm after CSV upload excludes invalid company before any tool call", async () => {
+  resetCompanyCredentialValidator();
+  resetValidationFetch();
+  mockBrcValidationFetchForKeys(
+    new Set(["good-key"]),
+    new Set(["bad-key"])
+  );
+
+  const store = getConnectionStore();
+  const code = uniqueId("code");
+  const connectionId = uniqueId("connection");
+  const sessionId = uniqueId("session");
+
+  await store.createPendingConnection({
+    code,
+    connectionId,
+    expiresAt: Date.now() + 60_000,
+  });
+  await store.completePendingConnection(code);
+
+  await validateAndPersistConnectedCompanies({
+    connectionId,
+    companies: [
+      { companyName: "Company A", apiKey: "bad-key" },
+      { companyName: "Company B", apiKey: "good-key" },
+    ],
+    expiresAt: Date.now() + 60_000,
+  });
+
+  const result = await claimConnectionCodeForSession(code, sessionId);
+  assert.deepEqual(result.connectedCompanies, ["Company B"]);
+  assert.equal(result.failedCompanies.length, 1);
+  assert.equal(result.failedCompanies[0]?.companyName, "Company A");
+
+  const keyStore = new Map();
+  await runWithSessionKeyStore(keyStore, async () => {
+    await hydrateSessionKeyStoreFromConnectionStore(connectionId, keyStore);
+    assert.deepEqual(listConnectedCompanyNames(), ["Company B"]);
+  });
+});
+
+test("claim revalidates stale stored credentials before returning connected companies", async () => {
+  resetCompanyCredentialValidator();
+  resetValidationFetch();
+  mockBrcValidationFetchForKeys(new Set(["good-key"]), new Set(["bad-key-stored"]));
+
+  const store = getConnectionStore();
+  const code = uniqueId("code");
+  const connectionId = uniqueId("connection");
+
+  await store.createPendingConnection({
+    code,
+    connectionId,
+    expiresAt: Date.now() + 60_000,
+  });
+  await store.completePendingConnection(code);
+
+  await store.saveConnectedCompanies(connectionId, [
+    {
+      companyName: "Company A",
+      apiKey: "bad-key-stored",
+      expiresAt: Date.now() + 60_000,
+    },
+    {
+      companyName: "Company B",
+      apiKey: "good-key",
+      expiresAt: Date.now() + 60_000,
+    },
+  ]);
+
+  const result = await claimConnectionCodeForSession(code, uniqueId("session"));
+  assert.deepEqual(result.connectedCompanies, ["Company B"]);
+  assert.equal(result.failedCompanies.length, 1);
+  assert.equal(result.failedCompanies[0]?.companyName, "Company A");
+});
+
+test("validation logging omits API keys", async () => {
+  process.env.RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG = "true";
+  resetCompanyCredentialValidator();
+  resetValidationFetch();
+
+  const logs: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+
+  mockBrcValidationFetchForKeys(new Set(["good-key"]), new Set(["bad-key"]));
+
+  try {
+    await validateAndPersistConnectedCompanies({
+      connectionId: uniqueId("connection"),
+      companies: [
+        { companyName: "Company A", apiKey: "bad-key" },
+        { companyName: "Company B", apiKey: "good-key" },
+      ],
+      expiresAt: Date.now() + 60_000,
+    });
+  } finally {
+    console.info = originalInfo;
+    delete process.env.RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG;
+  }
+
+  const validationLogs = logs.filter((line) =>
+    line.includes("Red company credential validation:")
+  );
+  assert.ok(validationLogs.length > 0);
+
+  const serialised = validationLogs.join("\n");
+  assert.equal(serialised.includes("bad-key"), false);
+  assert.equal(serialised.includes("good-key"), false);
+  assert.match(serialised, /validationPath/i);
+  assert.match(serialised, /validationSucceeded/i);
+});
+
 after(() => {
   resetCompanyCredentialValidator();
   resetValidationFetch();

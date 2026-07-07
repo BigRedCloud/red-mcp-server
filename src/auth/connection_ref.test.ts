@@ -25,6 +25,7 @@ async function seedConnection(connectionId: string, companies: string[]) {
       companyName,
       apiKey: `test-api-key-${companyName}`,
       expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
     }))
   );
 }

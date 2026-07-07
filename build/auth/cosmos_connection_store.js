@@ -279,6 +279,7 @@ export class CosmosConnectionStore {
                 expiresAt: company.expiresAt,
                 createdAt,
                 updatedAt: now,
+                credentialValidatedAt: company.credentialValidatedAt,
                 ttl: ttlSeconds,
             };
             await this.getContainer().items.upsert(doc);
@@ -304,6 +305,7 @@ export class CosmosConnectionStore {
             expiresAt: resource.expiresAt,
             createdAt: resource.createdAt,
             updatedAt: resource.updatedAt,
+            credentialValidatedAt: resource.credentialValidatedAt,
         }));
     }
     async getCredentialForCompany(connectionId, companyName) {
@@ -323,6 +325,7 @@ export class CosmosConnectionStore {
                 expiresAt: resource.expiresAt,
                 createdAt: resource.createdAt,
                 updatedAt: resource.updatedAt,
+                credentialValidatedAt: resource.credentialValidatedAt,
             };
         }
         catch {

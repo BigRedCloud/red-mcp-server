@@ -5,6 +5,22 @@ export const COMPANY_DATA_ACCESS_VALIDATION_PATH = "/v1/customers?page=1&pageSiz
 /** Secondary validation — must also pass; not sufficient on its own. */
 export const COMPANY_FINANCIAL_YEAR_VALIDATION_PATH = "/v1/companySetupConfig/getFinancialYear";
 let validationFetch = fetch;
+function validationDebugEnabled() {
+    const configured = process.env.RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG?.trim().toLowerCase();
+    if (configured === "false") {
+        return false;
+    }
+    if (configured === "true") {
+        return true;
+    }
+    return process.env.RED_CONNECT_HTTP_MODE === "true";
+}
+export function logCompanyCredentialValidation(details) {
+    if (!validationDebugEnabled()) {
+        return;
+    }
+    console.info("Red company credential validation:", JSON.stringify(details));
+}
 export function setValidationFetch(fetchImpl) {
     validationFetch = fetchImpl;
 }
@@ -77,30 +93,53 @@ export function resetCompanyCredentialValidator() {
 export async function validateCompanyApiKeyCredential(companyName, apiKey) {
     return credentialValidator(companyName, apiKey);
 }
+export function buildBrcReadRequestHeaders(apiKey) {
+    return {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: buildApiKeyAuthorizationHeader(apiKey),
+    };
+}
 async function validateApiKeyAgainstBrcPath(companyName, apiKey, path) {
     const trimmedName = companyName.trim();
     const safePath = path.startsWith("/") ? path : `/${path}`;
     try {
         const response = await validationFetch(`${BRC_API_BASE_URL}${safePath}`, {
             method: "GET",
-            headers: {
-                Accept: "application/json",
-                Authorization: buildApiKeyAuthorizationHeader(apiKey),
-            },
+            headers: buildBrcReadRequestHeaders(apiKey),
         });
         const bodyText = await response.text();
         const evaluated = evaluateBrcCredentialResponse(response.status, bodyText);
         if (evaluated.valid) {
+            logCompanyCredentialValidation({
+                companyName: trimmedName,
+                validationPath: safePath,
+                validationStatus: response.status,
+                validationSucceeded: true,
+            });
             return { valid: true };
         }
-        const reason = evaluated.reason;
+        logCompanyCredentialValidation({
+            companyName: trimmedName,
+            validationPath: safePath,
+            validationStatus: response.status,
+            validationSucceeded: false,
+            failureReason: evaluated.reason,
+        });
         return {
             valid: false,
-            reason,
-            message: buildFailedCompanyConnection(trimmedName, reason).message,
+            reason: evaluated.reason,
+            message: buildFailedCompanyConnection(trimmedName, evaluated.reason).message,
         };
     }
     catch {
+        logCompanyCredentialValidation({
+            companyName: trimmedName,
+            validationPath: safePath,
+            validationStatus: 0,
+            validationSucceeded: false,
+            failureReason: "validation_failed",
+        });
         return {
             valid: false,
             reason: "validation_failed",

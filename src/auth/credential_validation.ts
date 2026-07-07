@@ -37,6 +37,34 @@ type ValidationFetch = typeof fetch;
 
 let validationFetch: ValidationFetch = fetch;
 
+function validationDebugEnabled(): boolean {
+  const configured =
+    process.env.RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG?.trim().toLowerCase();
+  if (configured === "false") {
+    return false;
+  }
+
+  if (configured === "true") {
+    return true;
+  }
+
+  return process.env.RED_CONNECT_HTTP_MODE === "true";
+}
+
+export function logCompanyCredentialValidation(details: {
+  companyName: string;
+  validationPath: string;
+  validationStatus: number;
+  validationSucceeded: boolean;
+  failureReason?: CompanyCredentialValidationReason;
+}): void {
+  if (!validationDebugEnabled()) {
+    return;
+  }
+
+  console.info("Red company credential validation:", JSON.stringify(details));
+}
+
 export function setValidationFetch(fetchImpl: ValidationFetch): void {
   validationFetch = fetchImpl;
 }
@@ -144,6 +172,14 @@ export async function validateCompanyApiKeyCredential(
   return credentialValidator(companyName, apiKey);
 }
 
+export function buildBrcReadRequestHeaders(apiKey: string): Record<string, string> {
+  return {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Authorization: buildApiKeyAuthorizationHeader(apiKey),
+  };
+}
+
 async function validateApiKeyAgainstBrcPath(
   companyName: string,
   apiKey: string,
@@ -155,26 +191,44 @@ async function validateApiKeyAgainstBrcPath(
   try {
     const response = await validationFetch(`${BRC_API_BASE_URL}${safePath}`, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: buildApiKeyAuthorizationHeader(apiKey),
-      },
+      headers: buildBrcReadRequestHeaders(apiKey),
     });
 
     const bodyText = await response.text();
     const evaluated = evaluateBrcCredentialResponse(response.status, bodyText);
 
     if (evaluated.valid) {
+      logCompanyCredentialValidation({
+        companyName: trimmedName,
+        validationPath: safePath,
+        validationStatus: response.status,
+        validationSucceeded: true,
+      });
       return { valid: true };
     }
 
-    const reason = evaluated.reason;
+    logCompanyCredentialValidation({
+      companyName: trimmedName,
+      validationPath: safePath,
+      validationStatus: response.status,
+      validationSucceeded: false,
+      failureReason: evaluated.reason,
+    });
+
     return {
       valid: false,
-      reason,
-      message: buildFailedCompanyConnection(trimmedName, reason).message,
+      reason: evaluated.reason,
+      message: buildFailedCompanyConnection(trimmedName, evaluated.reason).message,
     };
   } catch {
+    logCompanyCredentialValidation({
+      companyName: trimmedName,
+      validationPath: safePath,
+      validationStatus: 0,
+      validationSucceeded: false,
+      failureReason: "validation_failed",
+    });
+
     return {
       valid: false,
       reason: "validation_failed",
