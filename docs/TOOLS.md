@@ -15,7 +15,16 @@ src/
 ├── server.ts                      MCP server factory and stdio singleton
 ├── register_all_tools.ts          Central tool registration + write-confirmation wrapping
 ├── shared.ts                      BRC HTTP client, session-scoped connections, audit log, helpers
-├── auth/                          Secure connection flow and connection store
+├── read_connection_metadata.ts    Connection status metadata on tool responses (activeConnectionRef, presentation hints)
+├── auth/
+│   ├── connection_page.ts         Secure /connect page (form + CSV upload)
+│   ├── connection_store.ts        Pending codes, session binding, connectionRef issuance
+│   ├── connection_persistence.ts  Validate-and-persist on connect; hydrate session key store
+│   ├── credential_validation.ts   BRC read validation before storing API keys
+│   ├── connection_presentation.ts User-facing TTL wording; assistant presentation rules
+│   ├── connection_wording.ts      Shared connection-flow tool descriptions
+│   ├── memory_connection_store.ts In-process connection store
+│   └── cosmos_connection_store.ts Optional shared Cosmos DB connection store
 ├── config/
 │   ├── server_config.ts           Deployment skill gating (BRC_ALLOW_* flags)
 │   └── mcp_config.ts              MCP server instructions and connection-safety rules
@@ -46,11 +55,15 @@ src/
 - **`src/server.ts`** — `createBrcMcpServer()` factory holding shared server metadata (name, version, instructions).
 - **`src/register_all_tools.ts`** — The single registration list used by both entry points. It wraps `server.tool(...)` so that:
   - disabled skill groups register a permission-message blocker instead of the real tool, and
-  - write tools receive draft/confirmation handling and the appropriate confirmation schema fields.
+  - write tools receive preview-before-posting/confirmation handling and the appropriate confirmation schema fields.
 - **`src/shared.ts`** — The Big Red Cloud HTTP client (`brcFetch`, JSON request helpers), session-scoped connection storage, the session audit log, list/response helpers, and user-facing status wording.
 - **`src/config/server_config.ts`** — Classifies each tool into a skill group and decides whether it is enabled, based on the `BRC_ALLOW_*` flags.
-- **`src/config/mcp_config.ts`** — Server instructions and connection-safety rules surfaced to MCP clients.
-- **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory and an optional persistent backend), connection codes, and credential handling. Connection credentials are never returned to clients.
+- **`src/config/mcp_config.ts`** — Server instructions, connection-safety rules, and rules that keep `connectionRef` out of normal user-facing chat.
+- **`src/read_connection_metadata.ts`** — Adds `connectionStatus`, `activeConnectionRef`, `assistantInstruction`, and `presentationHint` to enriched tool responses in hosted HTTP mode.
+- **`src/auth/connection_presentation.ts`** — `formatCredentialTtlForUser()`, confirm/list customer messages, and `shouldShowDeveloperConnectionDetails()` (respects `BRC_ALLOW_DEV_MODE`).
+- **`src/auth/credential_validation.ts`** — Validates each API key with the same class of BRC read access as live tools (`GET /v1/customers?page=1&pageSize=1`, plus financial year). Failed keys are not stored.
+- **`src/auth/connection_persistence.ts`** — `validateAndPersistConnectedCompanies()` used by `POST /connect`; clears stale per-company entries before re-validating on CSV resubmit.
+- **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory or Cosmos), connection codes, connectionRef, and credential handling. API keys are never returned to clients.
 
 ---
 
@@ -67,32 +80,64 @@ index.ts / remote.ts
 Registration details:
 
 - **Skill gating.** `registerAllTools` consults `isToolEnabled(toolName)`. If the tool's skill group is disabled by a deployment flag, a blocker is registered that returns a permission message instead of calling Big Red Cloud.
-- **Write confirmation.** For write tools (update/delete/email/batch and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a draft/preview response. The underlying handler runs only after explicit confirmation.
+- **Write confirmation.** For write tools (update/delete/email/batch and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a preview-before-posting response. The underlying handler runs only after explicit confirmation.
 - **Generic helpers.** Most list/get/create/update/delete/batch tools are produced by helpers in `src/tools/general/` (`registerListTool`, `registerGetTool`, `registerSubresourceGetTool`, `registerRawCreateTool`, `registerRawUpdateTool`, `registerRawDeleteTool`, `registerRawBatchTool`). Payload normalisation lives in `payloads_tools.ts`.
 
 ---
 
-## 4. Safety and guard modules
+## 4. Secure company connection flow
 
-Guards live in `src/guards/` and run before drafts and before posting.
+End-to-end path for hosted HTTP (`src/remote.ts`) and confirm (`brc_confirm_company_connection`):
 
-- **`write_confirmation.ts`** — Draft-before-write flow; counterparty confirmation; placeholder product ID preflight; Sales VAT category preflight; single "Missing or not provided" presentation for missing contact details.
+```text
+brc_start_company_connection
+  → pending connection code + /connect?code=… link
+POST /connect (form or CSV)
+  → validateAndPersistConnectedCompanies()
+       → credential_validation (BRC customers + financial year)
+       → save valid companies with credentialValidatedAt
+       → record failedCompanies for invalid keys
+brc_confirm_company_connection(code)
+  → claimConnectionCodeForSession()
+       → re-validate only legacy unvalidated store entries
+       → issue connectionRef (TTL = BRC_API_KEY_TTL_MINUTES)
+  → JSON: connectionRef, connectedCompanies, failedCompanies, customerMessage
+Later tool calls (hosted HTTP)
+  → optional connectionRef argument on credential-requiring tools
+  → enrichToolResponseData() echoes activeConnectionRef + presentation hints
+Runtime auth failure (401/403 on a company)
+  → invalidateCompanyCredential(); company_credential_invalid response
+```
+
+**CSV and partial success.** Each row is validated independently. A bad key for Company A does not prevent Companies B/C/D from connecting. Stale store entries for a resubmitted company name are cleared before validation.
+
+**Presentation.** `customerMessage` and MCP instructions tell assistants to use plain language for users. `connectionRef`, `redconn_…`, and session diagnostics stay in structured tool output for MCP clients only.
+
+**Session duration.** `BRC_API_KEY_TTL_MINUTES` controls credential expiry and user-facing duration text via `connection_presentation.ts` (for example `240` → “about 4 hours”).
+
+---
+
+## 5. Safety and guard modules
+
+Guards live in `src/guards/` and run before preview-before-posting and before posting.
+
+- **`write_confirmation.ts`** — Preview-before-posting flow; counterparty confirmation; placeholder product ID preflight; Sales VAT category preflight; single "Missing or not provided" presentation for missing contact details.
 - **`company_processing_settings.ts`** — Reads company processing settings and enforces VAT-sensitive workflow rules, including Gross Price Entry `priceBasis` handling, margin VAT scheme blocking, VAT discrepancy tolerance wording, reverse-charge guidance, and cash receipt VAT (VOCR) handling.
 - **`company_reference_settings.ts`** — Enforces safe reference handling (manual vs auto-generated references) per workflow.
 - **`sales_vat_category.ts`** — Maps each VAT rate to its VAT category and blocks sales invoice lines that use a purchase/non-Sales VAT rate (even when the percentage matches).
-- **`document_draft_details.ts`** — Builds the draft contact details and the single missing-details section for quotes and sales invoices.
+- **`document_draft_details.ts`** — Builds the preview contact details and the single missing-details section for quotes and sales invoices.
 
 Sales invoice safeguards (summary):
 
 - Gross Price Entry requires an explicit `priceBasis` of `gross` or `net`.
 - Sales invoices must use a Sales VAT category; purchase VAT rates are blocked.
-- `productId` `0` and `1` are treated as placeholders and blocked before draft and post.
+- `productId` `0` and `1` are treated as placeholders and blocked before preview-before-posting and post.
 - `note` defaults to the customer name unless explicitly provided, and is never a product name.
 - `deliveryTo` is included only when explicitly provided.
 
 ---
 
-## 5. MCP tool coverage by domain
+## 6. MCP tool coverage by domain
 
 Endpoint paths are relative to the configured Big Red Cloud API base URL. Write tools require explicit confirmation; delete tools require a delete confirmation and a record timestamp.
 
@@ -101,11 +146,13 @@ Endpoint paths are relative to the configured Big Red Cloud API base URL. Write 
 | MCP tool | Purpose |
 | -------- | ------- |
 | `brc_start_company_connection` | Start the secure connection flow; returns a connection page link |
-| `brc_confirm_company_connection` | Confirm a completed connection using the code from the success page |
-| `brc_get_company_api_key_status` | Report whether a company is connected (never returns the key) |
-| `brc_list_company_contexts` | List companies connected in the session |
+| `brc_confirm_company_connection` | Confirm a completed connection; returns `connectedCompanies`, `failedCompanies`, and `connectionRef` (for MCP clients) |
+| `brc_get_company_api_key_status` | Report whether a company is connected and when it expires (never returns the key) |
+| `brc_list_company_contexts` | List companies connected in the session (`customerMessage` + `presentationHint`) |
 | `brc_clear_company_api_key` | Clear one company connection |
 | `brc_clear_all_company_api_keys` | Clear all company connections |
+
+Credential-requiring tools accept an optional `connectionRef` argument (hosted HTTP). See `src/auth/connection_ref.ts` and `register_all_tools.ts`.
 
 ### Company setup and readiness
 
@@ -315,7 +362,7 @@ Read-only API calls are not logged.
 
 ---
 
-## 6. Notes on generated-reference tools
+## 7. Notes on generated-reference tools
 
 Several create tools have a `*_gen_ref` variant that posts to a Big Red Cloud endpoint which generates the document reference, rather than requiring a caller-supplied reference:
 
@@ -331,7 +378,7 @@ Considerations:
 
 ---
 
-## 7. Under-development and deployment-gated tools
+## 8. Under-development and deployment-gated tools
 
 - **Bank account writes.** Read-only `brc_list_bank_accounts` and `brc_get_bank_account` are available for payment workflows. Bank create/update/delete may require additional tenant configuration and can be gated by deployment flags.
 - **Email sending.** `brc_send_sales_invoice_email`, `brc_send_email_statement`, and `brc_send_quote_email` (endpoints under `/v1/email/...`) require a send confirmation and depend on tenant email configuration; they may be disabled by deployment flags.
@@ -341,7 +388,7 @@ Skill groups (read, update, delete, email, batch, dev) are toggled by the `BRC_A
 
 ---
 
-## 8. Where to find tests
+## 9. Where to find tests
 
 Tests use the Node.js built-in test runner and live alongside the source as `*.test.ts` files (compiled to `build/` before running).
 
@@ -351,4 +398,4 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:config` — deployment/config tests.
 - `npm run test:integration` — integration tests.
 
-Representative coverage includes the sales invoice safeguards (Gross Price Entry `priceBasis`, Sales VAT category validation, placeholder product ID blocking, note/delivery handling), transaction date validation, transaction settings warnings, the secure connection flow, and response wording.
+Representative coverage includes the sales invoice safeguards (Gross Price Entry `priceBasis`, Sales VAT category validation, placeholder product ID blocking, note/delivery handling), transaction date validation, transaction settings warnings, the secure connection flow (CSV validation, partial confirm, runtime credential invalidation), connectionRef presentation rules, TTL wording from `BRC_API_KEY_TTL_MINUTES`, and response wording.

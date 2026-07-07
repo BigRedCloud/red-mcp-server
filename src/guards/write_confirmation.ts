@@ -107,21 +107,21 @@ export const confirmWriteSchema = z
   .boolean()
   .optional()
   .describe(
-    "Must be true only after a plain-English draft has been shown in the current conversation and the user explicitly confirmed posting (for example yes, create it / post it now / confirm). Never set true on the first call or because the user initially asked to create something."
+    "Must be true only after a plain-English preview before posting has been shown in the current conversation and the user explicitly confirmed posting (for example yes, create it / post it now / confirm). Never set true on the first call or because the user initially asked to create something. Nothing is written to Big Red Cloud until you confirm."
   );
 
 export const confirmCounterpartyExplicitSchema = z
   .boolean()
   .optional()
   .describe(
-    "Must be true only after the user explicitly named or confirmed the customer, supplier, or other counterparty in the current conversation. Never set true because a customer or supplier appeared in an earlier draft, was inferred from context, or was filled in without the user's explicit choice in this conversation."
+    "Must be true only after the user explicitly named or confirmed the customer, supplier, or other counterparty in the current conversation. Never set true because a customer or supplier appeared in an earlier preview, was inferred from context, or was filled in without the user's explicit choice in this conversation."
   );
 
 export const WRITE_CONFIRMATION_TOOL_SUFFIX =
-  " First call without confirmWrite: true returns confirmation_required and a payload preview — show a plain-English draft in chat, then retry with confirmWrite: true only after explicit user confirmation in a later message. Passing preflight is not confirmation.";
+  " First call without confirmWrite: true returns confirmation_required and a payload preview — show a plain-English preview before posting in chat, then retry with confirmWrite: true only after explicit user confirmation in a later message. Red shows what it will post and waits for confirmation. Passing preflight is not confirmation.";
 
 export const COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX =
-  " Also requires confirmCounterpartyExplicit: true once the user has explicitly named or confirmed the customer/supplier in the current conversation. Do not reuse a counterparty from an earlier draft without that confirmation.";
+  " Also requires confirmCounterpartyExplicit: true once the user has explicitly named or confirmed the customer/supplier in the current conversation. Do not reuse a counterparty from an earlier preview without that confirmation.";
 
 export const WRITE_DRAFT_FIELDS_COMMON = [
   "company",
@@ -410,10 +410,10 @@ async function validateCounterpartyForWrite(args: {
     return jsonResponse({
       status: "counterparty_missing",
       message: [
-        `Red stopped before preparing this draft because the required ${label} is missing.`,
+        `Red stopped before showing a preview because the required ${label} is missing.`,
         "",
         `Ask the user which ${label} to use before calling this tool again.`,
-        "You may suggest a customer or supplier from an earlier draft as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
+        "You may suggest a customer or supplier from an earlier preview as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
         "",
         "Do not call this tool again, and do not pass confirmWrite: true, until the user has explicitly provided or confirmed the counterparty.",
       ].join("\n"),
@@ -449,9 +449,9 @@ async function validateCounterpartyForWrite(args: {
     await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
       status: "counterparty_confirmation_required",
       message: [
-        `Red stopped because the ${label} must be explicitly confirmed in the current conversation before preparing a postable draft.`,
+        `Red stopped because the ${label} must be explicitly confirmed in the current conversation before showing a validated preview for posting.`,
         "",
-        "Do not silently carry over a customer or supplier from an earlier draft.",
+        "Do not silently carry over a customer or supplier from an earlier preview.",
         "Do not pass confirmWrite: true until the counterparty has been explicitly confirmed.",
         ...(isBatch && batchHints.length > 1
           ? [
@@ -502,18 +502,18 @@ function buildCounterpartyQuestion(
   hint: string | undefined
 ): string {
   if (isBatch && batchHints.length > 1) {
-    return `Please confirm all ${label}s for this batch before I prepare the final draft: ${batchHints.join(", ")}. Should I prepare drafts for all of these ${label}s?`;
+    return `Please confirm all ${label}s for this batch before I show the final preview for posting: ${batchHints.join(", ")}. Should I show a preview for all of these ${label}s?`;
   }
 
   if (label === "customer") {
     return hint
-      ? `Please confirm the customer for this invoice before I prepare the final draft. Did you want to use ${hint}, or choose another customer?`
-      : "Please confirm the customer for this invoice before I prepare the final draft.";
+      ? `Please confirm the customer for this invoice before I show the preview for posting. Did you want to use ${hint}, or choose another customer?`
+      : "Please confirm the customer for this invoice before I show the preview for posting.";
   }
 
   return hint
-    ? `I need the ${label} before I can prepare this draft for posting. Did you want to use ${hint} from the previous draft, or choose another ${label}?`
-    : `I need the ${label} before I can prepare this draft for posting. Which ${label} should be used?`;
+    ? `I need the ${label} before I can show a preview for posting. Did you want to use ${hint} from the previous preview, or choose another ${label}?`
+    : `I need the ${label} before I can show a preview for posting. Which ${label} should be used?`;
 }
 
 function writeActionLabel(toolName: string): string {
@@ -711,19 +711,20 @@ export async function requireWriteConfirmation(args: {
       message: [
         `Red stopped before ${action} because explicit user confirmation is required.`,
         "",
-        "This is a draft/preview step only. Nothing has been posted to Big Red Cloud.",
+        "This is a preview-before-posting step only. Nothing has been written to Big Red Cloud.",
         "",
-        "Show the user a clear plain-English draft in chat before posting. Include:",
+        "Show the user a clear plain-English preview in chat before posting. Include:",
         ...draftFields.map((field) => `- ${field}`),
         "",
-        "Treat requests such as \"create a sales invoice...\" as permission to prepare a draft, not to post.",
+        "Treat requests such as \"create a sales invoice...\" as permission to review before posting, not to post.",
+        "Red shows what it will post and waits for confirmation.",
         "Passing preflight checks is not confirmation.",
         "",
-        "The customer or supplier must be explicitly named or confirmed in the current conversation before any postable draft. Do not reuse a counterparty from an earlier draft without that confirmation.",
+        "The customer or supplier must be explicitly named or confirmed in the current conversation before any validated preview for posting. Do not reuse a counterparty from an earlier preview without that confirmation.",
         "",
         "Red must not invent missing customer phone or customer email values.",
         "",
-        "Only call this tool again with confirmWrite: true after the draft has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
+        "Only call this tool again with confirmWrite: true after the preview has been shown in the current conversation and the user explicitly confirms, for example: \"yes, create it\", \"post it now\", \"confirm\", or an equivalent clear yes.",
         "When confirmWrite: true is used, confirmCounterpartyExplicit: true must also be true if this tool requires a customer or supplier.",
         "Do not pass confirmWrite: true in the same turn as the initial create request.",
       ].join("\n"),

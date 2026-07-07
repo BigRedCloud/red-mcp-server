@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ServerType } from "../../server.js";
 import { brcFetch, companyNameSchema, jsonResponse } from "../../shared.js";
+import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "./payloads_tools.js";
 
 function buildListQuery(args: {
   page?: number;
@@ -196,11 +197,11 @@ export function registerTools(server: ServerType) {
   registerListTool(server, "brc_list_book_tran_types", "Lists BRC book transaction types.", "/v1/bookTranTypes");
 
   // Nominal Accounts
-  registerListTool(server, "brc_list_nominal_accounts", "Lists BRC nominal accounts.", "/v1/nominalAccounts");
+  registerListTool(server, "brc_list_nominal_accounts", `Lists BRC nominal accounts. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`, "/v1/nominalAccounts");
   registerGetTool(
     server,
     "brc_get_nominal_account_ledger_by_id",
-    "Gets one BRC nominal account by id.",
+    `Gets one BRC nominal account by id. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`,
     "/v1/nominalAccounts",
     "Nominal account"
   );

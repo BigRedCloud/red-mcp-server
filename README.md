@@ -7,7 +7,7 @@ Instead of calling the Big Red Cloud REST API directly, users work in plain lang
 With Red, a connected user can:
 
 - **Review** Big Red Cloud data with read-only lookups (customers, suppliers, products, invoices, quotes, nominal reports, and more).
-- **Prepare drafts** of new records and see a plain-English preview before anything is sent.
+- **Review before posting** — see a plain-English preview of new records before anything is written to Big Red Cloud.
 - **Create, update, or delete** records only after explicit confirmation.
 
 ---
@@ -25,10 +25,13 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 ## Features
 
 - Secure company connection flow (session-scoped, no credentials in chat)
+- Pre-confirm API key validation on the connection page (form and CSV upload)
+- Partial connection results — invalid keys are rejected before confirm and reported in `failedCompanies`
+- Hosted HTTP `connectionRef` for MCP clients that rotate session IDs (for example Vibe/Mistral); kept in tool JSON, not shown to end users
 - Read-only Big Red Cloud lookups
 - Customer, supplier, product, sales rep, VAT, and analysis category tools
 - Sales quotes, invoices, credit notes, purchases, payments, and cash tools
-- Draft-before-write confirmation flow for create, update, delete, batch, and email actions
+- Preview-before-posting confirmation flow for create, update, delete, batch, and email actions
 - VAT and transaction safety checks
 - Sales invoice safeguards, including Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
 - Session audit log of writes made through the MCP session
@@ -42,9 +45,12 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 
 - **No credentials in the repository.** API keys and secrets are never committed. Configuration is supplied at runtime through environment variables.
 - **No credentials in chat.** Customer credentials and API keys must not be pasted into chat. Companies are connected through the secure Red connection page instead.
-- **Session-scoped connections.** A connected company is available only within the current MCP session and is held in session memory, not persisted to disk in normal operation.
-- **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a draft has been shown.
-- **Draft previews before changes.** The first call to a write tool returns a draft/preview rather than performing the action.
+- **Session-scoped connections.** A connected company is available only within the current MCP session and is held in session memory (or an optional shared connection store in hosted deployments), not persisted to disk in normal operation.
+- **Pre-confirm validation.** API keys submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired keys are not saved; they appear in `failedCompanies` at confirmation time.
+- **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless dev mode is enabled or the user explicitly asks for technical details.
+- **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, API key status) is derived from that value — not hardcoded.
+- **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a preview before posting has been shown.
+- **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
 - **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only calls are not logged.
 - **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment, in which case the matching tools return a permission message instead of calling Big Red Cloud.
@@ -55,7 +61,7 @@ Recent work hardened sales invoice handling:
 
 - **Gross Price Entry** requires an explicit `priceBasis` of `gross` or `net` so VAT is never guessed.
 - **Sales VAT rates only.** Sales invoices must use a Sales VAT category; purchase VAT rates are blocked, even when the percentage matches.
-- **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before a draft or post.
+- **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before preview-before-posting and post.
 - **`note`** defaults to the customer name unless a note is explicitly provided, and is never set to a product name.
 - **`deliveryTo`** is included only when a delivery address is explicitly provided.
 - **Plain-language results.** Technical HTTP status codes are translated into plain-language messages for users.
@@ -74,12 +80,15 @@ Two entry points share one tool registry:
 Key shared modules:
 
 - `src/server.ts` — MCP server factory and stdio singleton
-- `src/register_all_tools.ts` — central tool registration; wraps the server so disabled skills register a permission-message blocker instead of the real tool, and so write tools get draft/confirmation handling
+- `src/register_all_tools.ts` — central tool registration; wraps the server so disabled skills register a permission-message blocker instead of the real tool, and so write tools get preview-before-posting/confirmation handling
 - `src/config/server_config.ts` — deployment skill gating driven by the `BRC_ALLOW_*` flags
-- `src/config/mcp_config.ts` — MCP server instructions and connection-safety rules
+- `src/config/mcp_config.ts` — MCP server instructions, connection-safety rules, and connectionRef presentation rules
 - `src/shared.ts` — Big Red Cloud HTTP client, session-scoped connections, audit log, and helpers
+- `src/read_connection_metadata.ts` — connection status metadata echoed on tool responses (including `activeConnectionRef` for hosted clients)
+- `src/auth/connection_presentation.ts` — user-facing TTL wording and assistant presentation hints
+- `src/auth/credential_validation.ts` — BRC read validation before storing company API keys
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
-- `src/auth/` — secure connection flow and connection store
+- `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -179,7 +188,7 @@ Hosted HTTP:
 | Integration tests | `npm run test:integration` | Integration tests |
 | Production audit | `npm run audit:prod` | `npm audit` for production dependencies |
 
-Tests cover the safety guards described above, including the sales invoice checks, transaction date validation, connection flow wording, and response wording.
+Tests cover the safety guards described above, including sales invoice checks, transaction date validation, the secure connection flow (CSV validation, partial confirm, credential invalidation), connectionRef presentation rules, TTL wording, and response wording.
 
 ---
 
@@ -194,17 +203,32 @@ BRC_API_BASE_URL=https://app.bigredcloud.com/api
 # HTTP port for hosted mode
 PORT=3000
 
-# MCP session lifetime (minutes)
-BRC_MCP_SESSION_TTL_MINUTES=60
+# Public URL for the secure /connect page (required for hosted deployments)
+BRC_PUBLIC_BASE_URL=https://your-mcp-host.example.com
 
-# Connection lifetime within an MCP session (minutes)
-BRC_API_KEY_TTL_MINUTES=60
+# MCP session binding lifetime (minutes)
+BRC_MCP_SESSION_TTL_MINUTES=120
+
+# How long stored company credentials stay valid (minutes).
+# Drives credential expiry and user-facing duration wording (e.g. 240 → "about 4 hours").
+BRC_API_KEY_TTL_MINUTES=120
 
 # Rate limiting (requests per minute per IP)
 BRC_RATE_LIMIT_REQUESTS_PER_MINUTE=300
 
 # SHA-256 hashes of blocked API keys, comma separated (hashes only, never raw keys)
 BRC_API_KEY_BLACKLIST_SHA256=
+
+# Hosted connection persistence (optional)
+# memory = in-process (local/Cursor); cosmos = shared store for multi-instance HTTP
+RED_CONNECT_CONNECTION_STORE=memory
+RED_CONNECT_COSMOS_CONNECTION_STRING=
+RED_CONNECT_COSMOS_DATABASE=red-connect
+RED_CONNECT_COSMOS_CONTAINER=connections
+RED_CONNECT_ENCRYPTION_KEY=
+
+# Set automatically when running the HTTP server (remote.ts)
+RED_CONNECT_HTTP_MODE=true
 ```
 
 Deployment skill flags control which categories of tools are active. When a flag is off, the matching tools return a permission message instead of calling Big Red Cloud:
@@ -230,10 +254,16 @@ Customers should connect companies through the **secure Red connection page**. C
 The flow is:
 
 1. Ask the assistant to start a company connection. It returns a secure connection page link.
-2. On that page, enter a single company (or upload a CSV for several companies). Credentials are entered on the secure page, not in chat.
-3. Return to the chat and provide the confirmation code shown on the success page.
+2. On that page, enter a single company **or upload a CSV** for several companies at once. Credentials are entered on the secure page, not in chat.
+3. The server validates each API key against Big Red Cloud **before storing it**. Keys that fail validation are not saved.
+4. Return to the chat and provide the **confirmation code** shown on the success page.
+5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid keys appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
 
-Connection links are **one-time use**, and a connection is **scoped to the MCP session**. To connect more companies later, start a new connection.
+Connection links are **one-time use**. Connected companies stay available for the configured session duration (`BRC_API_KEY_TTL_MINUTES`, for example 240 minutes → about four hours), unless you start a new chat or reconnect.
+
+### Hosted HTTP and `connectionRef`
+
+In hosted HTTP mode (for example Vibe/Mistral), `brc_confirm_company_connection` returns an opaque `connectionRef` in the tool JSON so the MCP client can pass it on later tool calls when the platform rotates session IDs. This is an implementation detail for the client — **assistants should not show `connectionRef` or `redconn_…` values to end users**. Tool responses include `assistantInstruction` / `presentationHint` fields to reinforce that rule.
 
 Helper tools:
 

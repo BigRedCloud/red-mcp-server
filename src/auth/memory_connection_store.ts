@@ -4,6 +4,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -29,6 +30,11 @@ const clientLastClaims = new Map<
   string,
   { connectionId: string; claimedAt: number }
 >();
+const connectionRefs = new Map<
+  string,
+  { connectionId: string; expiresAt: number }
+>();
+const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -168,6 +174,31 @@ export class MemoryConnectionStore implements ConnectionStore {
     return entry.connectionId;
   }
 
+  async createConnectionRef(args: {
+    ref: string;
+    connectionId: string;
+    expiresAt: number;
+  }): Promise<void> {
+    connectionRefs.set(args.ref.trim(), {
+      connectionId: args.connectionId,
+      expiresAt: args.expiresAt,
+    });
+  }
+
+  async getConnectionIdForRef(ref: string): Promise<string | null> {
+    const entry = connectionRefs.get(ref.trim());
+    if (!entry) {
+      return null;
+    }
+
+    if (entry.expiresAt < Date.now()) {
+      connectionRefs.delete(ref.trim());
+      return null;
+    }
+
+    return entry.connectionId;
+  }
+
   async saveConnectedCompanies(
     connectionId: string,
     companies: CompanyCredentialInput[]
@@ -187,6 +218,8 @@ export class MemoryConnectionStore implements ConnectionStore {
         expiresAt: company.expiresAt,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
+        credentialValidatedAt:
+          company.credentialValidatedAt ?? existing?.credentialValidatedAt,
       });
     }
   }
@@ -231,6 +264,28 @@ export class MemoryConnectionStore implements ConnectionStore {
     const count = map.size;
     companiesByConnection.delete(connectionId);
     return count;
+  }
+
+  async saveFailedCompanyValidations(
+    connectionId: string,
+    failures: FailedCompanyConnection[]
+  ): Promise<void> {
+    failedValidationsByConnection.set(
+      connectionId,
+      failures.map((failure) => ({ ...failure }))
+    );
+  }
+
+  async listFailedCompanyValidations(
+    connectionId: string
+  ): Promise<FailedCompanyConnection[]> {
+    return (failedValidationsByConnection.get(connectionId) ?? []).map(
+      (failure) => ({ ...failure })
+    );
+  }
+
+  async clearFailedCompanyValidations(connectionId: string): Promise<void> {
+    failedValidationsByConnection.delete(connectionId);
   }
 
   async getDiagnostics(args: {

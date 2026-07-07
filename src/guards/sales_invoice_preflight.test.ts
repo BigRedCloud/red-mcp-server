@@ -33,7 +33,7 @@ after(() => setSalesVatCategoryContextLoaderForTests());
 
 /**
  * These tests prove the placeholder productId guard runs in the write wrapper
- * BEFORE the draft/confirmation step and before the underlying handler, so a
+ * BEFORE the preview/confirmation step and before the underlying handler, so a
  * placeholder productId can never reach payloadPreview or BRC.
  */
 
@@ -102,7 +102,7 @@ test("a valid productId passes the preflight without throwing and without postin
 
 const PURCHASE_VAT_MESSAGE = /belongs to a purchase VAT category[\s\S]*Sales VAT rate/;
 
-test("1. brc_create_sales_invoice blocks a wrong VAT category before draft preview", async () => {
+test("1. brc_create_sales_invoice blocks a wrong VAT category before preview-before-posting", async () => {
   let handlerCalled = false;
   const wrapped = wrapWriteToolHandler("brc_create_sales_invoice", async () => {
     handlerCalled = true;
@@ -125,7 +125,7 @@ test("1. brc_create_sales_invoice blocks a wrong VAT category before draft previ
   assert.equal(handlerCalled, false);
 });
 
-test("2. brc_create_sales_invoice_gen_ref blocks a wrong VAT category before draft preview", async () => {
+test("2. brc_create_sales_invoice_gen_ref blocks a wrong VAT category before preview-before-posting", async () => {
   let handlerCalled = false;
   const wrapped = wrapWriteToolHandler("brc_create_sales_invoice_gen_ref", async () => {
     handlerCalled = true;

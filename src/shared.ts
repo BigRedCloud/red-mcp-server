@@ -8,6 +8,23 @@ import {
   hydrateSessionKeyStoreFromConnectionStore,
   persistCompanyCredentialToConnectionStore,
 } from "./auth/connection_persistence.js";
+import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
+import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import {
+  CompanyNotConnectedError,
+  buildCompanyCredentialInvalidResponse,
+  buildCompanyNotConnectedResponse,
+} from "./auth/company_connection_errors.js";
+import {
+  evaluateBrcCredentialResponse,
+  isBrcCredentialHttpFailure,
+  responseBodyIndicatesInvalidCredential,
+} from "./auth/credential_validation.js";
+import {
+  enrichReadResponseBody,
+  enrichWriteResponseBody,
+  isListPayload,
+} from "./read_connection_metadata.js";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
@@ -60,6 +77,7 @@ export const BRC_API_BASE_URL = (
 const sessionKeyStorage = new AsyncLocalStorage<Map<string, CompanyApiContext>>();
 const httpRequestSessionIdStorage = new AsyncLocalStorage<string>();
 const httpClientKeyStorage = new AsyncLocalStorage<string>();
+const activeConnectionRefStorage = new AsyncLocalStorage<string>();
 const globalContexts = new Map<string, CompanyApiContext>();
 const httpSessionKeyStores = new Map<string, Map<string, CompanyApiContext>>();
 
@@ -88,6 +106,84 @@ export function runWithHttpRequestSessionId<T>(
 
 export function enterHttpRequestSessionId(sessionId: string): void {
   httpRequestSessionIdStorage.enterWith(sessionId);
+}
+
+export function runWithHttpClientKey<T>(clientKey: string, fn: () => T): T {
+  return httpClientKeyStorage.run(clientKey, fn);
+}
+
+export function runWithActiveConnectionRef<T>(
+  connectionRef: string | undefined,
+  fn: () => T
+): T {
+  if (!connectionRef?.trim()) {
+    return fn();
+  }
+
+  return activeConnectionRefStorage.run(connectionRef.trim(), fn);
+}
+
+export function getActiveConnectionRef(): string | undefined {
+  return activeConnectionRefStorage.getStore();
+}
+
+function isHttpMcpMode(): boolean {
+  return process.env.RED_CONNECT_HTTP_MODE === "true";
+}
+
+function buildConnectionMetadataOptions(companyName?: string): {
+  companyName?: string;
+  connectionRefUsed: boolean;
+  activeConnectionRef?: string;
+} {
+  const activeRef = getActiveConnectionRef()?.trim();
+  return {
+    ...(companyName ? { companyName } : {}),
+    connectionRefUsed: Boolean(activeRef),
+    ...(activeRef ? { activeConnectionRef: activeRef } : {}),
+  };
+}
+
+function extractCompanyNameFromResponseData(data: unknown): string | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return undefined;
+  }
+
+  const companyName = (data as Record<string, unknown>).companyName;
+  return typeof companyName === "string" ? companyName : undefined;
+}
+
+export function enrichToolResponseData(
+  data: unknown,
+  options?: { companyName?: string }
+): unknown {
+  const companyName = options?.companyName ?? extractCompanyNameFromResponseData(data);
+  const metadataOptions = buildConnectionMetadataOptions(companyName);
+
+  if (!metadataOptions.connectionRefUsed) {
+    if (
+      data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      ("connectionStatus" in (data as Record<string, unknown>) ||
+        isListPayload(data))
+    ) {
+      return enrichReadResponseBody(data, metadataOptions);
+    }
+
+    return data;
+  }
+
+  if (
+    data &&
+    typeof data === "object" &&
+    !Array.isArray(data) &&
+    isListPayload(data)
+  ) {
+    return enrichReadResponseBody(data, metadataOptions);
+  }
+
+  return enrichWriteResponseBody(data, metadataOptions);
 }
 
 export function enterHttpClientKey(clientKey: string): void {
@@ -182,6 +278,14 @@ export function getCompanyApiContexts(): Map<string, CompanyApiContext> {
   const fromAsyncLocal = sessionKeyStorage.getStore();
   if (fromAsyncLocal) {
     return fromAsyncLocal;
+  }
+
+  if (process.env.RED_CONNECT_HTTP_MODE) {
+    logCredentialDebug({
+      step: "getCompanyApiContexts",
+      reason: "http_mode_no_session_scope",
+    });
+    return new Map();
   }
 
   return globalContexts;
@@ -348,6 +452,7 @@ export async function ensureCredentialsForCurrentSession(
   const connectionId = await resolveConnectionIdForActiveSession({
     sessionId,
     clientKey: resolveHttpClientKey(),
+    connectionRef: getActiveConnectionRef(),
   });
 
   if (!connectionId) {
@@ -356,7 +461,11 @@ export async function ensureCredentialsForCurrentSession(
       sessionId,
       connectionId: null,
       clientKeyPresent: Boolean(resolveHttpClientKey()),
-      reason: "no_bound_connection",
+      connectionRefPresent: Boolean(getActiveConnectionRef()),
+      connectionRefPrefix: getActiveConnectionRef()?.slice(0, 16),
+      reason: getActiveConnectionRef()
+        ? "invalid_or_expired_connection_ref"
+        : "no_bound_connection",
     });
     return;
   }
@@ -445,6 +554,13 @@ async function clearPersistedCompanyCredential(companyName: string): Promise<voi
   await clearCompanyFromConnectionStore(connectionId, companyName);
 }
 
+export async function invalidateCompanyCredential(
+  companyName: string
+): Promise<void> {
+  clearCredentialForCompany(companyName);
+  await clearPersistedCompanyCredential(companyName);
+}
+
 async function clearAllPersistedCompanyCredentials(): Promise<void> {
   const connectionId = getCurrentConnectionId();
   if (!connectionId) return;
@@ -464,6 +580,7 @@ export async function ensureMcpSessionReady(
     (await resolveConnectionIdForActiveSession({
       sessionId,
       clientKey: resolveHttpClientKey(),
+      connectionRef: getActiveConnectionRef(),
     })) ?? "";
 
   await ensureCredentialsForCurrentSession();
@@ -484,6 +601,12 @@ export async function getCredentialForCompanyAsync(
   companyName: string
 ): Promise<BrcCredential> {
   await ensureCredentialsForCurrentSession(companyName);
+
+  const credential = companyCredentialProvider.getCredential(companyName);
+  if (!credential && getActiveConnectionRef()) {
+    throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+  }
+
   return getCredentialForCompany(companyName);
 }
 
@@ -491,11 +614,26 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
   const credential = companyCredentialProvider.getCredential(companyName);
 
   if (!credential) {
+    const connectedNames = listConnectedCompanyNames();
+    if (connectedNames.length > 0) {
+      throw new CompanyNotConnectedError(companyName);
+    }
+
+    if (isHttpMcpMode() && !getActiveConnectionRef()) {
+      throw new Error(
+        [
+          `No company connection is currently stored for "${companyName}".`,
+          "",
+          CONNECTION_REF_NOT_PASSED_MESSAGE,
+        ].join("\n")
+      );
+    }
+
     throw new Error(
       [
         `No company connection is currently stored for "${companyName}".`,
         "",
-        "To continue, ask the user to connect the company using the secure Red connection page.",
+        FRESH_CONNECTION_ASSISTANT_GUIDANCE,
       ].join("\n")
     );
   }
@@ -505,7 +643,7 @@ export function getCredentialForCompany(companyName: string): BrcCredential {
       [
         `The connection for "${companyName}" has expired.`,
         "",
-        "To continue, ask the user to reconnect the company using the secure Red connection page. Do not ask the user to paste an API key into chat.",
+        FRESH_CONNECTION_ASSISTANT_GUIDANCE,
       ].join("\n")
     );
   }
@@ -603,8 +741,8 @@ export function textResponse(text: string) {
   };
 }
 
-export function jsonResponse(data: unknown) {
-  return textResponse(JSON.stringify(data, null, 2));
+export function jsonResponse(data: unknown, options?: { companyName?: string }) {
+  return textResponse(JSON.stringify(enrichToolResponseData(data, options), null, 2));
 }
 
 /**
@@ -755,6 +893,14 @@ export function auditEntryMatchesScope(
   entry: RedAuditEntry,
   scope: AuditScope
 ): boolean {
+  if (
+    scope.connectionId &&
+    entry.connectionId &&
+    entry.connectionId === scope.connectionId
+  ) {
+    return true;
+  }
+
   if (!scope.mcpSessionId) {
     return false;
   }
@@ -1113,7 +1259,20 @@ export async function brcFetch(
   const safePath = path.startsWith("/") ? path : `/${path}`;
   const method = normalizeHttpMethod(init);
   const requestBody = parseRequestBody(init);
-  const authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+
+  let authorization: string;
+  try {
+    authorization = await getAuthorizationHeaderForCompanyAsync(companyName);
+  } catch (error) {
+    if (error instanceof CompanyNotConnectedError) {
+      const payload = buildCompanyNotConnectedResponse(error.companyName, {
+        otherCompaniesConnected: listConnectedCompanyNames().length > 0,
+      });
+      return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
+    }
+
+    throw error;
+  }
 
   const response = await fetch(`${BRC_API_BASE_URL}${safePath}`, {
     ...init,
@@ -1128,12 +1287,23 @@ export async function brcFetch(
   const text = await response.text();
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new Error(
-        `BRC API ${method} ${safePath} for "${companyName}" failed because ${describeWriteStatusForUser(
-          response.status
-        )}. Ask the user to reconnect the company using the secure Red connection page; do not ask the user to paste an API key into chat.`
-      );
+    const credentialFailure =
+      isBrcCredentialHttpFailure(response.status) ||
+      responseBodyIndicatesInvalidCredential(text) ||
+      !evaluateBrcCredentialResponse(response.status, text).valid;
+
+    if (credentialFailure) {
+      await invalidateCompanyCredential(companyName);
+      const otherCompaniesConnected = listConnectedCompanyNames().length > 0;
+      const payload = buildCompanyCredentialInvalidResponse(companyName, {
+        otherCompaniesConnected,
+      });
+
+      if (isWriteHttpMethod(method)) {
+        return enrichToolResponseData(payload, { companyName });
+      }
+
+      return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
     }
 
     throw new Error(
@@ -1165,9 +1335,11 @@ export async function brcFetch(
       requestBody,
       responseBody: parsedBody,
     });
+
+    return enrichToolResponseData(parsedBody, { companyName });
   }
 
-  return parsedBody;
+  return enrichReadResponseBody(parsedBody, buildConnectionMetadataOptions(companyName));
 }
 
 export async function brcJsonRequest(

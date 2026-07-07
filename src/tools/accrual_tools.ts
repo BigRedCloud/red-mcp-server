@@ -98,8 +98,8 @@ function buildAccrualSummary(args: {
 }): string {
   return [
     args.action === "create"
-      ? "Accrual create draft — not posted yet"
-      : "Accrual update draft — not posted yet",
+      ? "Accrual create preview — not posted yet"
+      : "Accrual update preview — not posted yet",
     "",
     `Company: ${args.companyName}`,
     args.id ? `Accrual id: ${args.id}` : undefined,
@@ -174,7 +174,7 @@ export function registerAccrualTools(server: ServerType) {
     [
       "Creates a new parent Accrual.",
       "The API accepts only the parent transaction shape and relies on shared logic to generate the reversing child transaction.",
-      "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed creation.",
+      "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed creation.",
     ].join(" "),
     {
       companyName: companyNameSchema,
@@ -238,7 +238,7 @@ export function registerAccrualTools(server: ServerType) {
       "Updates an existing parent Accrual by id.",
       "Use brc_get_accrual first to retrieve the current accrual and timestamp.",
       "Child accruals are not exposed by the public API.",
-      "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed the update.",
+      "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed the update.",
     ].join(" "),
     {
       companyName: companyNameSchema,
@@ -323,7 +323,7 @@ export function registerAccrualTools(server: ServerType) {
       if (confirmWrite !== true) {
         return textResponse(
           [
-            "Accrual delete draft — not deleted yet",
+            "Accrual delete preview — not deleted yet",
             "",
             `Company: ${companyName}`,
             `Accrual id: ${id}`,
