@@ -843,7 +843,10 @@ export async function brcFetch(companyName, path, init = {}) {
         });
     }
     else {
-        return enrichReadResponseBody(parsedBody, companyName);
+        return enrichReadResponseBody(parsedBody, {
+            companyName,
+            connectionRefUsed: Boolean(getActiveConnectionRef()?.trim()),
+        });
     }
     return parsedBody;
 }

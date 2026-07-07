@@ -412,4 +412,5 @@ test("tool-level diagnostic logs connectionRef resolution with loaded companies"
   assert.equal(payload.requestedCompany, "Company C");
   assert.equal(payload.requestedCompanyLoaded, true);
   assert.equal(payload.toolName, "brc_list_sales_invoices");
+  assert.equal(payload.vibeConnectionHealthy, true);
 });

@@ -34,7 +34,7 @@ import {
   wrapWriteToolHandler,
 } from "./guards/write_confirmation.js";
 
-function withConnectionRefSchema(
+export function withConnectionRefSchema(
   schema: Record<string, unknown>
 ): Record<string, unknown> {
   if (schema.connectionRef) {
@@ -46,6 +46,12 @@ function withConnectionRefSchema(
     ...schema,
   };
 }
+
+/** Tools that do not accept company credentials — connectionRef is optional but omitted from schema checks. */
+export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
+  "brc_getting_started",
+  "brc_get_deployment_policy",
+]);
 
 function createFilteredServer(server: McpServer): McpServer {
   const originalTool = server.tool.bind(server) as (...args: any[]) => any;

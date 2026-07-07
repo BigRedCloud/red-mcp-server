@@ -17,6 +17,29 @@ export const MCP_CLIENT_IDENTITY_HEADER_NAMES = [
     "x-vibe-user-id",
     "x-vibe-session-id",
 ];
+/**
+ * Safe staging/debug check for a healthy Vibe connectionRef call.
+ * Does not log or expose secrets — only boolean flags and counts.
+ */
+export function assessVibeConnectionHealth(diagnostic) {
+    const checks = {
+        connectionRefPresent: diagnostic.connectionRefPresent,
+        connectionRefResolved: diagnostic.connectionRefResolved,
+        connectionIdPresent: diagnostic.connectionIdPresent,
+        hasCredentials: diagnostic.credentialCount > 0,
+        connectionRefInvalid: diagnostic.connectionRefInvalid,
+    };
+    const healthy = checks.connectionRefPresent &&
+        checks.connectionRefResolved &&
+        checks.connectionIdPresent &&
+        checks.hasCredentials &&
+        !checks.connectionRefInvalid;
+    return {
+        healthy,
+        checks,
+        shouldReconnect: false,
+    };
+}
 function sessionDebugEnabled() {
     const configured = process.env.RED_CONNECT_SESSION_DEBUG?.trim().toLowerCase();
     if (configured === "false") {
@@ -194,7 +217,7 @@ export function buildMcpSessionDiagnostic(args) {
             sessionIdSource = "extra-header";
         }
     }
-    return {
+    const diagnostic = {
         transportSessionId: prefixId(args.transportSessionId),
         resolvedSessionId: prefixId(resolvedSessionId),
         sessionIdSource,
@@ -215,23 +238,14 @@ export function buildMcpSessionDiagnostic(args) {
         requestedCompanyLoaded: args.requestedCompanyLoaded,
         toolName: args.toolName,
     };
+    diagnostic.vibeConnectionHealthy = assessVibeConnectionHealth(diagnostic).healthy;
+    return diagnostic;
 }
 function listLoadedCompanyNames(keyStore) {
     return Array.from(keyStore.values()).map((entry) => entry.companyName);
 }
-function shouldLogToolSessionDiagnostic(args) {
-    return (Boolean(args.connectionRef?.trim()) ||
-        args.resolution.connectionRefResolved ||
-        args.resolution.connectionRefInvalid);
-}
 async function logToolSessionDiagnosticIfNeeded(args) {
     if (!sessionDebugEnabled()) {
-        return;
-    }
-    if (!shouldLogToolSessionDiagnostic({
-        connectionRef: args.connectionRef,
-        resolution: args.scope.resolution,
-    })) {
         return;
     }
     const companiesLoaded = listLoadedCompanyNames(args.keyStore);

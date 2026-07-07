@@ -44,16 +44,21 @@ export function isEmptyListResponse(data) {
     }
     return items.length === 0;
 }
-export function buildReadConnectionMetadata(data, companyName) {
+export function buildReadConnectionMetadata(data, options = {}) {
+    const companyName = options.companyName?.trim();
     const metadata = {
         connectionStatus: ACTIVE_CONNECTION_STATUS,
         shouldReconnect: false,
+        ...(companyName ? { companyName } : {}),
+        ...(options.connectionRefUsed !== undefined
+            ? { connectionRefUsed: options.connectionRefUsed }
+            : {}),
     };
     if (!isEmptyListResponse(data)) {
         return metadata;
     }
-    const companySuffix = companyName?.trim()
-        ? ` for ${companyName.trim()}`
+    const companySuffix = companyName
+        ? ` for ${companyName}`
         : " for this company/filter";
     return {
         ...metadata,
@@ -61,8 +66,8 @@ export function buildReadConnectionMetadata(data, companyName) {
         message: `The Red connection is active. No matching records were returned${companySuffix}.`,
     };
 }
-export function enrichReadResponseBody(data, companyName) {
-    const metadata = buildReadConnectionMetadata(data, companyName);
+export function enrichReadResponseBody(data, options = {}) {
+    const metadata = buildReadConnectionMetadata(data, options);
     if (data && typeof data === "object" && !Array.isArray(data)) {
         return {
             ...data,

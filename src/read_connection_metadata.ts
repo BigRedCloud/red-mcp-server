@@ -4,9 +4,17 @@ export const EMPTY_RESULT_REASON = "no_matching_records" as const;
 export const EMPTY_READ_RESULT_MESSAGE =
   "The Red connection is active. No matching records were returned for this company/filter.";
 
+export type ReadConnectionMetadataOptions = {
+  companyName?: string;
+  /** True when the caller supplied a connectionRef for this request. */
+  connectionRefUsed?: boolean;
+};
+
 export type ReadConnectionMetadata = {
   connectionStatus: typeof ACTIVE_CONNECTION_STATUS;
   shouldReconnect: false;
+  connectionRefUsed?: boolean;
+  companyName?: string;
   emptyResultReason?: typeof EMPTY_RESULT_REASON;
   message?: string;
 };
@@ -68,19 +76,24 @@ export function isEmptyListResponse(data: unknown): boolean {
 
 export function buildReadConnectionMetadata(
   data: unknown,
-  companyName?: string
+  options: ReadConnectionMetadataOptions = {}
 ): ReadConnectionMetadata {
+  const companyName = options.companyName?.trim();
   const metadata: ReadConnectionMetadata = {
     connectionStatus: ACTIVE_CONNECTION_STATUS,
     shouldReconnect: false,
+    ...(companyName ? { companyName } : {}),
+    ...(options.connectionRefUsed !== undefined
+      ? { connectionRefUsed: options.connectionRefUsed }
+      : {}),
   };
 
   if (!isEmptyListResponse(data)) {
     return metadata;
   }
 
-  const companySuffix = companyName?.trim()
-    ? ` for ${companyName.trim()}`
+  const companySuffix = companyName
+    ? ` for ${companyName}`
     : " for this company/filter";
 
   return {
@@ -92,9 +105,9 @@ export function buildReadConnectionMetadata(
 
 export function enrichReadResponseBody(
   data: unknown,
-  companyName?: string
+  options: ReadConnectionMetadataOptions = {}
 ): Record<string, unknown> {
-  const metadata = buildReadConnectionMetadata(data, companyName);
+  const metadata = buildReadConnectionMetadata(data, options);
 
   if (data && typeof data === "object" && !Array.isArray(data)) {
     return {

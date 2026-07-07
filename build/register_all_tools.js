@@ -25,7 +25,7 @@ import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import { appendWriteConfirmationDescription, confirmCounterpartyExplicitSchema, confirmWriteSchema, requiresCounterpartyConfirmation, requiresWriteConfirmation, wrapWriteToolHandler, } from "./guards/write_confirmation.js";
-function withConnectionRefSchema(schema) {
+export function withConnectionRefSchema(schema) {
     if (schema.connectionRef) {
         return schema;
     }
@@ -34,6 +34,11 @@ function withConnectionRefSchema(schema) {
         ...schema,
     };
 }
+/** Tools that do not accept company credentials — connectionRef is optional but omitted from schema checks. */
+export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
+    "brc_getting_started",
+    "brc_get_deployment_policy",
+]);
 function createFilteredServer(server) {
     const originalTool = server.tool.bind(server);
     const filteredServer = Object.create(server);

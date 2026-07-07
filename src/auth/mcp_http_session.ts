@@ -69,7 +69,59 @@ export type McpSessionDiagnostic = {
   requestedCompany?: string;
   requestedCompanyLoaded?: boolean;
   toolName?: string;
+  /** Staging/debug signal — true when Vibe connectionRef flow looks healthy. */
+  vibeConnectionHealthy?: boolean;
 };
+
+export type VibeConnectionHealthChecks = {
+  connectionRefPresent: boolean;
+  connectionRefResolved: boolean;
+  connectionIdPresent: boolean;
+  hasCredentials: boolean;
+  connectionRefInvalid: boolean;
+};
+
+export type VibeConnectionHealth = {
+  healthy: boolean;
+  checks: VibeConnectionHealthChecks;
+  shouldReconnect: false;
+};
+
+/**
+ * Safe staging/debug check for a healthy Vibe connectionRef call.
+ * Does not log or expose secrets — only boolean flags and counts.
+ */
+export function assessVibeConnectionHealth(
+  diagnostic: Pick<
+    McpSessionDiagnostic,
+    | "connectionRefPresent"
+    | "connectionRefResolved"
+    | "connectionIdPresent"
+    | "connectionRefInvalid"
+    | "credentialCount"
+  >
+): VibeConnectionHealth {
+  const checks: VibeConnectionHealthChecks = {
+    connectionRefPresent: diagnostic.connectionRefPresent,
+    connectionRefResolved: diagnostic.connectionRefResolved,
+    connectionIdPresent: diagnostic.connectionIdPresent,
+    hasCredentials: diagnostic.credentialCount > 0,
+    connectionRefInvalid: diagnostic.connectionRefInvalid,
+  };
+
+  const healthy =
+    checks.connectionRefPresent &&
+    checks.connectionRefResolved &&
+    checks.connectionIdPresent &&
+    checks.hasCredentials &&
+    !checks.connectionRefInvalid;
+
+  return {
+    healthy,
+    checks,
+    shouldReconnect: false,
+  };
+}
 
 function sessionDebugEnabled(): boolean {
   const configured = process.env.RED_CONNECT_SESSION_DEBUG?.trim().toLowerCase();
@@ -382,7 +434,7 @@ export function buildMcpSessionDiagnostic(args: {
     }
   }
 
-  return {
+  const diagnostic: McpSessionDiagnostic = {
     transportSessionId: prefixId(args.transportSessionId),
     resolvedSessionId: prefixId(resolvedSessionId),
     sessionIdSource,
@@ -409,23 +461,16 @@ export function buildMcpSessionDiagnostic(args: {
     requestedCompanyLoaded: args.requestedCompanyLoaded,
     toolName: args.toolName,
   };
+
+  diagnostic.vibeConnectionHealthy = assessVibeConnectionHealth(diagnostic).healthy;
+
+  return diagnostic;
 }
 
 function listLoadedCompanyNames(
   keyStore: Map<string, import("../shared.js").CompanyApiContext>
 ): string[] {
   return Array.from(keyStore.values()).map((entry) => entry.companyName);
-}
-
-function shouldLogToolSessionDiagnostic(args: {
-  connectionRef?: string;
-  resolution: HttpToolSessionScope["resolution"];
-}): boolean {
-  return (
-    Boolean(args.connectionRef?.trim()) ||
-    args.resolution.connectionRefResolved ||
-    args.resolution.connectionRefInvalid
-  );
 }
 
 async function logToolSessionDiagnosticIfNeeded(args: {
@@ -439,15 +484,6 @@ async function logToolSessionDiagnosticIfNeeded(args: {
   toolName?: string;
 }): Promise<void> {
   if (!sessionDebugEnabled()) {
-    return;
-  }
-
-  if (
-    !shouldLogToolSessionDiagnostic({
-      connectionRef: args.connectionRef,
-      resolution: args.scope.resolution,
-    })
-  ) {
     return;
   }
 

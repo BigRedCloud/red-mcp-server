@@ -1217,7 +1217,10 @@ export async function brcFetch(
       responseBody: parsedBody,
     });
   } else {
-    return enrichReadResponseBody(parsedBody, companyName);
+    return enrichReadResponseBody(parsedBody, {
+      companyName,
+      connectionRefUsed: Boolean(getActiveConnectionRef()?.trim()),
+    });
   }
 
   return parsedBody;
