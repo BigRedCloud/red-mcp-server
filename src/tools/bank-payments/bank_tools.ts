@@ -135,7 +135,7 @@ export function registerBankTools(server: ServerType) {
       if (!confirmCreate) {
         return textResponse(
           [
-            "Bank account draft — not created yet",
+            "Bank account preview — not created yet",
             "",
             `Company: ${companyName}`,
             `Bank account code: ${String(payload.acCode)}`,

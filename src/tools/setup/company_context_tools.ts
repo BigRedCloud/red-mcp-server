@@ -1,6 +1,13 @@
 import { z } from "zod";
 import type { ServerType } from "../../server.js";
-import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
+import {
+  buildConfirmConnectionCustomerMessage,
+  buildConnectionPresentationInstructions,
+  buildConnectionExpiryMetadata,
+  buildListCompanyContextsCustomerMessage,
+  buildListCompanyContextsExpiryFields,
+} from "../../auth/connection_presentation.js";
+import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
 import {
   companyNameSchema,
   setApiKeyForCompany,
@@ -31,11 +38,18 @@ import {
   getConnectionStore,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
+import {
+  formatStartConnectionResponse,
+  START_COMPANY_CONNECTION_TOOL_DESCRIPTION,
+  CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
+  LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
+} from "../../auth/connection_wording.js";
 
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
     "brc_start_company_connection",
-    "Starts the secure Red company connection flow. Use whenever the user wants to connect one or more companies. Returns a one-time connection page URL (no time expiry, but each link works only once). On that page the user can enter a single company or upload a CSV for multiple companies — never in chat. After completing the secure page, the user should return to this chat and provide (copy/paste) the confirmation code shown on the success page. To connect more companies later, start a new connection. Do not ask the user to type credentials into chat.",
+    START_COMPANY_CONNECTION_TOOL_DESCRIPTION,
     {},
     async () => {
       await ensureConnectionStoreInitialized();
@@ -46,7 +60,7 @@ export function registerCompanyContextTools(server: ServerType) {
           [
             "Red could not determine the current MCP session.",
             "",
-            "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+            "Please try again from your MCP client. If the problem continues, start a fresh company connection to generate a new secure Red connection link.",
           ].join("\n")
         );
       }
@@ -54,25 +68,13 @@ export function registerCompanyContextTools(server: ServerType) {
       const { code } = await createPendingConnection(sessionId);
       const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
 
-      return textResponse(
-        [
-          "To connect your Big Red Cloud companies, open this secure Red connection page:",
-          "",
-          url,
-          "",
-          "On that page you can connect one company using the form, or connect several at once by uploading a CSV file. Credentials are not sent through chat.",
-          "",
-          "This link is for one-time use only. After you use it, ask for a new secure connection link if you want to connect more companies.",
-          "",
-          "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
-        ].join("\n")
-      );
+      return textResponse(formatStartConnectionResponse(url));
     }
   );
 
   server.tool(
     "brc_confirm_company_connection",
-    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.",
+    CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
     {
       code: z
         .string()
@@ -90,7 +92,7 @@ export function registerCompanyContextTools(server: ServerType) {
           [
             "Red could not determine the current MCP session.",
             "",
-            "Please try again from your MCP client. If the problem continues, restart the connection flow.",
+            "Please try again from your MCP client. If the problem continues, start a fresh company connection to generate a new secure Red connection link.",
           ].join("\n")
         );
       }
@@ -101,24 +103,30 @@ export function registerCompanyContextTools(server: ServerType) {
         });
         await ensureCredentialsForCurrentSession();
 
-        const count = result.companyNames.length;
-        const summary =
-          count === 1
-            ? "1 company is now connected in this session:"
-            : `${count} companies are now connected in this session:`;
-
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
 
-        return textResponse(
-          [
-            "Connection confirmed.",
-            "",
-            summary,
-            ...result.companyNames.map((name) => `- ${name}`),
-            "",
-            "You can now ask for connected companies or work with your company records.",
-          ].join("\n")
-        );
+        const customerMessage = buildConfirmConnectionCustomerMessage({
+          connectedCompanies: result.connectedCompanies,
+          failedCompanies: result.failedCompanies,
+          connectionExpiresAt: result.connectionRefExpiresAt,
+        });
+
+        const presentation = buildConnectionPresentationInstructions();
+        const expiryMetadata = buildConnectionExpiryMetadata({
+          earliestExpiresAtMs: result.connectionRefExpiresAt,
+        });
+
+        return jsonResponse({
+          message: "Connection confirmed.",
+          connectedCompanies: result.connectedCompanies,
+          failedCompanies: result.failedCompanies,
+          connectionRef: result.connectionRef,
+          ...expiryMetadata,
+          connectionRefReminder: presentation.connectionRefReminder,
+          assistantInstruction: presentation.assistantInstruction,
+          presentationHint: presentation.presentationHint,
+          customerMessage,
+        });
       } catch (error) {
         if (error instanceof ClaimConnectionError) {
           return textResponse(error.message);
@@ -131,7 +139,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_get_company_api_key_status",
-    "Use when the user asks for an API key, secret, or what key was used. Returns connection status only — never the key. The assistant must not repeat keys from chat history.",
+    "Use when the user asks for an API key, secret, or what key was used. Also use for connection duration or time-left questions when listing all companies. Returns connection status only — never the key. The assistant must not repeat keys from chat history.",
     {
       companyName: companyNameSchema.optional().describe(
         "Optional company context name. If omitted, summarises all contexts."
@@ -152,36 +160,51 @@ export function registerCompanyContextTools(server: ServerType) {
             apiKeyRetrievable: false,
             apiKeyMustNotBeRepeatedInChat: true,
             expiresAt: new Date(credential.expiresAt).toISOString(),
-            message: API_KEY_REFUSAL_MESSAGE,
+            message: getApiKeyRefusalMessage(),
           });
-        } catch {
+        } catch (error) {
+          const connectedNames = listConnectedCompanyNames();
+          if (connectedNames.length > 0) {
+            return jsonResponse({
+              ...buildCompanyNotConnectedResponse(companyName, {
+                otherCompaniesConnected: true,
+              }),
+            });
+          }
+
           return jsonResponse({
             companyName: companyName.trim(),
             connected: false,
             apiKeyRetrievable: false,
             apiKeyMustNotBeRepeatedInChat: true,
-            message: `This company is not connected in this session. ${API_KEY_REFUSAL_MESSAGE}`,
+            message: `This company is not connected in this session. ${getApiKeyRefusalMessage()}`,
           });
         }
       }
     
-      const companies = listConnectedCompanyNames().map((companyName) => {
-        const credential = getCredentialForCompany(companyName);
-    
+      const companyExpiryInputs = listConnectedCompanyNames().map((name) => {
+        const credential = getCredentialForCompany(name);
+
         return {
-          companyName,
+          companyName: name,
           connected: credential.expiresAt >= Date.now(),
           credentialType: credential.kind,
           expiresAt: new Date(credential.expiresAt).toISOString(),
+          expiresAtMs: credential.expiresAt,
         };
       });
-    
+
+      const expiryMetadata = buildListCompanyContextsExpiryFields(companyExpiryInputs);
+
       return jsonResponse({
-        count: companies.length,
-        companies,
+        count: companyExpiryInputs.length,
+        companies: companyExpiryInputs.map(
+          ({ expiresAtMs: _expiresAtMs, ...company }) => company
+        ),
         apiKeyRetrievable: false,
         apiKeyMustNotBeRepeatedInChat: true,
-        message: API_KEY_REFUSAL_MESSAGE,
+        message: getApiKeyRefusalMessage(),
+        ...(expiryMetadata ?? {}),
       });
     }
 
@@ -225,12 +248,12 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_list_company_contexts",
-    "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. Connection credentials are never returned.",
+    LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
     {},
     async () => {
       await ensureCredentialsForCurrentSession();
 
-      const companies = listConnectedCompanyNames().map((companyName) => {
+      const companyExpiryInputs = listConnectedCompanyNames().map((companyName) => {
         const credential = getCredentialForCompany(companyName);
 
         return {
@@ -238,30 +261,37 @@ export function registerCompanyContextTools(server: ServerType) {
           connected: credential.expiresAt >= Date.now(),
           credentialType: credential.kind,
           expiresAt: new Date(credential.expiresAt).toISOString(),
+          expiresAtMs: credential.expiresAt,
         };
       });
 
-      const connectedNames = companies
+      const companies = companyExpiryInputs.map(
+        ({ expiresAtMs: _expiresAtMs, ...company }) => company
+      );
+
+      const connectedNames = companyExpiryInputs
         .filter((company) => company.connected)
         .map((company) => company.companyName);
 
-      const customerMessage =
-        connectedNames.length === 0
-          ? "No companies are connected in this session yet. Use the secure Red connection page to connect a company, then tell me which company you would like to work with."
-          : [
-              "You have the following companies connected in this session:",
-              ...connectedNames.map((name) => `- ${name}`),
-              "",
-              "Tell me which company you would like to work with.",
-            ].join("\n");
+      const customerMessage = buildListCompanyContextsCustomerMessage(connectedNames);
+
+      const presentation = buildConnectionPresentationInstructions();
+      const expiryMetadata = buildListCompanyContextsExpiryFields(
+        companyExpiryInputs
+      );
 
       return jsonResponse({
         count: companies.length,
         customerMessage,
         companyNames: connectedNames,
-        presentationHint:
-          "Show customerMessage and the company names. Only mention credentialType or expiresAt if the user asks for technical connection details.",
+        presentationHint: [
+          "Show customerMessage and the company names.",
+          presentation.presentationHint,
+          "For connection duration, time-left, disconnect-time, or timezone questions, use connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from this response. Do not say you lack a live clock when timeRemainingText is present.",
+        ].join(" "),
+        assistantInstruction: presentation.assistantInstruction,
         companies,
+        ...(expiryMetadata ?? {}),
       });
     }
   );

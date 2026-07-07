@@ -21,8 +21,14 @@ function connectionPartitionKey(connectionId) {
 function clientPartitionKey(clientKey) {
     return `client:${clientKey}`;
 }
+function connectionRefPartitionKey(ref) {
+    return `ref:${ref}`;
+}
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
+}
+function failedValidationDocumentId(normalisedName) {
+    return `failed:${normalisedName}`;
 }
 function apiKeyTtlSeconds() {
     return redServerConfig.apiKeyTtlMinutes * 60;
@@ -209,6 +215,42 @@ export class CosmosConnectionStore {
             return null;
         }
     }
+    async createConnectionRef(args) {
+        const now = Date.now();
+        const ttlSeconds = Math.max(60, Math.ceil((args.expiresAt - now) / 1000));
+        const doc = {
+            pk: connectionRefPartitionKey(args.ref),
+            id: "handoff",
+            type: "connectionRef",
+            ref: args.ref,
+            connectionId: args.connectionId,
+            expiresAt: args.expiresAt,
+            createdAt: now,
+            ttl: ttlSeconds,
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getConnectionIdForRef(ref) {
+        try {
+            const { resource } = await this.getContainer()
+                .item("handoff", connectionRefPartitionKey(ref.trim()))
+                .read();
+            if (!resource || resource.type !== "connectionRef") {
+                return null;
+            }
+            if (resource.expiresAt < Date.now()) {
+                await this.getContainer()
+                    .item("handoff", connectionRefPartitionKey(ref.trim()))
+                    .delete()
+                    .catch(() => { });
+                return null;
+            }
+            return resource.connectionId;
+        }
+        catch {
+            return null;
+        }
+    }
     async saveConnectedCompanies(connectionId, companies) {
         const now = Date.now();
         for (const company of companies) {
@@ -237,6 +279,7 @@ export class CosmosConnectionStore {
                 expiresAt: company.expiresAt,
                 createdAt,
                 updatedAt: now,
+                credentialValidatedAt: company.credentialValidatedAt,
                 ttl: ttlSeconds,
             };
             await this.getContainer().items.upsert(doc);
@@ -262,6 +305,7 @@ export class CosmosConnectionStore {
             expiresAt: resource.expiresAt,
             createdAt: resource.createdAt,
             updatedAt: resource.updatedAt,
+            credentialValidatedAt: resource.credentialValidatedAt,
         }));
     }
     async getCredentialForCompany(connectionId, companyName) {
@@ -281,6 +325,7 @@ export class CosmosConnectionStore {
                 expiresAt: resource.expiresAt,
                 createdAt: resource.createdAt,
                 updatedAt: resource.updatedAt,
+                credentialValidatedAt: resource.credentialValidatedAt,
             };
         }
         catch {
@@ -307,6 +352,56 @@ export class CosmosConnectionStore {
                 count += 1;
         }
         return count;
+    }
+    async saveFailedCompanyValidations(connectionId, failures) {
+        const now = Date.now();
+        const ttlSeconds = apiKeyTtlSeconds();
+        for (const failure of failures) {
+            const normalised = normaliseCompanyName(failure.companyName);
+            const doc = {
+                pk: connectionPartitionKey(connectionId),
+                id: failedValidationDocumentId(normalised),
+                type: "failedCompanyValidation",
+                connectionId,
+                companyName: failure.companyName.trim(),
+                reason: failure.reason,
+                message: failure.message,
+                createdAt: now,
+                ttl: ttlSeconds,
+            };
+            await this.getContainer().items.upsert(doc);
+        }
+    }
+    async listFailedCompanyValidations(connectionId) {
+        const query = {
+            query: "SELECT * FROM c WHERE c.pk = @pk AND c.type = @type ORDER BY c.createdAt ASC",
+            parameters: [
+                { name: "@pk", value: connectionPartitionKey(connectionId) },
+                { name: "@type", value: "failedCompanyValidation" },
+            ],
+        };
+        const { resources } = await this.getContainer()
+            .items.query(query)
+            .fetchAll();
+        return resources.map((resource) => ({
+            companyName: resource.companyName,
+            connected: false,
+            reason: resource.reason,
+            message: resource.message,
+        }));
+    }
+    async clearFailedCompanyValidations(connectionId) {
+        const failures = await this.listFailedCompanyValidations(connectionId);
+        for (const failure of failures) {
+            try {
+                await this.getContainer()
+                    .item(failedValidationDocumentId(normaliseCompanyName(failure.companyName)), connectionPartitionKey(connectionId))
+                    .delete();
+            }
+            catch {
+                // already removed
+            }
+        }
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

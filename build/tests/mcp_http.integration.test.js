@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import net from "node:net";
+const SERVER_READY_LOG_MARKER = "BRC MCP server";
+const SERVER_START_TIMEOUT_MS = 30_000;
 async function getFreePort() {
     return await new Promise((resolve, reject) => {
         const server = net.createServer();
@@ -18,7 +20,19 @@ async function getFreePort() {
         server.on("error", reject);
     });
 }
-async function waitForServerReady(child, timeoutMs = 10_000) {
+async function probeServerHttpReady(port) {
+    try {
+        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+            method: "GET",
+            signal: AbortSignal.timeout(750),
+        });
+        return response.status === 400;
+    }
+    catch {
+        return false;
+    }
+}
+async function waitForServerReady(child, port, timeoutMs = SERVER_START_TIMEOUT_MS) {
     let output = "";
     child.stdout.on("data", (chunk) => {
         output += chunk.toString();
@@ -28,11 +42,14 @@ async function waitForServerReady(child, timeoutMs = 10_000) {
     });
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-        if (output.includes("BRC MCP server")) {
+        if (output.includes(SERVER_READY_LOG_MARKER)) {
             return;
         }
         if (child.exitCode !== null) {
             throw new Error(`Server exited early:\n${output}`);
+        }
+        if (await probeServerHttpReady(port)) {
+            return;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -45,6 +62,8 @@ async function startTestServer(t, port) {
             ...process.env,
             PORT: String(port),
             RED_CONNECT_CONNECTION_STORE: "memory",
+            RED_CONNECT_SESSION_DEBUG: "false",
+            APPLICATIONINSIGHTS_CONNECTION_STRING: "",
             BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
             BRC_ALLOW_DEV_MODE: "false",
         },
@@ -55,7 +74,7 @@ async function startTestServer(t, port) {
             child.kill("SIGTERM");
         }
     });
-    await waitForServerReady(child);
+    await waitForServerReady(child, port);
     return child;
 }
 test("POST /mcp without initialize returns a safe JSON-RPC error", async (t) => {
@@ -96,7 +115,8 @@ test("GET /connect with invalid code returns expired-link page and no secrets", 
     const response = await fetch(`http://127.0.0.1:${port}/connect?code=invalid-code`);
     assert.equal(response.status, 400);
     const body = await response.text();
-    assert.match(body, /expired|invalid|connection/i);
+    assert.match(body, /fresh company connection/i);
+    assert.match(body, /do not reuse an old connection link/i);
     assert.equal(body.includes("RED_CONNECT_COSMOS_CONNECTION_STRING"), false);
     assert.equal(body.includes("RED_CONNECT_ENCRYPTION_KEY"), false);
     assert.equal(body.includes("apiKey"), false);

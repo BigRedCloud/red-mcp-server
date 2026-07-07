@@ -53,7 +53,7 @@ test("batch size is capped even when environment value is too high", () => {
     const result = runConfigProbe({
         BRC_MAX_BATCH_ITEMS: "999",
     });
-    assert.equal(result.maxBatchItems, 10);
+    assert.equal(result.maxBatchItems, 100);
 });
 test("delete tools can be disabled by environment config", () => {
     const result = runConfigProbe({

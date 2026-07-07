@@ -5,7 +5,10 @@ process.env.RED_CONNECT_HTTP_MODE = "true";
 
 import { randomUUID } from "node:crypto";
 import cors from "cors";
+
+import "./telemetry.js";
 import express from "express";
+
 import type { Request, Response } from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -14,18 +17,21 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import {
-  CompanyApiContext,
-  buildHttpClientKey,
+  type CompanyApiContext,
   ensureMcpSessionReady,
-  enterHttpClientKey,
-  enterHttpRequestSessionId,
-  enterSessionKeyStore,
   registerHttpSessionKeyStore,
   reloadSessionCredentialsFromConnectionStore,
   runWithSessionKeyStore,
   unregisterHttpSessionKeyStore,
 } from "./shared.js";
-import { enterMcpSessionContext } from "./auth/connection_store.js";
+import {
+  buildHttpClientKeyFromRequest,
+  buildMcpSessionDiagnostic,
+  logMcpSessionDiagnostic,
+  prepareHttpToolSessionScope,
+  resolveMcpSessionIdFromRequest,
+  runWithHttpToolSession,
+} from "./auth/mcp_http_session.js";
 
 import {
   completeConnectionCode,
@@ -35,6 +41,7 @@ import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
 } from "./auth/connection_store.js";
+import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
 import {
   renderConnectPage,
@@ -43,7 +50,7 @@ import {
   renderSuccessPage,
 } from "./auth/connection_page.js";
 
-import { redServerConfig, getApiKeyExpirationMs, assertApiKeyAllowed } from "./config/server_config.js";
+import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
 import multer from "multer";
 import { parse } from "csv-parse/sync";
@@ -129,20 +136,40 @@ async function handleMcpRequest(
   body?: unknown
 ): Promise<void> {
   const normalizedSessionId = sessionId.trim();
-  const clientKey = buildHttpClientKey(getClientIp(req));
+  const clientKey = buildHttpClientKeyFromRequest(req);
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
-  enterHttpRequestSessionId(normalizedSessionId);
-  enterHttpClientKey(clientKey);
-  enterSessionKeyStore(session.keyStore);
 
-  const context = await ensureMcpSessionReady(normalizedSessionId, session.keyStore);
-  enterMcpSessionContext(context);
+  const scope = await prepareHttpToolSessionScope(
+    normalizedSessionId,
+    session.keyStore,
+    clientKey
+  );
 
-  if (body !== undefined) {
-    await session.transport.handleRequest(req, res, body);
-  } else {
-    await session.transport.handleRequest(req, res);
-  }
+  return runWithHttpToolSession(scope, async () => {
+    const companiesLoaded = Array.from(session.keyStore.values()).map(
+      (entry) => entry.companyName
+    );
+
+    logMcpSessionDiagnostic(
+      buildMcpSessionDiagnostic({
+        transportSessionId: normalizedSessionId,
+        extra: {
+          requestInfo: {
+            headers: req.headers as Record<string, string | string[] | undefined>,
+          },
+        },
+        resolution: scope.resolution,
+        credentialCount: companiesLoaded.length,
+        companiesLoaded,
+      })
+    );
+
+    if (body !== undefined) {
+      await session.transport.handleRequest(req, res, body);
+    } else {
+      await session.transport.handleRequest(req, res);
+    }
+  });
 }
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
@@ -327,19 +354,21 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   }
 
   try {
-    for (const company of companies) {
-      assertApiKeyAllowed(company.apiKey);
-    }
+    const outcome = await validateAndPersistConnectedCompanies({
+      connectionId: pending.connectionId,
+      companies,
+      expiresAt: Date.now() + getApiKeyExpirationMs(),
+    });
 
-    const expiresAt = Date.now() + getApiKeyExpirationMs();
-    await getConnectionStore().saveConnectedCompanies(
-      pending.connectionId,
-      companies.map((company) => ({
-        companyName: company.companyName,
-        apiKey: company.apiKey,
-        expiresAt,
-      }))
-    );
+    if (outcome.connectedCompanies.length === 0) {
+      const message =
+        outcome.failedCompanies.length > 0
+          ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+          : "No companies could be connected because the submitted credentials could not be validated.";
+
+      res.status(400).send(renderConnectionFailedPage(message));
+      return;
+    }
 
     for (const session of sessions.values()) {
       const sessionId = session.transport.sessionId;
@@ -356,9 +385,13 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
       }
     }
 
-    const connectedNames = companies.map((company) => company.companyName);
-
-    res.send(renderSuccessPage(connectedNames, code));
+    res.send(
+      renderSuccessPage(
+        outcome.connectedCompanies,
+        code,
+        outcome.failedCompanies
+      )
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
 
@@ -369,7 +402,7 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
 app.post("/mcp", async (req: Request, res: Response) => {
   await ensureConnectionStoreInitialized();
 
-  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
+  const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
     touchSession(session);
@@ -460,7 +493,7 @@ app.get("/connect", async (req, res) => {
 app.get("/mcp", async (req: Request, res: Response) => {
   await ensureConnectionStoreInitialized();
 
-  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
+  const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
     touchSession(session);
@@ -485,7 +518,7 @@ app.get("/mcp", async (req: Request, res: Response) => {
 });
 
 app.delete("/mcp", async (req: Request, res: Response) => {
-  const sessionId = (req.headers["mcp-session-id"] as string | undefined)?.trim();
+  const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const { server, transport } = sessions.get(sessionId)!;
     await transport.close();
@@ -503,13 +536,18 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-const httpServer = app.listen(PORT, async () => {
+const httpServer = app.listen(PORT);
+
+httpServer.on("listening", () => {
+  console.log(
+    `BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`
+  );
+});
+
+void (async () => {
   try {
     await ensureConnectionStoreInitialized();
     const storeType = getConnectionStore().getStoreType();
-    console.log(
-      `BRC MCP server (Streamable HTTP) running at http://localhost:${PORT}/mcp`
-    );
     console.log(`Red connection store: ${storeType}`);
   } catch (error) {
     console.error(
@@ -517,7 +555,7 @@ const httpServer = app.listen(PORT, async () => {
       error instanceof Error ? error.message : error
     );
   }
-});
+})();
 
 const shutdown = () => {
   console.log("\nShutting down...");

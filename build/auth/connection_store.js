@@ -5,6 +5,9 @@ import { redServerConfig } from "../config/server_config.js";
 import { PENDING_CONNECTION_NEVER_EXPIRES_AT, } from "./connection_pending.js";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
+import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
+import { issueConnectionRef } from "./connection_ref.js";
+import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
 const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
@@ -95,22 +98,70 @@ export async function getBoundConnectionIdForSession(sessionId) {
  * so hosted MCP clients that rotate MCP session ids can still access companies.
  */
 export async function resolveConnectionIdForActiveSession(args) {
+    const result = await resolveConnectionIdForActiveSessionWithMeta(args);
+    return result.connectionId;
+}
+export async function resolveConnectionIdForActiveSessionWithMeta(args) {
     await ensureConnectionStoreInitialized();
     const normalizedSessionId = args.sessionId.trim();
     const store = getConnectionStore();
+    if (args.connectionRef?.trim()) {
+        const fromRef = await store.getConnectionIdForRef(args.connectionRef.trim());
+        if (!fromRef) {
+            return {
+                connectionId: null,
+                sessionBindingFound: false,
+                clientClaimInherited: false,
+                connectionRefResolved: false,
+                connectionRefInvalid: true,
+            };
+        }
+        await store.bindSessionToConnection(normalizedSessionId, fromRef);
+        return {
+            connectionId: fromRef,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+            connectionRefResolved: true,
+            connectionRefInvalid: false,
+        };
+    }
     const bound = await store.getConnectionIdForSession(normalizedSessionId);
     if (bound) {
-        return bound;
+        return {
+            connectionId: bound,
+            sessionBindingFound: true,
+            clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
+        };
     }
     if (!args.clientKey) {
-        return null;
+        return {
+            connectionId: null,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
+        };
     }
     const inherited = await store.getRecentClientClaim(args.clientKey, CLIENT_CLAIM_INHERIT_TTL_MS);
     if (!inherited) {
-        return null;
+        return {
+            connectionId: null,
+            sessionBindingFound: false,
+            clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
+        };
     }
     await store.bindSessionToConnection(normalizedSessionId, inherited);
-    return inherited;
+    return {
+        connectionId: inherited,
+        sessionBindingFound: false,
+        clientClaimInherited: true,
+        connectionRefResolved: false,
+        connectionRefInvalid: false,
+    };
 }
 export async function ensureConnectionIdForSession(sessionId) {
     await ensureConnectionStoreInitialized();
@@ -136,19 +187,21 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     await ensureConnectionStoreInitialized();
     const trimmedCode = code.trim();
     if (!trimmedCode) {
-        throw new ClaimConnectionError("A connection code is required. Please ask for a new secure Red connection link and try again.", "not_found");
+        throw new ClaimConnectionError(`A connection code is required. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     const store = getConnectionStore();
     const pending = await store.getConnectionByCode(trimmedCode);
     if (!pending) {
-        throw new ClaimConnectionError("That connection code is missing, incorrect, or has already been used. Please ask for a new secure Red connection link and try again.", "not_found");
+        throw new ClaimConnectionError(`That connection code is missing, incorrect, or has already been used. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     if (!pending.used) {
-        throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page, submit your company details, then return here and confirm the connection code.", "not_completed");
+        throw new ClaimConnectionError("That connection code has not been completed yet. Open the secure Red connection page from your current fresh connection link, submit your company details, then return here and confirm the confirmation code. If that link no longer works, start a fresh company connection to generate a new secure Red connection link.", "not_completed");
     }
-    const companies = await store.listConnectedCompanies(pending.connectionId);
-    if (companies.length === 0) {
-        throw new ClaimConnectionError("No companies were found for that connection code. Please submit the secure Red connection page first, then confirm the connection code again.", "no_companies");
+    const { connectedCompanies, failedCompanies } = await revalidateStoredConnectionCompanies(pending.connectionId);
+    if (connectedCompanies.length === 0) {
+        throw new ClaimConnectionError(failedCompanies.length > 0
+            ? "No companies could be connected because every submitted credential failed validation. Reconnect with current API keys on a fresh secure Red connection link, then confirm the confirmation code again."
+            : `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "no_companies");
     }
     const normalizedSessionId = sessionId.trim();
     await store.bindSessionToConnection(normalizedSessionId, pending.connectionId);
@@ -160,9 +213,15 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
             claimedAt,
         });
     }
+    const { connectionRef, expiresAt: connectionRefExpiresAt } = await issueConnectionRef(pending.connectionId);
+    const connectedCompaniesList = connectedCompanies;
     return {
         connectionId: pending.connectionId,
-        companyNames: companies.map((company) => company.companyName),
+        connectedCompanies: connectedCompaniesList,
+        failedCompanies,
+        companyNames: connectedCompaniesList,
+        connectionRef,
+        connectionRefExpiresAt,
     };
 }
 export async function createPendingConnection(sessionId) {

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { confirmWriteSchema } from "../guards/write_confirmation.js";
 import { registerSalesEntryInvoiceTools } from "./sales-emails/sales_entry_inv_tools.js";
+import { registerQuoteTools } from "./sales-emails/quotes_tools.js";
 import { registerBatchTools } from "./general/batch_tools.js";
 import { registerCompanyContextTools } from "./setup/company_context_tools.js";
-import { SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION } from "./general/payloads_tools.js";
+import { registerNominalReportTools } from "./journals/nominal_report_tools.js";
+import {
+  SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION,
+  SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION,
+} from "./general/payloads_tools.js";
 
 type RegisteredTool = { description: string; schema: Record<string, any> };
 
@@ -26,8 +32,10 @@ function captureRegisteredTools(): Map<string, RegisteredTool> {
 
   for (const register of [
     registerSalesEntryInvoiceTools,
+    registerQuoteTools,
     registerBatchTools,
     registerCompanyContextTools,
+    registerNominalReportTools,
   ]) {
     register(recorder as never);
   }
@@ -77,17 +85,37 @@ test("connection tools use 'confirmation code', not 'confirmation command'", () 
   }
 });
 
+test("brc_confirm_company_connection returns connectionRef guidance", () => {
+  const confirm = getTool("brc_confirm_company_connection");
+  assert.match(confirm.description, /connectionRef/i);
+  assert.match(confirm.description, /rotates session ids/i);
+  assert.match(confirm.description, /do not call brc_start_company_connection/i);
+});
+
+test("brc_start_company_connection guides reconnect and fresh-link behaviour", () => {
+  const { description } = getTool("brc_start_company_connection");
+  assert.match(description, /reconnect/i);
+  assert.match(description, /generates a fresh one-time secure Red connection link/i);
+  assert.match(description, /never reuse a previous connection link/i);
+  assert.match(description, /expired session credentials/i);
+  assert.match(description, /stale secure connection link/i);
+  assert.match(description, /paste an API key into chat/i);
+  assert.match(description, /Do not call this tool when a valid connectionRef/i);
+  assert.match(description, /empty list/i);
+});
+
 test("brc_list_company_contexts says connection credentials, not API keys", () => {
   const { description } = getTool("brc_list_company_contexts");
   assert.match(description, /connection credentials are never returned/i);
   assert.equal(/api keys are never returned/i.test(description), false);
+  assert.match(description, /connectionRef/i);
+  assert.match(description, /not a reason to start a new connection/i);
 });
 
 test("brc_batch_sales_invoices exposes batch-level confirmCrAnalysisCategory", () => {
   const { schema, description } = getTool("brc_batch_sales_invoices");
   assert.ok(schema.confirmCrAnalysisCategory, "expected confirmCrAnalysisCategory in batch schema");
   assert.equal(schema.confirmCrAnalysisCategory.isOptional(), true);
-  // Batch description states it covers all listed customers.
   assert.match(description, /all listed customers/i);
 });
 
@@ -105,7 +133,7 @@ test("Sales VAT category wording appears in single, gen_ref, and batch tool desc
   }
 });
 
-test("sales invoice tool descriptions state productId 0 and 1 are blocked before draft and posting", () => {
+test("sales invoice tool descriptions state productId 0 and 1 are blocked before preview-before-posting and posting", () => {
   for (const name of [
     "brc_create_sales_invoice",
     "brc_create_sales_invoice_gen_ref",
@@ -113,6 +141,57 @@ test("sales invoice tool descriptions state productId 0 and 1 are blocked before
   ]) {
     const { description } = getTool(name);
     assert.match(description, /productId 0 (and|\/) 1/i);
-    assert.match(description, /before .*draft.* (and|before) .*post|before the draft preview and before posting|before draft and posting/i);
+    assert.match(
+      description,
+      /before preview-before-posting and (before )?posting|before preview-before-posting and posting/i
+    );
   }
+});
+
+test("write tool descriptions do not describe BRC previews as drafts", () => {
+  const writeToolNames = [
+    "brc_create_sales_invoice",
+    "brc_create_sales_invoice_gen_ref",
+    "brc_batch_sales_invoices",
+    "brc_create_quote",
+    "brc_create_quote_gen_ref",
+  ];
+
+  for (const name of writeToolNames) {
+    const { description } = getTool(name);
+    assert.equal(
+      /\bdraft\b/i.test(description),
+      false,
+      `${name} description must not use 'draft'`
+    );
+  }
+
+  const confirmWriteDesc = confirmWriteSchema.description ?? "";
+  assert.equal(/\bdraft\b/i.test(confirmWriteDesc), false);
+});
+
+test("nominal report tools state monthly values are period movements", () => {
+  for (const name of [
+    "brc_grouped_nominal_accounts_report",
+    "brc_multi_company_nom_ac_report",
+    "brc_get_nom_ac_ledger_by_ids",
+  ]) {
+    const { description } = getTool(name);
+    assert.match(description, /period movement/i);
+    assert.match(description, /not balance/i);
+  }
+});
+
+test("raw multi-line sales invoice gen_ref wording explains required line structure", () => {
+  const { description, schema } = getTool("brc_create_sales_invoice_gen_ref");
+
+  assert.match(description, /productTrans/i);
+  assert.match(description, /acEntries/i);
+  assert.match(description, /reconcil/i);
+  assert.match(description, /preview before posting|preview-before-posting/i);
+  assert.ok(description.includes(SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION));
+
+  assert.ok(schema.payload, "expected payload field");
+  assert.match(schema.payload.description, /productTrans/i);
+  assert.match(schema.payload.description, /acEntries/i);
 });

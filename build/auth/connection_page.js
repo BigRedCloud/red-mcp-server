@@ -1,4 +1,6 @@
 import { RED_LOGO_URL } from "./red_assets.js";
+import { EXPIRED_CONNECTION_LINK_PAGE_MESSAGE } from "./connection_wording.js";
+import { formatCredentialTtlForUser } from "./connection_presentation.js";
 export function escapeHtml(value) {
     return value
         .replaceAll("&", "&amp;")
@@ -416,6 +418,7 @@ function brandBar() {
       </header>`;
 }
 export function renderConnectPage(code) {
+    const sessionDuration = formatCredentialTtlForUser();
     const content = `
       <div class="card">
         <p class="lead">
@@ -426,7 +429,7 @@ export function renderConnectPage(code) {
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
           <div class="trust-notes">
             <div class="trust-note">
-              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about two hours), and are never shown in chat.
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
             </div>
             <div class="trust-note">
               <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
@@ -490,15 +493,15 @@ export function renderExpiredLinkPage() {
         <div class="status-icon warning" aria-hidden="true">!</div>
         <h2>Connection link not available</h2>
         <p class="centered">
-          This connection link is invalid or has already been used. Each secure connection link works only once. Ask Red in chat for a new secure connection link.
+          ${escapeHtml(EXPIRED_CONNECTION_LINK_PAGE_MESSAGE)}
         </p>
         <div class="next-step">
-          Return to your chat and ask Red to <strong>start a new company connection</strong>.
+          Return to your chat and ask Red to <strong>start a fresh company connection</strong> to generate a new secure Red connection link.
         </div>
       </div>`;
     return pageShell("Connection link not available", brandBar(), content);
 }
-export function renderSuccessPage(connectedNames, code) {
+export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
     const count = connectedNames.length;
     const summary = count === 1
         ? "1 company was connected to Red for this session."
@@ -506,12 +509,24 @@ export function renderSuccessPage(connectedNames, code) {
     const listItems = connectedNames
         .map((name) => `<li>${escapeHtml(name)}</li>`)
         .join("");
+    const failedSection = failedCompanies.length > 0
+        ? `
+        <div class="next-step">
+          <strong>These companies were not connected:</strong>
+          <ul class="company-list">
+            ${failedCompanies
+            .map((failure) => `<li>${escapeHtml(failure.companyName)} — ${escapeHtml(failure.message)}</li>`)
+            .join("")}
+          </ul>
+        </div>`
+        : "";
     const content = `
       <div class="card">
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
+        ${failedSection}
         <div class="next-step">
           Connection complete. Return to this chat and copy/paste this confirmation code: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>

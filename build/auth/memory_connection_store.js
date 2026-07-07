@@ -7,6 +7,8 @@ const pendingConnections = new Map();
 const sessionBindings = new Map();
 const companiesByConnection = new Map();
 const clientLastClaims = new Map();
+const connectionRefs = new Map();
+const failedValidationsByConnection = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -108,6 +110,23 @@ export class MemoryConnectionStore {
         }
         return entry.connectionId;
     }
+    async createConnectionRef(args) {
+        connectionRefs.set(args.ref.trim(), {
+            connectionId: args.connectionId,
+            expiresAt: args.expiresAt,
+        });
+    }
+    async getConnectionIdForRef(ref) {
+        const entry = connectionRefs.get(ref.trim());
+        if (!entry) {
+            return null;
+        }
+        if (entry.expiresAt < Date.now()) {
+            connectionRefs.delete(ref.trim());
+            return null;
+        }
+        return entry.connectionId;
+    }
     async saveConnectedCompanies(connectionId, companies) {
         const map = companyMapForConnection(connectionId);
         const now = Date.now();
@@ -122,6 +141,7 @@ export class MemoryConnectionStore {
                 expiresAt: company.expiresAt,
                 createdAt: existing?.createdAt ?? now,
                 updatedAt: now,
+                credentialValidatedAt: company.credentialValidatedAt ?? existing?.credentialValidatedAt,
             });
         }
     }
@@ -154,6 +174,15 @@ export class MemoryConnectionStore {
         const count = map.size;
         companiesByConnection.delete(connectionId);
         return count;
+    }
+    async saveFailedCompanyValidations(connectionId, failures) {
+        failedValidationsByConnection.set(connectionId, failures.map((failure) => ({ ...failure })));
+    }
+    async listFailedCompanyValidations(connectionId) {
+        return (failedValidationsByConnection.get(connectionId) ?? []).map((failure) => ({ ...failure }));
+    }
+    async clearFailedCompanyValidations(connectionId) {
+        failedValidationsByConnection.delete(connectionId);
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   describeWriteStatusForUser,
+  getCredentialForCompany,
   RED_ACTIVITY_SCOPE_INSTRUCTION,
 } from "./shared.js";
+import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
 
 test("201 is described as created successfully without an HTTP code", () => {
   const text = describeWriteStatusForUser(201);
@@ -39,6 +41,19 @@ test("technical details are only included when explicitly requested", () => {
   assert.equal(
     describeWriteStatusForUser(201, { includeTechnicalDetails: true }),
     "created successfully (HTTP 201)"
+  );
+});
+
+test("missing company credential error tells the assistant to start a fresh secure link", () => {
+  delete process.env.RED_CONNECT_HTTP_MODE;
+
+  assert.throws(
+    () => getCredentialForCompany("MISSING-COMPANY-FOR-WORDING-TEST"),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message.includes(FRESH_CONNECTION_ASSISTANT_GUIDANCE), true);
+      return true;
+    }
   );
 });
 

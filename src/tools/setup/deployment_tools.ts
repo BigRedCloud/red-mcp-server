@@ -20,6 +20,7 @@ import {
   getCustomerDeploymentCapabilities,
   redServerConfig,
 } from "../../config/server_config.js";
+import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 
 function asNumber(value: unknown): number | null {
   const n = Number(value);
@@ -343,21 +344,23 @@ Safety reminders:
 - Treat the company API key like a password. Do not show company books data until the user has connected that company in this session.
 - When no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. Do not ask for credentials in chat.
 - Never show company data from prior test runs, saved reports, or cached results — only live data from the current connected session.
-- Company connection details are kept in server session memory for about 2 hours and are not shown back in chat.
+- Company connection details are kept in server session memory for ${formatCredentialTtlForUser()} and are not shown back in chat.
 - Assistants must never repeat API keys from chat history.
 - Deleting or changing records should only happen after you confirm the details.
-- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare a draft or use a workaround.
+- Email sending is supported for sales invoices, quotes, and customer statements only. If the user asks to email any other document type, say Red cannot email it through the current MCP tools, list the supported types, and stop — do not prepare an email preview or use a workaround.
 - If something you need is not available here, you can still review data in chat or work in Big Red Cloud directly.
 
 Recommended safe workflow:
 1. Ask the chat to check if the company is ready.
 2. Start with read-only questions.
-3. Ask for a draft before creating records.
+3. Ask for a preview before posting when creating records.
 4. Confirm the company, date, customer or supplier, VAT rate and totals.
 5. Only then confirm create, update, delete or batch actions in plain English — when this session allows them.`;
 }
 
-const gettingStartedText = `Welcome to Red. Big Red Cloud's conversational assistant.
+function buildGettingStartedText(): string {
+  const sessionDuration = formatCredentialTtlForUser();
+  return `Welcome to Red. Big Red Cloud's conversational assistant.
 
 You can use this chat to ask questions about your company's data and, where enabled, prepare or carry out accounting actions.
 
@@ -366,7 +369,7 @@ WARNING: Red is currently in beta. Please double-check all information before re
 Red may perform analysis in the background, but customer responses should be shown in plain business language. Code, technical payloads, local file paths and tool details are hidden unless dev mode is enabled.
 
 1. Connect your companies
-Ask the chat to start a secure company connection. Red returns a one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for about 2 hours. Each link works only once — ask for a new link to connect more companies later.
+Ask the chat to start a secure company connection. Red returns a fresh one-time link to a secure connection page where you can connect one company using the form, or several at once by uploading a CSV file. Credentials are never typed into chat and stay in server session memory for ${sessionDuration}. Each link works only once — to reconnect, try again, or fix an expired or stale connection, ask for a fresh link. Never reuse an old connection link.
 
 Example:
 "Connect my companies."
@@ -388,12 +391,12 @@ Examples:
 "Summarise my VAT rates."
 "Show me nominal account groups."
 
-4. Ask for a draft before creating anything
-For safety, ask the chat to prepare a draft first. Only confirm when you are happy.
+4. Ask for a preview before creating anything
+For safety, ask the chat to show a preview before posting first. Only confirm when you are happy.
 
 Examples:
 "Prepare a quote for a customer, but do not create it yet."
-"Draft a sales invoice and show me the details before posting it."
+"Show me a sales invoice preview before posting it."
 "Check the transaction date before creating anything."
 
 5. Confirm before changing data
@@ -414,7 +417,7 @@ Good starter prompts:
 - "Check if my company is ready."
 - "Show me examples of what I can ask."
 `;
-
+}
 
 const examplesText = `Example prompts you can type into the chat:
 
@@ -473,13 +476,15 @@ Reports:
 - "Compare nominal account groups across my connected companies."
 
 Safety:
-- "Do not create anything yet, just show me a draft."
+- "Do not create anything yet, just show me a preview before posting."
 - "Check the details before posting."
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
 `;
 
-const safetyText = `Red assistant safety guide:
+function buildSafetyText(): string {
+  const sessionDuration = formatCredentialTtlForUser();
+  return `Red assistant safety guide:
 
 This assistant can help read company data and, if enabled, prepare or carry out accounting actions.
 
@@ -503,7 +508,7 @@ Some accounting actions only work inside the company's current financial year. I
 Some generated documents, such as creating an invoice from a quote, may use Big Red Cloud's internal transaction date. If the company financial year is not current, this may fail.
 
 6. Use the secure connection page for credentials
-Never type company API keys into chat. Ask Red to start a secure company connection and enter your company name and API key only on the connection page Red provides. Connections stay in server session memory for about 2 hours.
+Never type company API keys into chat. Ask Red to start a secure company connection and enter your company name and API key only on the connection page Red provides. Connections stay in server session memory for ${sessionDuration}.
 
 7. API keys must never appear in assistant replies
 - MCP tools never return API key values.
@@ -517,11 +522,11 @@ Never type company API keys into chat. Ask Red to start a secure company connect
 Useful prompts:
 - "Check if my company is ready."
 - "Validate this transaction date."
-- "Show me a draft before creating anything."
+- "Show me a preview before creating anything."
 - "Ask me before deleting anything."
 - "Clear my connected company sessions."
 `;
-
+}
 
 export function registerDeploymentTools(server: ServerType) {
   server.tool(
@@ -532,7 +537,7 @@ export function registerDeploymentTools(server: ServerType) {
       "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
     ].join(" "),
     {},
-    async () => textResponse(gettingStartedText)
+    async () => textResponse(buildGettingStartedText())
   );
 
   server.tool(
@@ -755,7 +760,7 @@ export function registerDeploymentTools(server: ServerType) {
           "Check whether a transaction date is valid.",
           "Show me my VAT rates.",
           "Show me recent sales invoices.",
-          "Prepare a quote draft, but do not create it yet.",
+          "Prepare a quote preview before posting, but do not create it yet.",
         ],
       });
     }
@@ -770,7 +775,7 @@ description: "Simple getting-started guide for using Big Red Cloud in chat.",
       mimeType: "text/markdown",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, mimeType: "text/markdown", text: gettingStartedText }],
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: buildGettingStartedText() }],
     })
   );
 
@@ -796,7 +801,7 @@ description: "Simple getting-started guide for using Big Red Cloud in chat.",
       mimeType: "text/markdown",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, mimeType: "text/markdown", text: safetyText }],
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: buildSafetyText() }],
     })
   );
 

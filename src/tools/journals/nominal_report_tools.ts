@@ -8,6 +8,7 @@ import {
     toNumber,
     type JsonRecord,
   }  from "../../shared.js";
+import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "../general/payloads_tools.js";
 
 
 const nominalGroups: Record<string, { groupCode: string; description: string }> = {
@@ -223,7 +224,8 @@ function detectGroupedByField(nominalAccounts: JsonRecord[]): string {
 export function registerNominalReportTools(server:ServerType){
   server.tool(
     "brc_get_nom_ac_ledger_by_ids",
-    "Gets nominal accounts for specific ids by calling GET /v1/nominalAccounts/{id} for each id.",
+    "Gets nominal accounts for specific ids by calling GET /v1/nominalAccounts/{id} for each id. " +
+      NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION,
     {
       companyName: companyNameSchema,
       ids: z.string().describe("Comma-separated nominal account ids."),
@@ -264,7 +266,8 @@ export function registerNominalReportTools(server:ServerType){
   );
   server.tool(
     "brc_grouped_nominal_accounts_report",
-    "Creates a grouped nominal accounts report from GET /v1/nominalAccounts, grouping by account group/type fields when available.",
+    "Creates a grouped nominal accounts report from GET /v1/nominalAccounts, grouping by account group/type fields when available. " +
+      NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION,
     {
       companyName: companyNameSchema,
     },
@@ -303,7 +306,8 @@ export function registerNominalReportTools(server:ServerType){
   );
   server.tool(
     "brc_multi_company_nom_ac_report",
-    "Creates a grouped nominal accounts report for multiple companies using GET /v1/nominalAccounts for each company.",
+    "Creates a grouped nominal accounts report for multiple companies using GET /v1/nominalAccounts for each company. " +
+      NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION,
     {
       companyNames: z
         .array(companyNameSchema)

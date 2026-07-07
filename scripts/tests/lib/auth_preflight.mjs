@@ -1,7 +1,7 @@
 export const AUTH_PREFLIGHT_TOOL = "brc_get_financial_year";
 
 export function authFailureMessage(companyName) {
-  return `BRC test authentication failed for ${companyName}. Check BRC_TEST_COMPANY and BRC_TEST_API_KEY or reconnect the company using the secure connection flow.`;
+  return `BRC test authentication failed for ${companyName}. Check BRC_TEST_COMPANY and BRC_TEST_API_KEY or start a fresh company connection to generate a new secure Red connection link — do not reuse an old connection link.`;
 }
 
 /**

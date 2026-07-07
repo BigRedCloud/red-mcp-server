@@ -122,8 +122,8 @@ function buildJournalSummary(args) {
     const { totalDebit, totalCredit } = getTotals(args.accountTransactions);
     return [
         args.action === "create"
-            ? "Nominal Journal Batch create draft — not posted yet"
-            : "Nominal Journal Batch update draft — not posted yet",
+            ? "Nominal Journal Batch create preview — not posted yet"
+            : "Nominal Journal Batch update preview — not posted yet",
         "",
         `Company: ${args.companyName}`,
         args.id ? `Batch id: ${args.id}` : undefined,
@@ -186,7 +186,7 @@ export function registerNominalJournalBatchTools(server) {
     server.tool("brc_create_nominal_journal_batch", [
         "Creates a new Nominal Journal Batch.",
         "The journal should contain balanced debit and credit lines.",
-        "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed creation.",
+        "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed creation.",
     ].join(" "), {
         companyName: companyNameSchema,
         bookTranTypeId: nominalJournalBatchCreateSchema.shape.bookTranTypeId,
@@ -224,7 +224,7 @@ export function registerNominalJournalBatchTools(server) {
     server.tool("brc_update_nominal_journal_batch", [
         "Updates an existing Nominal Journal Batch by id.",
         "Use brc_get_nominal_journal_batch first to retrieve the current batch, including timestamp and account transaction line timestamps.",
-        "Do not call with confirmWrite=true until the user has reviewed the draft and explicitly confirmed the update.",
+        "Do not call with confirmWrite=true until the user has reviewed the preview and explicitly confirmed the update.",
     ].join(" "), {
         companyName: companyNameSchema,
         id: nominalJournalBatchUpdateSchema.shape.id,
@@ -280,7 +280,7 @@ export function registerNominalJournalBatchTools(server) {
     }, async ({ companyName, id, timestamp, confirmWrite }) => {
         if (confirmWrite !== true) {
             return textResponse([
-                "Nominal Journal Batch delete draft — not deleted yet",
+                "Nominal Journal Batch delete preview — not deleted yet",
                 "",
                 `Company: ${companyName}`,
                 `Batch id: ${id}`,
