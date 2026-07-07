@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { ServerType } from "../../server.js";
-import { API_KEY_REFUSAL_MESSAGE } from "../../config/mcp_config.js";
+import {
+  buildConfirmConnectionCustomerMessage,
+  buildConnectionRefPresentationFields,
+  buildListCompanyContextsCustomerMessage,
+  buildConnectionDurationUserAnswer,
+} from "../../auth/connection_presentation.js";
+import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
 import {
   companyNameSchema,
   setApiKeyForCompany,
@@ -33,13 +39,11 @@ import {
 } from "../../auth/connection_store.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
-  CONFIRM_CONNECTION_SUCCESS_LINES,
   formatStartConnectionResponse,
   START_COMPANY_CONNECTION_TOOL_DESCRIPTION,
   CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
   LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
 } from "../../auth/connection_wording.js";
-import { CONNECTION_REF_REMINDER } from "../../read_connection_metadata.js";
 
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
@@ -98,43 +102,30 @@ export function registerCompanyContextTools(server: ServerType) {
         });
         await ensureCredentialsForCurrentSession();
 
-        const count = result.connectedCompanies.length;
-        const summary =
-          count === 1
-            ? "1 company is now connected in this session:"
-            : `${count} companies are now connected in this session:`;
-
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
 
-        const customerMessage = [
-          "Connection confirmed.",
-          "",
-          summary,
-          ...result.connectedCompanies.map((name) => `- ${name}`),
-          ...(result.failedCompanies.length > 0
-            ? [
-                "",
-                "These companies were not connected:",
-                ...result.failedCompanies.map(
-                  (failure) => `- ${failure.companyName}: ${failure.message}`
-                ),
-              ]
-            : []),
-          "",
-          "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
-          result.connectionRef,
-          "",
-          ...CONFIRM_CONNECTION_SUCCESS_LINES,
-          "",
-          "You can now ask for connected companies or work with your company records.",
-        ].join("\n");
+        const customerMessage = buildConfirmConnectionCustomerMessage({
+          connectedCompanies: result.connectedCompanies,
+          failedCompanies: result.failedCompanies,
+          connectionExpiresAt: result.connectionRefExpiresAt,
+        });
+
+        const presentation = buildConnectionRefPresentationFields();
 
         return jsonResponse({
           message: "Connection confirmed.",
           connectedCompanies: result.connectedCompanies,
           failedCompanies: result.failedCompanies,
           connectionRef: result.connectionRef,
-          connectionRefReminder: CONNECTION_REF_REMINDER,
+          connectionRefExpiresAt: new Date(
+            result.connectionRefExpiresAt
+          ).toISOString(),
+          connectionRefReminder: presentation.connectionRefReminder,
+          assistantInstruction: presentation.assistantInstruction,
+          presentationHint: presentation.presentationHint,
+          connectionDurationGuidance: buildConnectionDurationUserAnswer(
+            result.connectionRefExpiresAt
+          ),
           customerMessage,
         });
       } catch (error) {
@@ -170,7 +161,7 @@ export function registerCompanyContextTools(server: ServerType) {
             apiKeyRetrievable: false,
             apiKeyMustNotBeRepeatedInChat: true,
             expiresAt: new Date(credential.expiresAt).toISOString(),
-            message: API_KEY_REFUSAL_MESSAGE,
+            message: getApiKeyRefusalMessage(),
           });
         } catch (error) {
           const connectedNames = listConnectedCompanyNames();
@@ -187,7 +178,7 @@ export function registerCompanyContextTools(server: ServerType) {
             connected: false,
             apiKeyRetrievable: false,
             apiKeyMustNotBeRepeatedInChat: true,
-            message: `This company is not connected in this session. ${API_KEY_REFUSAL_MESSAGE}`,
+            message: `This company is not connected in this session. ${getApiKeyRefusalMessage()}`,
           });
         }
       }
@@ -208,7 +199,7 @@ export function registerCompanyContextTools(server: ServerType) {
         companies,
         apiKeyRetrievable: false,
         apiKeyMustNotBeRepeatedInChat: true,
-        message: API_KEY_REFUSAL_MESSAGE,
+        message: getApiKeyRefusalMessage(),
       });
     }
 
@@ -272,22 +263,20 @@ export function registerCompanyContextTools(server: ServerType) {
         .filter((company) => company.connected)
         .map((company) => company.companyName);
 
-      const customerMessage =
-        connectedNames.length === 0
-          ? "No companies are connected in this session yet. If you have a connectionRef from brc_confirm_company_connection, pass it on this call. If other tools already succeeded with that connectionRef, the connection is active — do not start a new connection. Otherwise start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
-          : [
-              "You have the following companies connected in this session:",
-              ...connectedNames.map((name) => `- ${name}`),
-              "",
-              "Tell me which company you would like to work with.",
-            ].join("\n");
+      const customerMessage = buildListCompanyContextsCustomerMessage(connectedNames);
+
+      const presentation = buildConnectionRefPresentationFields();
 
       return jsonResponse({
         count: companies.length,
         customerMessage,
         companyNames: connectedNames,
-        presentationHint:
-          "Show customerMessage and the company names. Only mention credentialType or expiresAt if the user asks for technical connection details.",
+        presentationHint: [
+          "Show customerMessage and the company names.",
+          presentation.presentationHint,
+          "Only mention credentialType or expiresAt if the user asks for technical connection details or dev mode is enabled.",
+        ].join(" "),
+        assistantInstruction: presentation.assistantInstruction,
         companies,
       });
     }

@@ -16,6 +16,8 @@ test("non-empty response with connectionRef includes activeConnectionRef", () =>
     assert.equal(body.connectionRefUsed, true);
     assert.equal(body.activeConnectionRef, SAMPLE_REF);
     assert.equal(body.connectionRefReminder, CONNECTION_REF_REMINDER);
+    assert.match(String(body.assistantInstruction), /Do not show connectionRef/i);
+    assert.match(String(body.presentationHint), /Do not display/i);
     assert.equal(body.companyName, "Company C");
     assert.equal(body.emptyResultReason, undefined);
 });

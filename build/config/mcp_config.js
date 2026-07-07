@@ -1,16 +1,19 @@
 import { getMaxBatchItems, redServerConfig } from "./server_config.js";
 import { CONNECTION_REF_PERSISTENCE_GUIDANCE, START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, } from "../auth/connection_wording.js";
+import { buildApiKeyRefusalMessage, buildConnectionRefUserPresentationRules, formatCredentialTtlForUser, } from "../auth/connection_presentation.js";
 /**
  * MCP server instructions sent to the host (e.g. Cursor) at initialize.
  * Hosts may surface this to the assistant — use it to enforce API key handling.
  */
-const BRC_MCP_SERVER_INSTRUCTIONS_BASE = `Big Red Cloud MCP server — mandatory API key rules:
+function buildBrcMcpServerInstructionsBase() {
+    const sessionDuration = formatCredentialTtlForUser();
+    return `Big Red Cloud MCP server — mandatory API key rules:
 Customers must never be asked to paste API keys, tokens, passwords, or credentials into chat. If a company is not connected, use brc_start_company_connection and direct the user to the secure connection page.
 
 1. NEVER display, quote, paraphrase, summarize, transform, validate, or confirm BRC company API keys in chat responses.
 2. This applies to keys from tool results, MCP memory, user messages, logs, error messages, screenshots, code snippets, terminal output, and prior chat turns.
 3. Never reveal any part of a key, including prefixes, suffixes, masked versions, hashes, checksums, or "last 4 characters".
-4. If the user asks for an API key, call brc_get_company_api_key_status and explain that keys are session-only (about 2 hours) and cannot be retrieved or repeated.
+4. If the user asks for an API key, call brc_get_company_api_key_status and explain that keys are session-only (${sessionDuration}) and cannot be retrieved or repeated.
 5. Do not "help" by recalling, reconstructing, validating, comparing, or reformatting a key the user typed earlier in the conversation.
 6. Treat the company API key like a password. Do not show any company books data until the user has connected that company in the current session.
 7. Before connecting, only answer deployment permissions, how to connect, connection status (connected or not), and general capability questions that do not reveal company records.
@@ -254,12 +257,15 @@ Quote reference settings rules:
 - Only after the user provides a quote reference, or explicitly confirms that quotes are auto-generated in Big Red Cloud, should you show a quote preview that is ready to post.
 - If the user asks for a preview only, still apply these rules; do not present an auto-generated quote reference when Quotes is Unknown.
 `;
+}
 function buildConnectionRefPersistenceRules() {
     return `
 Red connectionRef persistence rules (mandatory):
 - ${CONNECTION_REF_PERSISTENCE_GUIDANCE}
 - ${VIBE_MISTRAL_CONNECTION_REF_GUIDANCE}
 - ${START_COMPANY_CONNECTION_DO_NOT_USE_WHEN}
+
+${buildConnectionRefUserPresentationRules()}
 `;
 }
 function buildBatchProcessingRules(maxBatchItems) {
@@ -297,8 +303,12 @@ export function getBrcMcpServerInstructions(maxBatchItems, devModeActive = false
     const modeRules = devModeActive
         ? buildDevModeOperatorRules()
         : buildCustomerStaffModeRules();
-    return BRC_MCP_SERVER_INSTRUCTIONS_BASE + buildConnectionRefPersistenceRules() + buildBatchProcessingRules(maxBatchItems) + modeRules;
+    return buildBrcMcpServerInstructionsBase() + buildConnectionRefPersistenceRules() + buildBatchProcessingRules(maxBatchItems) + modeRules;
 }
 /** @deprecated Prefer getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode) at server startup. */
 export const BRC_MCP_SERVER_INSTRUCTIONS = getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode);
-export const API_KEY_REFUSAL_MESSAGE = "BRC company API keys cannot be shown, retrieved, repeated, validated, or reconstructed. They are stored only in this MCP session memory for about 2 hours and are never returned by tools. If you need to connect again, start a fresh company connection to generate a new secure Red connection link — do not reuse an old connection link. Do not paste API keys into chat. ";
+export function getApiKeyRefusalMessage() {
+    return buildApiKeyRefusalMessage();
+}
+/** @deprecated Prefer getApiKeyRefusalMessage() so session duration follows configured TTL. */
+export const API_KEY_REFUSAL_MESSAGE = getApiKeyRefusalMessage();

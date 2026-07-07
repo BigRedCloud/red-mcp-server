@@ -1,5 +1,6 @@
 import { RED_LOGO_URL } from "./red_assets.js";
 import { EXPIRED_CONNECTION_LINK_PAGE_MESSAGE } from "./connection_wording.js";
+import { formatCredentialTtlForUser } from "./connection_presentation.js";
 import type { FailedCompanyConnection } from "./connection_store_types.js";
 
 export function escapeHtml(value: string): string {
@@ -423,6 +424,7 @@ function brandBar(): string {
 }
 
 export function renderConnectPage(code: string): string {
+  const sessionDuration = formatCredentialTtlForUser();
   const content = `
       <div class="card">
         <p class="lead">
@@ -433,7 +435,7 @@ export function renderConnectPage(code: string): string {
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
           <div class="trust-notes">
             <div class="trust-note">
-              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (about two hours), and are never shown in chat.
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
             </div>
             <div class="trust-note">
               <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.

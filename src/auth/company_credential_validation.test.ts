@@ -12,6 +12,7 @@ import {
   COMPANY_FINANCIAL_YEAR_VALIDATION_PATH,
 } from "./credential_validation.js";
 import { validateAndPersistConnectedCompanies } from "./connection_persistence.js";
+import { buildConfirmConnectionCustomerMessage } from "./connection_presentation.js";
 import {
   claimConnectionCodeForSession,
   getConnectionStore,
@@ -330,6 +331,14 @@ test("confirm json response includes connectedCompanies and failedCompanies with
   assert.equal(body.failedCompanies[0]?.companyName, "Company A");
   assert.equal(text.includes("bad-key"), false);
   assert.match(body.connectionRef, /^redconn_/);
+
+  const confirmCustomerMessage = buildConfirmConnectionCustomerMessage({
+    connectedCompanies: result.connectedCompanies,
+    failedCompanies: result.failedCompanies,
+    connectionExpiresAt: result.connectionRefExpiresAt,
+  });
+  assert.equal(confirmCustomerMessage.includes("redconn_"), false);
+  assert.equal(confirmCustomerMessage.includes("connectionRef"), false);
 });
 
 test("later 401 for one company returns company_credential_invalid and removes it", async () => {
