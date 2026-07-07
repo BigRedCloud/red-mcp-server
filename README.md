@@ -1,6 +1,6 @@
 # Red MCP Server
 
-Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (such as Cursor or Claude Desktop) to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
+Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants and MCP clients, including Claude, ChatGPT, and [Vibe](https://chat.mistral.ai/chat), to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
 
 Instead of calling the Big Red Cloud REST API directly, users work in plain language. The server translates requests into structured API calls and applies safety checks around anything that changes data.
 
@@ -25,7 +25,7 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 ## Features
 
 - Secure company connection flow (session-scoped, no credentials in chat)
-- Pre-confirm API key validation on the connection page (form and CSV upload)
+- Pre-confirm validation of company connection credentials on the connection page (form and CSV upload)
 - Partial connection results — invalid keys are rejected before confirm and reported in `failedCompanies`
 - Hosted HTTP `connectionRef` for MCP clients that rotate session IDs (for example Vibe/Mistral); kept in tool JSON, not shown to end users
 - Read-only Big Red Cloud lookups
@@ -43,12 +43,12 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 
 Red is designed so that AI-driven access to accounting data stays controlled and auditable.
 
-- **No credentials in the repository.** API keys and secrets are never committed. Configuration is supplied at runtime through environment variables.
-- **No credentials in chat.** Customer credentials and API keys must not be pasted into chat. Companies are connected through the secure Red connection page instead.
+- **No credentials in the repository.** Company connection credentials and secrets are never committed. Configuration is supplied at runtime through environment variables.
+- **No credentials in chat.** Company connection credentials must not be pasted into chat. Companies are connected through the secure Red connection page, where credentials are entered directly — not in the chat window.
 - **Session-scoped connections.** A connected company is available only within the current MCP session and is held in session memory (or an optional shared connection store in hosted deployments), not persisted to disk in normal operation.
-- **Pre-confirm validation.** API keys submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired keys are not saved; they appear in `failedCompanies` at confirmation time.
+- **Pre-confirm validation.** Company connection credentials submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired credentials are not saved; they appear in `failedCompanies` at confirmation time.
 - **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless dev mode is enabled or the user explicitly asks for technical details.
-- **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, API key status) is derived from that value — not hardcoded.
+- **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, connection status) is derived from that value — not hardcoded.
 - **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a preview before posting has been shown.
 - **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
@@ -86,7 +86,7 @@ Key shared modules:
 - `src/shared.ts` — Big Red Cloud HTTP client, session-scoped connections, audit log, and helpers
 - `src/read_connection_metadata.ts` — connection status metadata echoed on tool responses (including `activeConnectionRef` for hosted clients)
 - `src/auth/connection_presentation.ts` — user-facing TTL wording and assistant presentation hints
-- `src/auth/credential_validation.ts` — BRC read validation before storing company API keys
+- `src/auth/credential_validation.ts` — BRC read validation before storing company connection credentials
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
 
@@ -160,7 +160,23 @@ Local stdio (the client spawns the process):
 }
 ```
 
-Hosted HTTP:
+Hosted HTTP (production):
+
+For the hosted Big Red Cloud Red service, customers should use:
+
+`https://red.bigredcloud.com/mcp`
+
+```json
+{
+  "mcpServers": {
+    "red-mcp-server": {
+      "url": "https://red.bigredcloud.com/mcp"
+    }
+  }
+}
+```
+
+Hosted HTTP (local development):
 
 ```json
 {
@@ -249,15 +265,17 @@ You can review the active policy at runtime with the `brc_get_deployment_policy`
 
 ## Connecting a company
 
-Customers should connect companies through the **secure Red connection page**. Credentials and API keys should not be sent through chat.
+Customers should connect companies through the **secure Red connection page**. Company connection credentials must not be sent through chat — they are entered only on the secure Red connection page, not in the chat window.
+
+Customers can get or regenerate their company API keys in Big Red Cloud under **Administration → API Keys**.
 
 The flow is:
 
 1. Ask the assistant to start a company connection. It returns a secure connection page link.
-2. On that page, enter a single company **or upload a CSV** for several companies at once. Credentials are entered on the secure page, not in chat.
-3. The server validates each API key against Big Red Cloud **before storing it**. Keys that fail validation are not saved.
+2. On that page, enter a single company **or upload a CSV** for several companies at once. Company connection credentials are entered on the secure page, not in chat.
+3. The server validates each credential against Big Red Cloud **before storing it**. Credentials that fail validation are not saved.
 4. Return to the chat and provide the **confirmation code** shown on the success page.
-5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid keys appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
+5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid credentials appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
 
 Connection links are **one-time use**. Connected companies stay available for the configured session duration (`BRC_API_KEY_TTL_MINUTES`, for example 240 minutes → about four hours), unless you start a new chat or reconnect.
 
@@ -301,6 +319,7 @@ Batch variants exist for the main create workflows and apply the same safety che
 - Tool availability may vary by deployment policy.
 
 ---
+
 ## Maintainers
 
 This project is maintained by the Big Red Cloud software development team.
@@ -309,27 +328,17 @@ This project is maintained by the Big Red Cloud software development team.
 
 ## Status
 
+Red is in BETA.
 Red is an open-source MCP integration for Big Red Cloud and is under active development. Tool availability and behaviour may change between releases, and some capabilities are gated by deployment policy.
 
 ---
 
 ## License
 
-This project is licensed under the Apache License 2.0.
-
----
-
-## Contributing
-
-Contributions are welcome. Please:
-
-- Open an issue to discuss significant changes before submitting a pull request.
-- Keep changes focused and include tests where practical (`npm test`).
-- Avoid introducing credentials, secrets, customer data, or personal data into the repository, tests, or fixtures.
+This project is licensed under the Apache License 2.0. See LICENSE for details.
 
 ---
 
 ## Support and responsible disclosure
 
 If you believe you have found a security issue, please report it to Big Red Cloud's support team.
-
