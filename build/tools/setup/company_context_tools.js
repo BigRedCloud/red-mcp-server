@@ -178,7 +178,7 @@ export function registerCompanyContextTools(server) {
             presentationHint: [
                 "Show customerMessage and the company names.",
                 presentation.presentationHint,
-                "For connection duration or time-left questions, use connectionDurationText, timeRemainingText, expiryTimeText, and expiryMessage from this response.",
+                "For connection duration, time-left, disconnect-time, or timezone questions, use connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from this response. Do not say you lack a live clock when timeRemainingText is present.",
             ].join(" "),
             assistantInstruction: presentation.assistantInstruction,
             companies,

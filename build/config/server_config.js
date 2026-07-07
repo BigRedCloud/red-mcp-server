@@ -27,9 +27,22 @@ function envList(name) {
         .filter(Boolean);
 }
 const MAX_BATCH_ITEMS_CAP = 100;
+function envTimezone(name, defaultValue) {
+    const fromNamed = process.env[name]?.trim();
+    if (fromNamed) {
+        return fromNamed;
+    }
+    const fromTz = process.env.TZ?.trim();
+    if (fromTz) {
+        return fromTz;
+    }
+    return defaultValue;
+}
 export const redServerConfig = {
     sessionTtlMinutes: envNumber("BRC_MCP_SESSION_TTL_MINUTES", 120),
     apiKeyTtlMinutes: envNumber("BRC_API_KEY_TTL_MINUTES", 120),
+    /** IANA timezone for user-facing connection expiry wording (e.g. Europe/Dublin). */
+    displayTimezone: envTimezone("BRC_DISPLAY_TIMEZONE", "Europe/Dublin"),
     rateLimitRequestsPerMinute: envNumber("BRC_RATE_LIMIT_REQUESTS_PER_MINUTE", 100),
     maxBatchItems: envNumberCapped("BRC_MAX_BATCH_ITEMS", 5, MAX_BATCH_ITEMS_CAP),
     maxAuditEntries: envNumber("BRC_MAX_AUDIT_ENTRIES", 500),

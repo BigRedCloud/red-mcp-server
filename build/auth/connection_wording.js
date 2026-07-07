@@ -46,9 +46,9 @@ export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
 ].join(" ");
 export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
     "Lists company contexts currently connected in this MCP server session.",
-    "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, or when the session expires.",
+    "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, when the session expires, or what timezone the expiry is in.",
     "Present the result to the user with the customerMessage text, company names, and expiryMessage when connected.",
-    "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeText, and expiryMessage from the response — do not say you do not know the current time.",
+    "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from the response — do not say you do not know the current time or that you lack a live clock when timeRemainingText is present. Do not ask the user to check their device clock. Do not say local time on its own.",
     "Do not show connectionRef, activeConnectionRef, redconn_ values, session IDs, or diagnostic metadata to normal users.",
     "Do not show raw ISO expiresAt or credentialType to normal users unless they specifically ask or dev mode is enabled.",
     "Connection credentials are never returned.",
