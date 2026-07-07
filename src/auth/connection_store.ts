@@ -10,6 +10,9 @@ import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import type { ConnectionStore } from "./connection_store_types.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
+import { issueConnectionRef } from "./connection_ref.js";
+import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
+import type { FailedCompanyConnection } from "./connection_store_types.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -150,6 +153,7 @@ export async function getBoundConnectionIdForSession(
 export async function resolveConnectionIdForActiveSession(args: {
   sessionId: string;
   clientKey?: string;
+  connectionRef?: string;
 }): Promise<string | null> {
   const result = await resolveConnectionIdForActiveSessionWithMeta(args);
   return result.connectionId;
@@ -158,21 +162,49 @@ export async function resolveConnectionIdForActiveSession(args: {
 export async function resolveConnectionIdForActiveSessionWithMeta(args: {
   sessionId: string;
   clientKey?: string;
+  connectionRef?: string;
 }): Promise<{
   connectionId: string | null;
   sessionBindingFound: boolean;
   clientClaimInherited: boolean;
+  connectionRefResolved: boolean;
+  connectionRefInvalid: boolean;
 }> {
   await ensureConnectionStoreInitialized();
 
   const normalizedSessionId = args.sessionId.trim();
   const store = getConnectionStore();
+
+  if (args.connectionRef?.trim()) {
+    const fromRef = await store.getConnectionIdForRef(args.connectionRef.trim());
+    if (!fromRef) {
+      return {
+        connectionId: null,
+        sessionBindingFound: false,
+        clientClaimInherited: false,
+        connectionRefResolved: false,
+        connectionRefInvalid: true,
+      };
+    }
+
+    await store.bindSessionToConnection(normalizedSessionId, fromRef);
+    return {
+      connectionId: fromRef,
+      sessionBindingFound: false,
+      clientClaimInherited: false,
+      connectionRefResolved: true,
+      connectionRefInvalid: false,
+    };
+  }
+
   const bound = await store.getConnectionIdForSession(normalizedSessionId);
   if (bound) {
     return {
       connectionId: bound,
       sessionBindingFound: true,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -181,6 +213,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
       connectionId: null,
       sessionBindingFound: false,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -193,6 +227,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
       connectionId: null,
       sessionBindingFound: false,
       clientClaimInherited: false,
+      connectionRefResolved: false,
+      connectionRefInvalid: false,
     };
   }
 
@@ -201,6 +237,8 @@ export async function resolveConnectionIdForActiveSessionWithMeta(args: {
     connectionId: inherited,
     sessionBindingFound: false,
     clientClaimInherited: true,
+    connectionRefResolved: false,
+    connectionRefInvalid: false,
   };
 }
 
@@ -223,7 +261,12 @@ export async function ensureConnectionIdForSession(
 
 export type ClaimConnectionResult = {
   connectionId: string;
+  connectedCompanies: string[];
+  failedCompanies: FailedCompanyConnection[];
+  /** @deprecated Use connectedCompanies */
   companyNames: string[];
+  connectionRef: string;
+  connectionRefExpiresAt: number;
 };
 
 export class ClaimConnectionError extends Error {
@@ -271,10 +314,14 @@ export async function claimConnectionCodeForSession(
     );
   }
 
-  const companies = await store.listConnectedCompanies(pending.connectionId);
-  if (companies.length === 0) {
+  const { connectedCompanies, failedCompanies } =
+    await revalidateStoredConnectionCompanies(pending.connectionId);
+
+  if (connectedCompanies.length === 0) {
     throw new ClaimConnectionError(
-      `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
+      failedCompanies.length > 0
+        ? "No companies could be connected because every submitted credential failed validation. Reconnect with current API keys on a fresh secure Red connection link, then confirm the confirmation code again."
+        : `No companies were found for that connection code. Submit the secure Red connection page from a fresh connection link first, then confirm the confirmation code again. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`,
       "no_companies"
     );
   }
@@ -291,9 +338,18 @@ export async function claimConnectionCodeForSession(
     });
   }
 
+  const { connectionRef, expiresAt: connectionRefExpiresAt } =
+    await issueConnectionRef(pending.connectionId);
+
+  const connectedCompaniesList = connectedCompanies;
+
   return {
     connectionId: pending.connectionId,
-    companyNames: companies.map((company) => company.companyName),
+    connectedCompanies: connectedCompaniesList,
+    failedCompanies,
+    companyNames: connectedCompaniesList,
+    connectionRef,
+    connectionRefExpiresAt,
   };
 }
 

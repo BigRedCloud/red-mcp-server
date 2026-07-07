@@ -45,6 +45,8 @@ test("technical details are only included when explicitly requested", () => {
 });
 
 test("missing company credential error tells the assistant to start a fresh secure link", () => {
+  delete process.env.RED_CONNECT_HTTP_MODE;
+
   assert.throws(
     () => getCredentialForCompany("MISSING-COMPANY-FOR-WORDING-TEST"),
     (error: unknown) => {

@@ -1,5 +1,6 @@
 import { RED_LOGO_URL } from "./red_assets.js";
 import { EXPIRED_CONNECTION_LINK_PAGE_MESSAGE } from "./connection_wording.js";
+import type { FailedCompanyConnection } from "./connection_store_types.js";
 
 export function escapeHtml(value: string): string {
   return value
@@ -508,7 +509,11 @@ export function renderExpiredLinkPage(): string {
   return pageShell("Connection link not available", brandBar(), content);
 }
 
-export function renderSuccessPage(connectedNames: string[], code: string): string {
+export function renderSuccessPage(
+  connectedNames: string[],
+  code: string,
+  failedCompanies: FailedCompanyConnection[] = []
+): string {
   const count = connectedNames.length;
   const summary =
     count === 1
@@ -519,12 +524,29 @@ export function renderSuccessPage(connectedNames: string[], code: string): strin
     .map((name) => `<li>${escapeHtml(name)}</li>`)
     .join("");
 
+  const failedSection =
+    failedCompanies.length > 0
+      ? `
+        <div class="next-step">
+          <strong>These companies were not connected:</strong>
+          <ul class="company-list">
+            ${failedCompanies
+              .map(
+                (failure) =>
+                  `<li>${escapeHtml(failure.companyName)} — ${escapeHtml(failure.message)}</li>`
+              )
+              .join("")}
+          </ul>
+        </div>`
+      : "";
+
   const content = `
       <div class="card">
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
         <p class="centered">${escapeHtml(summary)}</p>
         <ul class="company-list">${listItems}</ul>
+        ${failedSection}
         <div class="next-step">
           Connection complete. Return to this chat and copy/paste this confirmation code: <strong>Confirm connection code ${escapeHtml(code)}</strong>
         </div>

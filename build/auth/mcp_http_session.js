@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSessionWithMeta, runWithMcpSessionContext, } from "./connection_store.js";
-import { ensureCredentialsForCurrentSession, runWithHttpClientKey, resolveSessionKeyStore, runWithHttpRequestSessionId, runWithSessionKeyStore, } from "../shared.js";
+import { ensureCredentialsForCurrentSession, normaliseCompanyName, resolveSessionKeyStore, runWithActiveConnectionRef, runWithHttpClientKey, runWithHttpRequestSessionId, runWithSessionKeyStore, } from "../shared.js";
+import { extractConnectionRefFromToolArgs, prefixConnectionRef, } from "./connection_ref.js";
 export const MCP_SESSION_HEADER_NAMES = [
     "mcp-session-id",
     "x-mcp-session-id",
@@ -16,6 +17,29 @@ export const MCP_CLIENT_IDENTITY_HEADER_NAMES = [
     "x-vibe-user-id",
     "x-vibe-session-id",
 ];
+/**
+ * Safe staging/debug check for a healthy Vibe connectionRef call.
+ * Does not log or expose secrets — only boolean flags and counts.
+ */
+export function assessVibeConnectionHealth(diagnostic) {
+    const checks = {
+        connectionRefPresent: diagnostic.connectionRefPresent,
+        connectionRefResolved: diagnostic.connectionRefResolved,
+        connectionIdPresent: diagnostic.connectionIdPresent,
+        hasCredentials: diagnostic.credentialCount > 0,
+        connectionRefInvalid: diagnostic.connectionRefInvalid,
+    };
+    const healthy = checks.connectionRefPresent &&
+        checks.connectionRefResolved &&
+        checks.connectionIdPresent &&
+        checks.hasCredentials &&
+        !checks.connectionRefInvalid;
+    return {
+        healthy,
+        checks,
+        shouldReconnect: false,
+    };
+}
 function sessionDebugEnabled() {
     const configured = process.env.RED_CONNECT_SESSION_DEBUG?.trim().toLowerCase();
     if (configured === "false") {
@@ -117,11 +141,12 @@ export function logMcpSessionDiagnostic(details) {
     }
     console.info("Red MCP session:", JSON.stringify(details));
 }
-export async function prepareHttpToolSessionScope(sessionId, keyStore, clientKey) {
+export async function prepareHttpToolSessionScope(sessionId, keyStore, clientKey, connectionRef) {
     await ensureConnectionStoreInitialized();
     const resolution = await resolveConnectionIdForActiveSessionWithMeta({
         sessionId,
         clientKey,
+        connectionRef,
     });
     return {
         sessionId,
@@ -147,7 +172,7 @@ export async function runWithHttpToolSession(scope, fn) {
         connectionId: scope.connectionId,
     }, runScoped)));
 }
-export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, extra, fn) {
+export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, extra, fn, options) {
     if (!process.env.RED_CONNECT_HTTP_MODE) {
         return fn();
     }
@@ -157,8 +182,22 @@ export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, 
     }
     const store = keyStore ?? resolveSessionKeyStore(sessionId);
     const clientKey = buildHttpClientKeyFromExtra(extra);
-    const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey);
-    return runWithHttpToolSession(scope, fn);
+    const connectionRef = options?.connectionRef;
+    const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey, connectionRef);
+    return runWithActiveConnectionRef(connectionRef, () => runWithHttpToolSession(scope, async () => {
+        await ensureCredentialsForCurrentSession(options?.companyName);
+        await logToolSessionDiagnosticIfNeeded({
+            transportSessionId,
+            sessionId,
+            keyStore: store,
+            scope,
+            extra,
+            connectionRef,
+            companyName: options?.companyName,
+            toolName: options?.toolName,
+        });
+        return fn();
+    }));
 }
 export function buildMcpSessionDiagnostic(args) {
     const headers = args.extra?.requestInfo?.headers ?? {};
@@ -178,7 +217,7 @@ export function buildMcpSessionDiagnostic(args) {
             sessionIdSource = "extra-header";
         }
     }
-    return {
+    const diagnostic = {
         transportSessionId: prefixId(args.transportSessionId),
         resolvedSessionId: prefixId(resolvedSessionId),
         sessionIdSource,
@@ -186,17 +225,58 @@ export function buildMcpSessionDiagnostic(args) {
         connectionIdPrefix: prefixId(args.resolution?.connectionId ?? undefined),
         sessionBindingFound: args.resolution?.sessionBindingFound ?? false,
         clientClaimInherited: args.resolution?.clientClaimInherited ?? false,
+        connectionRefResolved: args.resolution?.connectionRefResolved ?? false,
+        connectionRefInvalid: args.resolution?.connectionRefInvalid ?? false,
+        connectionRefPresent: Boolean(args.connectionRef?.trim()),
+        connectionRefPrefix: prefixConnectionRef(args.connectionRef),
         clientKeyPresent: Boolean(buildHttpClientKeyFromExtra(args.extra)),
         clientIdentityHeaderNamesPresent: listPresentHeaderNames(headers, MCP_CLIENT_IDENTITY_HEADER_NAMES),
         mcpSessionHeaderNamesPresent: listPresentHeaderNames(headers, MCP_SESSION_HEADER_NAMES),
         credentialCount: args.credentialCount ?? 0,
         companiesLoaded: args.companiesLoaded ?? [],
+        requestedCompany: args.requestedCompany,
+        requestedCompanyLoaded: args.requestedCompanyLoaded,
+        toolName: args.toolName,
     };
+    diagnostic.vibeConnectionHealthy = assessVibeConnectionHealth(diagnostic).healthy;
+    return diagnostic;
+}
+function listLoadedCompanyNames(keyStore) {
+    return Array.from(keyStore.values()).map((entry) => entry.companyName);
+}
+async function logToolSessionDiagnosticIfNeeded(args) {
+    if (!sessionDebugEnabled()) {
+        return;
+    }
+    const companiesLoaded = listLoadedCompanyNames(args.keyStore);
+    const requestedCompany = args.companyName?.trim();
+    const requestedCompanyLoaded = requestedCompany
+        ? args.keyStore.has(normaliseCompanyName(requestedCompany))
+        : undefined;
+    logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
+        transportSessionId: args.transportSessionId ?? args.sessionId,
+        extra: args.extra,
+        resolution: args.scope.resolution,
+        connectionRef: args.connectionRef,
+        credentialCount: companiesLoaded.length,
+        companiesLoaded,
+        requestedCompany,
+        requestedCompanyLoaded,
+        toolName: args.toolName,
+    }));
 }
 /**
  * Wraps an MCP tool handler so HTTP tool calls re-bind the active session using
  * transport session id and/or MCP SDK request extra metadata.
  */
 export function wrapHttpSessionAwareToolHandler(handler, options) {
-    return async (args, extra) => runHttpToolSessionFromExtra(options?.transportSessionId, options?.keyStore, extra, () => handler(args, extra));
+    return async (args, extra) => {
+        const connectionRef = extractConnectionRefFromToolArgs(args);
+        const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
+        return runHttpToolSessionFromExtra(options?.transportSessionId, options?.keyStore, extra, () => handler(args, extra), {
+            connectionRef,
+            companyName,
+            toolName: options?.toolName,
+        });
+    };
 }

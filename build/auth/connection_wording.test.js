@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderExpiredLinkPage, renderSuccessPage } from "./connection_page.js";
-import { DO_NOT_PASTE_API_KEY_IN_CHAT, DO_NOT_REUSE_OLD_CONNECTION_LINK, FRESH_CONNECTION_ASSISTANT_GUIDANCE, FRESH_CONNECTION_LINK_CLAIM_GUIDANCE, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, formatStartConnectionResponse, } from "./connection_wording.js";
+import { DO_NOT_PASTE_API_KEY_IN_CHAT, DO_NOT_REUSE_OLD_CONNECTION_LINK, FRESH_CONNECTION_ASSISTANT_GUIDANCE, FRESH_CONNECTION_LINK_CLAIM_GUIDANCE, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, CONNECTION_REF_PERSISTENCE_GUIDANCE, VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, formatStartConnectionResponse, } from "./connection_wording.js";
 function assertFreshConnectionWording(text) {
     assert.match(text, /fresh/i);
     assert.match(text, /secure Red connection link/i);
@@ -14,7 +14,7 @@ test("fresh connection assistant guidance requires a new link and forbids reuse 
 });
 test("start company connection tool description covers connect, reconnect, retry, expired, and stale links", () => {
     const description = START_COMPANY_CONNECTION_TOOL_DESCRIPTION;
-    assert.match(description, /first-time connect/i);
+    assert.match(description, /first-time connect|no active company connection/i);
     assert.match(description, /reconnect/i);
     assert.match(description, /try again after a failed connection/i);
     assert.match(description, /expired session credentials/i);
@@ -22,6 +22,32 @@ test("start company connection tool description covers connect, reconnect, retry
     assert.match(description, /generates a fresh one-time secure Red connection link/i);
     assert.match(description, /never reuse a previous connection link/i);
     assert.match(description, /paste an API key into chat/i);
+});
+test("start company connection tool description forbids unnecessary reconnect after working connectionRef", () => {
+    const description = START_COMPANY_CONNECTION_TOOL_DESCRIPTION;
+    assert.match(description, /Do not call this tool when a valid connectionRef/i);
+    assert.match(description, /empty list/i);
+    assert.match(description, /successful company data retrieval/i);
+});
+test("connectionRef persistence guidance keeps the same ref and treats empty data as not expired", () => {
+    assert.match(CONNECTION_REF_PERSISTENCE_GUIDANCE, /keep using the same connectionRef/i);
+    assert.match(CONNECTION_REF_PERSISTENCE_GUIDANCE, /empty lists/i);
+    assert.match(CONNECTION_REF_PERSISTENCE_GUIDANCE, /no sales or purchases/i);
+    assert.match(CONNECTION_REF_PERSISTENCE_GUIDANCE, /comparing companies/i);
+});
+test("Vibe/Mistral guidance forbids reconnect after successful lookups", () => {
+    assert.match(VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, /Vibe\/Mistral/i);
+    assert.match(VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, /brc_list_sales_invoices/i);
+    assert.match(VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, /Do not call brc_start_company_connection/i);
+});
+test("confirm company connection tool description tells models to keep connectionRef", () => {
+    assert.match(CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, /connectionRef/i);
+    assert.match(CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, /do not call brc_start_company_connection/i);
+});
+test("start connection do-not-use guidance is explicit", () => {
+    assert.match(START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, /valid connectionRef/i);
+    assert.match(START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, /empty list/i);
+    assert.match(START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, /successful company data retrieval/i);
 });
 test("start connection response tells the user not to reuse an older link", () => {
     const text = formatStartConnectionResponse("https://example.test/connect?code=abc");

@@ -25,6 +25,7 @@ test("completed connection code can be claimed and bound to a session", async ()
             companyName: "Company A",
             apiKey: "test-api-key-company-a",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     const result = await claimConnectionCodeForSession(` ${code} `, ` ${sessionId} `, {
@@ -32,6 +33,7 @@ test("completed connection code can be claimed and bound to a session", async ()
     });
     assert.equal(result.connectionId, connectionId);
     assert.deepEqual(result.companyNames, ["Company A"]);
+    assert.match(result.connectionRef, /^redconn_[0-9a-f]{48}$/);
     assert.equal(await store.getConnectionIdForSession(sessionId), connectionId);
     assert.equal(await store.getRecentClientClaim(clientKey, 60_000), connectionId);
 });
@@ -102,6 +104,7 @@ test("connection credentials are isolated by connection ID", async () => {
             companyName: "Company A",
             apiKey: "api-key-a",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     await store.saveConnectedCompanies(connectionB, [
@@ -109,6 +112,7 @@ test("connection credentials are isolated by connection ID", async () => {
             companyName: "Company B",
             apiKey: "api-key-b",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     assert.equal(await store.getCredentialForCompany(connectionA, "Company B"), null);

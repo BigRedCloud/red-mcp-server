@@ -6,6 +6,8 @@ export type StoredCompanyCredential = {
   expiresAt: number;
   createdAt: number;
   updatedAt: number;
+  /** Set when BRC validation succeeded before persistence (CSV / connect form). */
+  credentialValidatedAt?: number;
 };
 
 export type PendingConnectionRecord = {
@@ -20,6 +22,19 @@ export type CompanyCredentialInput = {
   companyName: string;
   apiKey: string;
   expiresAt: number;
+  credentialValidatedAt?: number;
+};
+
+export type FailedCompanyConnection = {
+  companyName: string;
+  connected: false;
+  reason:
+    | "invalid_or_expired_api_key"
+    | "unauthorized"
+    | "forbidden"
+    | "not_found"
+    | "validation_failed";
+  message: string;
 };
 
 export type ConnectionStoreDiagnostics = {
@@ -66,6 +81,14 @@ export interface ConnectionStore {
     maxAgeMs: number
   ): Promise<string | null>;
 
+  createConnectionRef(args: {
+    ref: string;
+    connectionId: string;
+    expiresAt: number;
+  }): Promise<void>;
+
+  getConnectionIdForRef(ref: string): Promise<string | null>;
+
   saveConnectedCompanies(
     connectionId: string,
     companies: CompanyCredentialInput[]
@@ -86,6 +109,17 @@ export interface ConnectionStore {
   ): Promise<boolean>;
 
   clearAllConnectedCompanies(connectionId: string): Promise<number>;
+
+  saveFailedCompanyValidations(
+    connectionId: string,
+    failures: FailedCompanyConnection[]
+  ): Promise<void>;
+
+  listFailedCompanyValidations(
+    connectionId: string
+  ): Promise<FailedCompanyConnection[]>;
+
+  clearFailedCompanyValidations(connectionId: string): Promise<void>;
 
   getDiagnostics(args: {
     connectionId?: string;

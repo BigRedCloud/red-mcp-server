@@ -42,6 +42,7 @@ test("MemoryConnectionStore normalises session IDs and company names", async () 
             companyName: " Company A ",
             apiKey: "secret-api-key",
             expiresAt: Date.now() + 60_000,
+            credentialValidatedAt: Date.now(),
         },
     ]);
     const credential = await store.getCredentialForCompany(connectionId, "company a");

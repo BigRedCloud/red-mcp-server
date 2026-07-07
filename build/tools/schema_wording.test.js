@@ -67,6 +67,12 @@ test("connection tools use 'confirmation code', not 'confirmation command'", () 
         assert.equal(/confirmation command/i.test(tool.description), false);
     }
 });
+test("brc_confirm_company_connection returns connectionRef guidance", () => {
+    const confirm = getTool("brc_confirm_company_connection");
+    assert.match(confirm.description, /connectionRef/i);
+    assert.match(confirm.description, /rotates session ids/i);
+    assert.match(confirm.description, /do not call brc_start_company_connection/i);
+});
 test("brc_start_company_connection guides reconnect and fresh-link behaviour", () => {
     const { description } = getTool("brc_start_company_connection");
     assert.match(description, /reconnect/i);
@@ -75,11 +81,15 @@ test("brc_start_company_connection guides reconnect and fresh-link behaviour", (
     assert.match(description, /expired session credentials/i);
     assert.match(description, /stale secure connection link/i);
     assert.match(description, /paste an API key into chat/i);
+    assert.match(description, /Do not call this tool when a valid connectionRef/i);
+    assert.match(description, /empty list/i);
 });
 test("brc_list_company_contexts says connection credentials, not API keys", () => {
     const { description } = getTool("brc_list_company_contexts");
     assert.match(description, /connection credentials are never returned/i);
     assert.equal(/api keys are never returned/i.test(description), false);
+    assert.match(description, /connectionRef/i);
+    assert.match(description, /not a reason to start a new connection/i);
 });
 test("brc_batch_sales_invoices exposes batch-level confirmCrAnalysisCategory", () => {
     const { schema, description } = getTool("brc_batch_sales_invoices");

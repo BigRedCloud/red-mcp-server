@@ -9,6 +9,27 @@ export const DO_NOT_REUSE_OLD_CONNECTION_LINK =
 export const DO_NOT_PASTE_API_KEY_IN_CHAT =
   "Do not ask the user to paste an API key into chat.";
 
+export const CONNECTION_REF_PERSISTENCE_GUIDANCE = [
+  "If brc_confirm_company_connection returned a connectionRef, pass that exact value on every later tool call in this chat.",
+  "When a tool call succeeds with connectionRef, keep using the same connectionRef — do not call brc_start_company_connection again.",
+  "Do not treat empty lists, zero results, or partial data as an expired connection.",
+  "If one company has no sales or purchases, report no data for that company — not a connection expiry.",
+  "When comparing companies, missing data for one company is zero or unknown data, not a reconnect prompt.",
+  "Start a new connection only when there is no active connection, connectionRef is missing or rejected, or the user explicitly asks to connect or reconnect.",
+].join(" ");
+
+export const VIBE_MISTRAL_CONNECTION_REF_GUIDANCE = [
+  "Vibe/Mistral rotates MCP session ids — always pass connectionRef on every tool call after confirm.",
+  "If brc_list_sales_invoices, brc_list_purchases, or other lookups succeed with connectionRef, the connection is active.",
+  "Do not call brc_start_company_connection after successful lookups just because another company returned no rows or an empty list.",
+].join(" ");
+
+export const START_COMPANY_CONNECTION_DO_NOT_USE_WHEN = [
+  "Do not call this tool when a valid connectionRef from brc_confirm_company_connection is already available and recent tool calls succeeded with it.",
+  "Do not call this tool because a lookup returned no rows, partial data, or an empty list — that means no matching records, not an expired connection.",
+  "Do not call this tool after successful company data retrieval unless the user explicitly asks to connect, reconnect, or add more companies.",
+].join(" ");
+
 export const FRESH_CONNECTION_ASSISTANT_GUIDANCE = [
   "To continue, ask the user to start a fresh company connection and generate a new secure Red connection link and confirmation code.",
   DO_NOT_REUSE_OLD_CONNECTION_LINK,
@@ -17,13 +38,38 @@ export const FRESH_CONNECTION_ASSISTANT_GUIDANCE = [
 
 export const START_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
   "Starts the secure Red company connection flow and generates a fresh one-time secure Red connection link and confirmation code.",
-  "Use for first-time connect, reconnect, try again after a failed connection, expired session credentials, or when an old, used, or stale secure connection link no longer works.",
+  "Use only when there is no active company connection, no valid connectionRef, the user explicitly asks to connect or reconnect, try again after a failed connection, expired session credentials, or when an old, used, or stale secure connection link no longer works.",
+  START_COMPANY_CONNECTION_DO_NOT_USE_WHEN,
   "Always call this tool again to generate a new link — never reuse a previous connection link.",
   "Returns a one-time connection page URL (no time expiry, but each link works only once).",
   "On that page the user can enter a single company or upload a CSV for multiple companies — never in chat.",
   "After completing the secure page, the user should return to this chat and provide (copy/paste) the confirmation code shown on the success page.",
   DO_NOT_PASTE_API_KEY_IN_CHAT.replace("ask the user to ", ""),
 ].join(" ");
+
+export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
+  "Claims a completed secure Red connection code for the current MCP session.",
+  "Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser).",
+  "Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral).",
+  "After confirm succeeds, keep passing the same connectionRef on every later tool call — do not call brc_start_company_connection while that connectionRef still works.",
+  "Never exposes connection credentials.",
+].join(" ");
+
+export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
+  "Lists company contexts currently connected in this MCP server session.",
+  "Present the result to the user with the customerMessage text and the plain company names.",
+  "Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask.",
+  "Connection credentials are never returned.",
+  "If you have connectionRef from brc_confirm_company_connection, pass it on this call when the MCP client rotates session ids.",
+  "An empty list with a working connectionRef means no companies are bound yet — not a reason to start a new connection if other tools already succeeded with the same connectionRef.",
+].join(" ");
+
+export const CONFIRM_CONNECTION_SUCCESS_LINES = [
+  "Keep using this same connectionRef on every later tool call in this chat.",
+  "Do not call brc_start_company_connection again while this connectionRef works.",
+  "Empty sales, purchases, or other lists mean no matching records for that company — not an expired connection.",
+  VIBE_MISTRAL_CONNECTION_REF_GUIDANCE,
+] as const;
 
 export const START_CONNECTION_RESPONSE_LINES = [
   "To connect your Big Red Cloud companies, open this fresh secure Red connection page:",

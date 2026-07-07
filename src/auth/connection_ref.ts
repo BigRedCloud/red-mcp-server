@@ -1,0 +1,83 @@
+import crypto from "node:crypto";
+import { z } from "zod";
+
+import { getApiKeyExpirationMs } from "../config/server_config.js";
+import { ensureConnectionStoreInitialized, getConnectionStore } from "./connection_store.js";
+
+export const CONNECTION_REF_PREFIX = "redconn_";
+
+export const connectionRefSchema = z
+  .string()
+  .optional()
+  .describe(
+    "Opaque Red connection reference returned by brc_confirm_company_connection. Pass this exact value on every later tool call when the MCP client rotates session ids (for example Vibe/Mistral). Keep reusing the same connectionRef after successful tool calls — do not start a new connection because a lookup returned empty or partial data. It is not an API key and does not contain credentials."
+  );
+
+export const CONNECTION_REF_NOT_PASSED_MESSAGE = [
+  "Your Red connection may still be active, but Vibe did not pass connectionRef on this tool call.",
+  "Use the most recent activeConnectionRef from this chat as connectionRef.",
+  "Only start a new connection if no activeConnectionRef is available in this chat or the ref is rejected as expired/invalid.",
+].join(" ");
+
+export const CONNECTION_REF_INVALID_MESSAGE = [
+  "The Red connection reference was passed but is invalid or has expired.",
+  "Run brc_confirm_company_connection again and pass the new connectionRef on subsequent tool calls.",
+  "If the MCP client keeps rotating sessions without preserving connectionRef, explain that this platform cannot keep a stable Red MCP session and the user may need a client that preserves MCP sessions.",
+].join(" ");
+
+export function isConnectionRefFormat(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith(CONNECTION_REF_PREFIX) &&
+    trimmed.length === CONNECTION_REF_PREFIX.length + 48
+  );
+}
+
+export function extractConnectionRefFromToolArgs(
+  args: Record<string, unknown>
+): string | undefined {
+  const value = args.connectionRef;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+export function prefixConnectionRef(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return value.slice(0, Math.min(16, value.length));
+}
+
+export async function issueConnectionRef(connectionId: string): Promise<{
+  connectionRef: string;
+  expiresAt: number;
+}> {
+  await ensureConnectionStoreInitialized();
+
+  const connectionRef = `${CONNECTION_REF_PREFIX}${crypto.randomBytes(24).toString("hex")}`;
+  const expiresAt = Date.now() + getApiKeyExpirationMs();
+
+  await getConnectionStore().createConnectionRef({
+    ref: connectionRef,
+    connectionId,
+    expiresAt,
+  });
+
+  return { connectionRef, expiresAt };
+}
+
+export async function resolveConnectionIdFromRef(
+  connectionRef: string | undefined
+): Promise<string | null> {
+  if (!connectionRef?.trim()) {
+    return null;
+  }
+
+  await ensureConnectionStoreInitialized();
+  return getConnectionStore().getConnectionIdForRef(connectionRef.trim());
+}

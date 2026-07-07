@@ -31,10 +31,15 @@ import {
   getConnectionStore,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
+  CONFIRM_CONNECTION_SUCCESS_LINES,
   formatStartConnectionResponse,
   START_COMPANY_CONNECTION_TOOL_DESCRIPTION,
+  CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
+  LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
 } from "../../auth/connection_wording.js";
+import { CONNECTION_REF_REMINDER } from "../../read_connection_metadata.js";
 
 export function registerCompanyContextTools(server: ServerType) {
   server.tool(
@@ -64,7 +69,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_confirm_company_connection",
-    "Claims a completed secure Red connection code for the current MCP session. Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser). Never exposes connection credentials.",
+    CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION,
     {
       code: z
         .string()
@@ -93,7 +98,7 @@ export function registerCompanyContextTools(server: ServerType) {
         });
         await ensureCredentialsForCurrentSession();
 
-        const count = result.companyNames.length;
+        const count = result.connectedCompanies.length;
         const summary =
           count === 1
             ? "1 company is now connected in this session:"
@@ -101,16 +106,37 @@ export function registerCompanyContextTools(server: ServerType) {
 
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
 
-        return textResponse(
-          [
-            "Connection confirmed.",
-            "",
-            summary,
-            ...result.companyNames.map((name) => `- ${name}`),
-            "",
-            "You can now ask for connected companies or work with your company records.",
-          ].join("\n")
-        );
+        const customerMessage = [
+          "Connection confirmed.",
+          "",
+          summary,
+          ...result.connectedCompanies.map((name) => `- ${name}`),
+          ...(result.failedCompanies.length > 0
+            ? [
+                "",
+                "These companies were not connected:",
+                ...result.failedCompanies.map(
+                  (failure) => `- ${failure.companyName}: ${failure.message}`
+                ),
+              ]
+            : []),
+          "",
+          "Save this Red connection reference and pass it as connectionRef on every later tool call in this chat:",
+          result.connectionRef,
+          "",
+          ...CONFIRM_CONNECTION_SUCCESS_LINES,
+          "",
+          "You can now ask for connected companies or work with your company records.",
+        ].join("\n");
+
+        return jsonResponse({
+          message: "Connection confirmed.",
+          connectedCompanies: result.connectedCompanies,
+          failedCompanies: result.failedCompanies,
+          connectionRef: result.connectionRef,
+          connectionRefReminder: CONNECTION_REF_REMINDER,
+          customerMessage,
+        });
       } catch (error) {
         if (error instanceof ClaimConnectionError) {
           return textResponse(error.message);
@@ -146,7 +172,16 @@ export function registerCompanyContextTools(server: ServerType) {
             expiresAt: new Date(credential.expiresAt).toISOString(),
             message: API_KEY_REFUSAL_MESSAGE,
           });
-        } catch {
+        } catch (error) {
+          const connectedNames = listConnectedCompanyNames();
+          if (connectedNames.length > 0) {
+            return jsonResponse({
+              ...buildCompanyNotConnectedResponse(companyName, {
+                otherCompaniesConnected: true,
+              }),
+            });
+          }
+
           return jsonResponse({
             companyName: companyName.trim(),
             connected: false,
@@ -217,7 +252,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
   server.tool(
     "brc_list_company_contexts",
-    "Lists company contexts currently connected in this MCP server session. Present the result to the user with the customerMessage text and the plain company names. Do not show technical fields such as credentialType or expiresAt to normal users unless they specifically ask. Connection credentials are never returned.",
+    LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION,
     {},
     async () => {
       await ensureCredentialsForCurrentSession();
@@ -239,7 +274,7 @@ export function registerCompanyContextTools(server: ServerType) {
 
       const customerMessage =
         connectedNames.length === 0
-          ? "No companies are connected in this session yet. Start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
+          ? "No companies are connected in this session yet. If you have a connectionRef from brc_confirm_company_connection, pass it on this call. If other tools already succeeded with that connectionRef, the connection is active — do not start a new connection. Otherwise start a fresh company connection to generate a new secure Red connection link, then tell me which company you would like to work with."
           : [
               "You have the following companies connected in this session:",
               ...connectedNames.map((name) => `- ${name}`),

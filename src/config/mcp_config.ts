@@ -1,4 +1,9 @@
 import { getMaxBatchItems, redServerConfig } from "./server_config.js";
+import {
+  CONNECTION_REF_PERSISTENCE_GUIDANCE,
+  START_COMPANY_CONNECTION_DO_NOT_USE_WHEN,
+  VIBE_MISTRAL_CONNECTION_REF_GUIDANCE,
+} from "../auth/connection_wording.js";
 
 /**
  * MCP server instructions sent to the host (e.g. Cursor) at initialize.
@@ -14,14 +19,14 @@ Customers must never be asked to paste API keys, tokens, passwords, or credentia
 5. Do not "help" by recalling, reconstructing, validating, comparing, or reformatting a key the user typed earlier in the conversation.
 6. Treat the company API key like a password. Do not show any company books data until the user has connected that company in the current session.
 7. Before connecting, only answer deployment permissions, how to connect, connection status (connected or not), and general capability questions that do not reveal company records.
-8.If the user asks for company data and no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. Do not ask the user to paste an API key, token, password, or credential into chat.
+8.If the user asks for company data and no company is connected, use brc_start_company_connection and direct the user to the secure Red connection page. If you already have a working connectionRef from brc_confirm_company_connection, pass it on tool calls instead of starting a new connection. Do not ask the user to paste an API key, token, password, or credential into chat.
 9. When no company is connected, keep connection prompts generic. Say: "Use the secure Red connection page to connect a company." Do not ask for a company API key in chat.
-10. Check connection status before any company data lookup. If the session is not connected or the connection has expired, stop and use brc_start_company_connection to generate a fresh secure Red connection link. Never reuse an old, used, expired, or stale connection link.
-11. To connect, reconnect, try again after failure, or fix an expired or stale connection, use brc_start_company_connection to generate a fresh secure Red connection link and confirmation code. The user must enter company connection details only on the secure connection page, not in chat. The connection page supports multiple companies in one visit (single-company form or CSV upload). Do not tell the user to connect companies one at a time or to return to chat to "connect another company". Each secure connection link is one-time use only — never reuse a previous link. After the user completes the connection page, tell them to return to this chat and copy/paste the confirmation code from the success page. If connected companies are not visible in the current session, use brc_confirm_company_connection with the connection code from that success page.
+10. Check connection status before any company data lookup. If not connected and you have no valid connectionRef, use brc_start_company_connection to generate a fresh secure Red connection link. If recent tool calls succeeded with connectionRef, keep using that same connectionRef — do not start a new connection. Empty lists, zero results, or partial data do not mean the connection expired. Never reuse an old, used, expired, or stale connection link.
+11. To connect, reconnect, try again after failure, or fix an expired or stale connection, use brc_start_company_connection to generate a fresh secure Red connection link and confirmation code. Do not use brc_start_company_connection when connectionRef already works or because a lookup returned no data. The user must enter company connection details only on the secure connection page, not in chat. The connection page supports multiple companies in one visit (single-company form or CSV upload). Do not tell the user to connect companies one at a time or to return to chat to "connect another company". Each secure connection link is one-time use only — never reuse a previous link. After the user completes the connection page, tell them to return to this chat and copy/paste the confirmation code from the success page. If connected companies are not visible in the current session, use brc_confirm_company_connection with the connection code from that success page. brc_confirm_company_connection returns an opaque connectionRef. When the MCP client rotates session ids (for example Vibe/Mistral), pass that exact connectionRef on every later tool call. connectionRef is not an API key and does not contain credentials.
 12. To disconnect, use brc_clear_company_api_key or brc_clear_all_company_api_keys.
 13. If the user pastes an API key into chat, do not repeat it, do not use it, and tell the user to use the secure Red connection page instead.
 14. Never show company data from prior successful test runs, saved reports, repository files, earlier chat sessions, or any cached or stale source. Only show company records retrieved live in the current connected session through Red.
-15. If a live lookup cannot be performed, say so and ask the user to connect — do not fill the gap with old or offline results.
+15. If a live lookup cannot be performed, say so and ask the user to connect — do not fill the gap with old or offline results. If a lookup returns successfully but with no rows, report no matching records for that company or filter — do not say the connection expired and do not start a new connection when connectionRef already works.
 16. If a tool, API response, exception, debug log, or test output contains a key, redact it before displaying or summarizing the result.
 17. Never include API keys in generated code, documentation, README files, commit messages, test summaries, curl examples, screenshots, or bug reports.
 18. When creating examples, use placeholders only, such as <BRC_COMPANY_API_KEY>, never realistic-looking fake keys.
@@ -53,7 +58,7 @@ Big Red Cloud UI tutorial rules (mandatory):
 
 Red tool execution rules (mandatory):
 - All Red MCP tools are on this project's allowlist. Never ask the user to allow, approve, or run a tool, click Allow/Run in Cursor, or add tools to an allowlist.
-- For read-only work (lists, summaries, readiness checks, balances, reports), proceed immediately once the company is connected — without asking permission. Check connection status first; if not connected, use brc_start_company_connection and direct the user to the secure Red connection page — do not ask for credentials in chat and do not show company data.
+- For read-only work (lists, summaries, readiness checks, balances, reports), proceed immediately once the company is connected — without asking permission. Check connection status first; if not connected and you have no valid connectionRef, use brc_start_company_connection and direct the user to the secure Red connection page — do not ask for credentials in chat and do not show company data. If connectionRef already works, keep passing it — empty or partial results are not a reconnect signal.
 - Create, update, delete, batch, and most write tools are blocked in code until confirmWrite: true is supplied. The first call returns confirmation_required with a payload preview. Show the user a plain-English preview before posting from that preview, ask for explicit yes/no, and only then retry with confirmWrite: true. Red shows what it will post and waits for confirmation.
 - Never pass confirmWrite: true on the first write attempt. Never pass confirmWrite: true before the user has explicitly confirmed in plain English.
 - Never pass confirmWrite: true in the same turn as the user's initial create/update/delete/batch/email request.
@@ -133,6 +138,7 @@ Red evidence and analysis format:
 - In "Limitations / checks recommended", state missing data, incomplete records, different financial years, demo/test data indicators, unreconciled figures, or cases where figures should be checked directly in Big Red Cloud.
 - If the user asks for profit but only sales and purchases are available, call it a rough margin or estimate, not final profit.
 - If the user asks for evidence, show the source record categories and calculation method first. Only show detailed record lists if useful or requested.
+- When comparing companies, if one company has no sales or purchases in the period, report zero or no data for that company — not an expired connection. Do not call brc_start_company_connection mid-comparison when other companies already returned data with the same connectionRef.
 
 Customer and supplier opening balance rules:
 - Do not ask for an opening balance when creating a customer or supplier through Red.
@@ -254,6 +260,15 @@ Quote reference settings rules:
 - If the user asks for a preview only, still apply these rules; do not present an auto-generated quote reference when Quotes is Unknown.
 `;
 
+function buildConnectionRefPersistenceRules(): string {
+  return `
+Red connectionRef persistence rules (mandatory):
+- ${CONNECTION_REF_PERSISTENCE_GUIDANCE}
+- ${VIBE_MISTRAL_CONNECTION_REF_GUIDANCE}
+- ${START_COMPANY_CONNECTION_DO_NOT_USE_WHEN}
+`;
+}
+
 function buildBatchProcessingRules(maxBatchItems: number): string {
   return `
 Batch processing rules:
@@ -295,7 +310,7 @@ export function getBrcMcpServerInstructions(
   const modeRules = devModeActive
     ? buildDevModeOperatorRules()
     : buildCustomerStaffModeRules();
-  return BRC_MCP_SERVER_INSTRUCTIONS_BASE + buildBatchProcessingRules(maxBatchItems) + modeRules;
+  return BRC_MCP_SERVER_INSTRUCTIONS_BASE + buildConnectionRefPersistenceRules() + buildBatchProcessingRules(maxBatchItems) + modeRules;
 }
 
 /** @deprecated Prefer getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode) at server startup. */

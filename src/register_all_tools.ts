@@ -23,6 +23,7 @@ import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journ
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
+import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import {
   appendWriteConfirmationDescription,
@@ -32,6 +33,25 @@ import {
   requiresWriteConfirmation,
   wrapWriteToolHandler,
 } from "./guards/write_confirmation.js";
+
+export function withConnectionRefSchema(
+  schema: Record<string, unknown>
+): Record<string, unknown> {
+  if (schema.connectionRef) {
+    return schema;
+  }
+
+  return {
+    connectionRef: connectionRefSchema,
+    ...schema,
+  };
+}
+
+/** Tools that do not accept company credentials — connectionRef is optional but omitted from schema checks. */
+export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
+  "brc_getting_started",
+  "brc_get_deployment_policy",
+]);
 
 function createFilteredServer(server: McpServer): McpServer {
   const originalTool = server.tool.bind(server) as (...args: any[]) => any;
@@ -58,7 +78,7 @@ function createFilteredServer(server: McpServer): McpServer {
       return originalTool(
         toolName,
         description,
-        wrapHttpSessionAwareToolHandler(handler)
+        wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
 
@@ -68,14 +88,15 @@ function createFilteredServer(server: McpServer): McpServer {
       (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
     ];
 
-    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler);
+    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler, { toolName });
+    const schemaWithConnectionRef = withConnectionRefSchema(schema);
 
     if (!requiresWriteConfirmation(toolName)) {
-      return originalTool(toolName, description, schema, httpAwareHandler);
+      return originalTool(toolName, description, schemaWithConnectionRef, httpAwareHandler);
     }
 
     const wrappedSchema = {
-      ...schema,
+      ...schemaWithConnectionRef,
       confirmWrite: schema.confirmWrite ?? confirmWriteSchema,
       ...(requiresCounterpartyConfirmation(toolName)
         ? {

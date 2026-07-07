@@ -8,11 +8,18 @@ import {
 } from "./connection_store.js";
 import {
   ensureCredentialsForCurrentSession,
-  runWithHttpClientKey,
+  getActiveConnectionRef,
+  normaliseCompanyName,
   resolveSessionKeyStore,
+  runWithActiveConnectionRef,
+  runWithHttpClientKey,
   runWithHttpRequestSessionId,
   runWithSessionKeyStore,
 } from "../shared.js";
+import {
+  extractConnectionRefFromToolArgs,
+  prefixConnectionRef,
+} from "./connection_ref.js";
 
 export const MCP_SESSION_HEADER_NAMES = [
   "mcp-session-id",
@@ -50,12 +57,71 @@ export type McpSessionDiagnostic = {
   connectionIdPrefix?: string;
   sessionBindingFound: boolean;
   clientClaimInherited: boolean;
+  connectionRefResolved: boolean;
+  connectionRefInvalid: boolean;
+  connectionRefPresent: boolean;
+  connectionRefPrefix?: string;
   clientKeyPresent: boolean;
   clientIdentityHeaderNamesPresent: string[];
   mcpSessionHeaderNamesPresent: string[];
   credentialCount: number;
   companiesLoaded: string[];
+  requestedCompany?: string;
+  requestedCompanyLoaded?: boolean;
+  toolName?: string;
+  /** Staging/debug signal — true when Vibe connectionRef flow looks healthy. */
+  vibeConnectionHealthy?: boolean;
 };
+
+export type VibeConnectionHealthChecks = {
+  connectionRefPresent: boolean;
+  connectionRefResolved: boolean;
+  connectionIdPresent: boolean;
+  hasCredentials: boolean;
+  connectionRefInvalid: boolean;
+};
+
+export type VibeConnectionHealth = {
+  healthy: boolean;
+  checks: VibeConnectionHealthChecks;
+  shouldReconnect: false;
+};
+
+/**
+ * Safe staging/debug check for a healthy Vibe connectionRef call.
+ * Does not log or expose secrets — only boolean flags and counts.
+ */
+export function assessVibeConnectionHealth(
+  diagnostic: Pick<
+    McpSessionDiagnostic,
+    | "connectionRefPresent"
+    | "connectionRefResolved"
+    | "connectionIdPresent"
+    | "connectionRefInvalid"
+    | "credentialCount"
+  >
+): VibeConnectionHealth {
+  const checks: VibeConnectionHealthChecks = {
+    connectionRefPresent: diagnostic.connectionRefPresent,
+    connectionRefResolved: diagnostic.connectionRefResolved,
+    connectionIdPresent: diagnostic.connectionIdPresent,
+    hasCredentials: diagnostic.credentialCount > 0,
+    connectionRefInvalid: diagnostic.connectionRefInvalid,
+  };
+
+  const healthy =
+    checks.connectionRefPresent &&
+    checks.connectionRefResolved &&
+    checks.connectionIdPresent &&
+    checks.hasCredentials &&
+    !checks.connectionRefInvalid;
+
+  return {
+    healthy,
+    checks,
+    shouldReconnect: false,
+  };
+}
 
 function sessionDebugEnabled(): boolean {
   const configured = process.env.RED_CONNECT_SESSION_DEBUG?.trim().toLowerCase();
@@ -217,19 +283,23 @@ export type HttpToolSessionScope = {
     connectionId: string | null;
     sessionBindingFound: boolean;
     clientClaimInherited: boolean;
+    connectionRefResolved: boolean;
+    connectionRefInvalid: boolean;
   };
 };
 
 export async function prepareHttpToolSessionScope(
   sessionId: string,
   keyStore: Map<string, import("../shared.js").CompanyApiContext>,
-  clientKey?: string
+  clientKey?: string,
+  connectionRef?: string
 ): Promise<HttpToolSessionScope> {
   await ensureConnectionStoreInitialized();
 
   const resolution = await resolveConnectionIdForActiveSessionWithMeta({
     sessionId,
     clientKey,
+    connectionRef,
   });
 
   return {
@@ -283,7 +353,12 @@ export async function runHttpToolSessionFromExtra<T>(
   transportSessionId: string | undefined,
   keyStore: Map<string, import("../shared.js").CompanyApiContext> | undefined,
   extra: McpToolRequestExtra | undefined,
-  fn: () => Promise<T> | T
+  fn: () => Promise<T> | T,
+  options?: {
+    connectionRef?: string;
+    companyName?: string;
+    toolName?: string;
+  }
 ): Promise<T> {
   if (!process.env.RED_CONNECT_HTTP_MODE) {
     return fn();
@@ -298,9 +373,30 @@ export async function runHttpToolSessionFromExtra<T>(
 
   const store = keyStore ?? resolveSessionKeyStore(sessionId);
   const clientKey = buildHttpClientKeyFromExtra(extra);
-  const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey);
+  const connectionRef = options?.connectionRef;
+  const scope = await prepareHttpToolSessionScope(
+    sessionId,
+    store,
+    clientKey,
+    connectionRef
+  );
 
-  return runWithHttpToolSession(scope, fn);
+  return runWithActiveConnectionRef(connectionRef, () =>
+    runWithHttpToolSession(scope, async () => {
+      await ensureCredentialsForCurrentSession(options?.companyName);
+      await logToolSessionDiagnosticIfNeeded({
+        transportSessionId,
+        sessionId,
+        keyStore: store,
+        scope,
+        extra,
+        connectionRef,
+        companyName: options?.companyName,
+        toolName: options?.toolName,
+      });
+      return fn();
+    })
+  );
 }
 
 export function buildMcpSessionDiagnostic(args: {
@@ -310,9 +406,15 @@ export function buildMcpSessionDiagnostic(args: {
     connectionId: string | null;
     sessionBindingFound: boolean;
     clientClaimInherited: boolean;
+    connectionRefResolved: boolean;
+    connectionRefInvalid: boolean;
   };
+  connectionRef?: string;
   credentialCount?: number;
   companiesLoaded?: string[];
+  requestedCompany?: string;
+  requestedCompanyLoaded?: boolean;
+  toolName?: string;
 }): McpSessionDiagnostic {
   const headers = args.extra?.requestInfo?.headers ?? {};
 
@@ -332,7 +434,7 @@ export function buildMcpSessionDiagnostic(args: {
     }
   }
 
-  return {
+  const diagnostic: McpSessionDiagnostic = {
     transportSessionId: prefixId(args.transportSessionId),
     resolvedSessionId: prefixId(resolvedSessionId),
     sessionIdSource,
@@ -340,6 +442,10 @@ export function buildMcpSessionDiagnostic(args: {
     connectionIdPrefix: prefixId(args.resolution?.connectionId ?? undefined),
     sessionBindingFound: args.resolution?.sessionBindingFound ?? false,
     clientClaimInherited: args.resolution?.clientClaimInherited ?? false,
+    connectionRefResolved: args.resolution?.connectionRefResolved ?? false,
+    connectionRefInvalid: args.resolution?.connectionRefInvalid ?? false,
+    connectionRefPresent: Boolean(args.connectionRef?.trim()),
+    connectionRefPrefix: prefixConnectionRef(args.connectionRef),
     clientKeyPresent: Boolean(buildHttpClientKeyFromExtra(args.extra)),
     clientIdentityHeaderNamesPresent: listPresentHeaderNames(
       headers,
@@ -351,7 +457,55 @@ export function buildMcpSessionDiagnostic(args: {
     ),
     credentialCount: args.credentialCount ?? 0,
     companiesLoaded: args.companiesLoaded ?? [],
+    requestedCompany: args.requestedCompany,
+    requestedCompanyLoaded: args.requestedCompanyLoaded,
+    toolName: args.toolName,
   };
+
+  diagnostic.vibeConnectionHealthy = assessVibeConnectionHealth(diagnostic).healthy;
+
+  return diagnostic;
+}
+
+function listLoadedCompanyNames(
+  keyStore: Map<string, import("../shared.js").CompanyApiContext>
+): string[] {
+  return Array.from(keyStore.values()).map((entry) => entry.companyName);
+}
+
+async function logToolSessionDiagnosticIfNeeded(args: {
+  transportSessionId?: string;
+  sessionId: string;
+  keyStore: Map<string, import("../shared.js").CompanyApiContext>;
+  scope: HttpToolSessionScope;
+  extra?: McpToolRequestExtra;
+  connectionRef?: string;
+  companyName?: string;
+  toolName?: string;
+}): Promise<void> {
+  if (!sessionDebugEnabled()) {
+    return;
+  }
+
+  const companiesLoaded = listLoadedCompanyNames(args.keyStore);
+  const requestedCompany = args.companyName?.trim();
+  const requestedCompanyLoaded = requestedCompany
+    ? args.keyStore.has(normaliseCompanyName(requestedCompany))
+    : undefined;
+
+  logMcpSessionDiagnostic(
+    buildMcpSessionDiagnostic({
+      transportSessionId: args.transportSessionId ?? args.sessionId,
+      extra: args.extra,
+      resolution: args.scope.resolution,
+      connectionRef: args.connectionRef,
+      credentialCount: companiesLoaded.length,
+      companiesLoaded,
+      requestedCompany,
+      requestedCompanyLoaded,
+      toolName: args.toolName,
+    })
+  );
 }
 
 /**
@@ -369,13 +523,24 @@ export function wrapHttpSessionAwareToolHandler<
   options?: {
     transportSessionId?: string;
     keyStore?: Map<string, import("../shared.js").CompanyApiContext>;
+    toolName?: string;
   }
 ): (args: TArgs, extra?: McpToolRequestExtra) => Promise<TResult> {
-  return async (args, extra) =>
-    runHttpToolSessionFromExtra(
+  return async (args, extra) => {
+    const connectionRef = extractConnectionRefFromToolArgs(args);
+    const companyName =
+      typeof args.companyName === "string" ? args.companyName : undefined;
+
+    return runHttpToolSessionFromExtra(
       options?.transportSessionId,
       options?.keyStore,
       extra,
-      () => handler(args, extra)
+      () => handler(args, extra),
+      {
+        connectionRef,
+        companyName,
+        toolName: options?.toolName,
+      }
     );
+  };
 }
