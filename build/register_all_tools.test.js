@@ -25,6 +25,7 @@ function captureRegisteredTools() {
     return tools;
 }
 const registeredTools = captureRegisteredTools();
+const enabledToolCount = [...registeredTools.keys()].filter((toolName) => isToolEnabled(toolName)).length;
 function schemaHasOptionalConnectionRef(schema) {
     const field = schema.connectionRef;
     if (!field) {
@@ -32,6 +33,39 @@ function schemaHasOptionalConnectionRef(schema) {
     }
     return typeof field.isOptional === "function" ? field.isOptional() : true;
 }
+test("register_all_tools includes brc_start_company_connection", () => {
+    assert.ok(registeredTools.has("brc_start_company_connection"));
+    assert.equal(isToolEnabled("brc_start_company_connection"), true);
+});
+test("register_all_tools includes brc_confirm_company_connection", () => {
+    assert.ok(registeredTools.has("brc_confirm_company_connection"));
+    assert.equal(isToolEnabled("brc_confirm_company_connection"), true);
+});
+test("register_all_tools includes brc_list_company_contexts", () => {
+    assert.ok(registeredTools.has("brc_list_company_contexts"));
+    assert.equal(isToolEnabled("brc_list_company_contexts"), true);
+});
+test("register_all_tools includes brc_find_help_resources", () => {
+    assert.ok(registeredTools.has("brc_find_help_resources"));
+    assert.equal(isToolEnabled("brc_find_help_resources"), true);
+});
+test("brc_find_help_resources does not require company credentials", () => {
+    assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_find_help_resources"));
+    const tool = registeredTools.get("brc_find_help_resources");
+    assert.ok(tool);
+    assert.ok(tool.schema);
+    assert.ok(tool.schema.question);
+    assert.equal(tool.schema.companyName, undefined);
+});
+test("adding brc_find_help_resources does not reduce registered enabled tools unexpectedly", () => {
+    assert.ok(registeredTools.has("brc_start_company_connection"));
+    assert.ok(registeredTools.has("brc_confirm_company_connection"));
+    assert.ok(registeredTools.has("brc_list_company_contexts"));
+    assert.ok(registeredTools.has("brc_clear_company_api_key"));
+    assert.ok(registeredTools.has("brc_clear_all_company_api_keys"));
+    assert.ok(registeredTools.has("brc_find_help_resources"));
+    assert.ok(enabledToolCount >= 150);
+});
 test("every enabled credential-requiring tool schema includes optional connectionRef", () => {
     const missing = [];
     for (const [toolName, tool] of registeredTools) {

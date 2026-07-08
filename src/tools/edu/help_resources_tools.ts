@@ -9,7 +9,8 @@ import { jsonResponse } from "../../shared.js";
 
 export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
   "Find Big Red Cloud help videos, webinars, and training resources for how-to questions.",
-  "Use when the user asks how to use Big Red Cloud, training, tutorials, webinars, videos, or feature guidance.",
+  "Use only when the user asks how to use a Big Red Cloud feature, training, tutorials, webinars, videos, or feature guidance.",
+  "Do not use for connecting or reconnecting companies, listing connected companies, clearing connections, or any company books data.",
   "Read-only. Does not require a connected company, does not write CSV, and does not call Big Red Cloud APIs.",
   "Returns up to 5 matching resources from the enriched BRC Edu CSV, or the support fallback URL when nothing matches.",
 ].join(" ");

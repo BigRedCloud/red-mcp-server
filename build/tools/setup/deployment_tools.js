@@ -3,7 +3,6 @@ import { getCompanyProcessingSettings } from "../../guards/company_processing_se
 import { formatReferenceMode, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
 import { brcFetch, companyNameSchema, extractListItems, getCompanyApiContexts, jsonResponse, normaliseCompanyName, textResponse, } from "../../shared.js";
 import { getCustomerDeploymentCapabilities, redServerConfig, } from "../../config/server_config.js";
-import { registerHelpResourcesTools } from "../edu/help_resources_tools.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 function asNumber(value) {
     const n = Number(value);
@@ -447,10 +446,10 @@ Useful prompts:
 `;
 }
 export function registerDeploymentTools(server) {
-    registerHelpResourcesTools(server);
     server.tool("brc_getting_started", [
-        "Use this whenever the user asks how to start, says start, says getting started, or asks for help using Big Red Cloud.",
+        "Use this whenever the user asks how to start, says start, says getting started, or wants to connect or reconnect companies in Red.",
         "Return simple customer-friendly setup steps and example prompts.",
+        "Do not use for tutorial, webinar, or video how-to questions — use brc_find_help_resources for those.",
         "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
     ].join(" "), {}, async () => textResponse(buildGettingStartedText()));
     server.tool("brc_get_deployment_policy", [
