@@ -30,6 +30,7 @@ src/
 │   └── mcp_config.ts              MCP server instructions and connection-safety rules
 ├── guards/                        Transaction, reference, VAT, product line, and write-confirmation checks
 ├── data_quality/                  Lightweight data-quality checks (e.g. customer name/email)
+├── edu/                           BRC Edu support spreadsheet enrichment (dev sync only)
 └── tools/
     ├── general/                   Generic list/get/create/update/delete/batch + payload builders
     ├── setup/                     Company context, setup config, readiness, deployment policy, processing settings
@@ -399,3 +400,24 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:integration` — integration tests.
 
 Representative coverage includes the sales invoice safeguards (Gross Price Entry `priceBasis`, Sales VAT category validation, placeholder product ID blocking, note/delivery handling), transaction date validation, transaction settings warnings, the secure connection flow (CSV validation, partial confirm, runtime credential invalidation), connectionRef presentation rules, TTL wording from `BRC_API_KEY_TTL_MINUTES`, and response wording.
+
+---
+
+## 10. BRC Edu CSV sync (dev only)
+
+Support and webinar teams maintain a simple CSV at `data/webinar_video_routing_index.csv` with columns:
+
+- `title`
+- `url`
+- `notes`
+- `preferredCategory`
+- `active`
+
+Developers run `npm run build` then `npm run sync:brc-edu` to generate the enriched routing CSV at `data/_dev_only_video_routing_index_updated.csv`. The sync script reads the support CSV, applies category inference and keyword/description enrichment in `src/edu/brc_edu_enrichment.ts`, and writes the generated columns (`helpRoutingCategory`, `keywords`, `description`, `isActive`, `contentType`, `source`, `lastReviewed`, `generatedFrom`, `needsReview`).
+
+Red reads the enriched CSV at runtime. Normal user chats do not write to CSV; this is a dev/admin sync process only.
+
+Optional environment overrides:
+
+- `BRC_EDU_SUPPORT_CSV_PATH` — input support CSV path
+- `BRC_EDU_ENRICHED_CSV_PATH` — output enriched CSV path
