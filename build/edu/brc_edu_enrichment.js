@@ -110,23 +110,49 @@ function parseActive(value) {
     return true;
 }
 function normalizeCategory(value) {
-    return value.trim().toLowerCase().replace(/\s+/g, "_");
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_")
+        .replace(/_+/g, "_");
 }
-function pickField(record, names) {
-    for (const name of names) {
-        const direct = asTrimmedString(record[name]);
-        if (direct) {
-            return direct;
-        }
-        const match = Object.entries(record).find(([key]) => key.trim().toLowerCase() === name.toLowerCase());
-        if (match) {
-            const value = asTrimmedString(match[1]);
-            if (value) {
-                return value;
+function normalizeHeaderKey(key) {
+    return key
+        .replace(/^\uFEFF/, "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_")
+        .replace(/_+/g, "_");
+}
+const SUPPORT_FIELD_ALIASES = {
+    title: ["video_title", "title"],
+    url: ["video_url", "url"],
+    notes: ["notes", "note"],
+    preferredCategory: [
+        "help_routing_category",
+        "preferred_category",
+        "preferredcategory",
+        "helproutingcategory",
+    ],
+    active: ["active", "is_active"],
+};
+export function normalizeSupportCsvRecord(record) {
+    const normalized = {};
+    for (const [rawKey, value] of Object.entries(record)) {
+        const normalizedKey = normalizeHeaderKey(rawKey);
+        for (const [canonical, aliases] of Object.entries(SUPPORT_FIELD_ALIASES)) {
+            if (aliases.includes(normalizedKey)) {
+                if (asTrimmedString(normalized[canonical]) === "") {
+                    normalized[canonical] = value;
+                }
+                break;
             }
         }
     }
-    return "";
+    return normalized;
+}
+function readCanonicalField(record, field) {
+    return asTrimmedString(record[field]);
 }
 export function normaliseSupportEduRows(rows) {
     const normalised = [];
@@ -134,19 +160,18 @@ export function normaliseSupportEduRows(rows) {
         if (!row || typeof row !== "object") {
             continue;
         }
-        const record = row;
+        const record = normalizeSupportCsvRecord(row);
         if (isBlankRow(record)) {
             continue;
         }
-        const title = pickField(record, ["title", "Title"]);
-        const url = pickField(record, ["url", "URL", "Url"]);
+        const title = readCanonicalField(record, "title");
+        const url = readCanonicalField(record, "url");
         if (!title || !url) {
             continue;
         }
-        const notes = pickField(record, ["notes", "Notes"]) || undefined;
-        const preferredCategory = pickField(record, ["preferredCategory", "preferred_category", "PreferredCategory"]) ||
-            undefined;
-        const active = parseActive(record.active ?? record.Active ?? record.isActive);
+        const notes = readCanonicalField(record, "notes") || undefined;
+        const preferredCategory = readCanonicalField(record, "preferredCategory") || undefined;
+        const active = parseActive(record.active);
         normalised.push({
             title,
             url,
@@ -199,7 +224,9 @@ export function buildKeywords(title, category, notes) {
 const CATEGORY_DESCRIPTIONS = {
     setup: "company setup and getting started",
     sales: "sales, invoicing, and cash book workflows",
+    sales_cash_bank_rec: "sales, cash book, and bank reconciliation",
     purchases: "purchases, payments, and suppliers",
+    purchases_payments: "purchases and payments",
     bank: "bank accounts and reconciliation",
     bank_feeds: "bank feeds and open banking",
     purchase_importer: "purchase importer workflows",
@@ -207,6 +234,7 @@ const CATEGORY_DESCRIPTIONS = {
     migration: "migration from other systems",
     red_ai: "RED AI features",
     payroll_auto_enrolment: "payroll and auto-enrolment",
+    trial_onboarding: "trial onboarding",
     support: "support and contact options",
     general_help: "general Big Red Cloud help",
 };
@@ -276,11 +304,13 @@ export function toEnrichedCsvRecord(row) {
     };
 }
 export function parseSupportEduCsv(csvText) {
-    return parse(csvText, {
+    const withoutBom = csvText.replace(/^\uFEFF/, "");
+    return parse(withoutBom, {
         columns: true,
         skip_empty_lines: true,
         trim: true,
         relax_column_count: true,
+        bom: true,
     });
 }
 export function formatEnrichedEduCsv(rows) {

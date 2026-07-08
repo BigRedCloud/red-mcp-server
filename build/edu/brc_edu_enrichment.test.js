@@ -98,6 +98,90 @@ test("support category sets contentType to support", () => {
     assert.equal(enriched?.helpRoutingCategory, "support");
     assert.equal(enriched?.contentType, "support");
 });
+test("CSV with support-friendly headers is parsed into internal fields", () => {
+    const supportCsv = [
+        "Video Title,Video URL,Help-Routing Category",
+        "Purchases and payments guide,https://example.com/purchases,purchases_payments",
+        "Sales cash book overview,https://example.com/sales,sales_cash_bank_rec",
+    ].join("\n");
+    const rows = normaliseSupportEduRows(parseSupportEduCsv(supportCsv));
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.title, "Purchases and payments guide");
+    assert.equal(rows[0]?.url, "https://example.com/purchases");
+    assert.equal(rows[0]?.preferredCategory, "purchases_payments");
+    assert.equal(rows[0]?.notes, undefined);
+    assert.equal(rows[0]?.active, true);
+});
+test("CSV with internal headers continues to work", () => {
+    const supportCsv = [
+        "title,url,notes,preferredCategory,active",
+        "Setup guide,https://example.com/setup,Getting started,setup,true",
+    ].join("\n");
+    const rows = normaliseSupportEduRows(parseSupportEduCsv(supportCsv));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.title, "Setup guide");
+    assert.equal(rows[0]?.notes, "Getting started");
+    assert.equal(rows[0]?.preferredCategory, "setup");
+    assert.equal(rows[0]?.active, true);
+});
+test("UTF-8 BOM before Video Title is tolerated", () => {
+    const supportCsv = `\uFEFFVideo Title,Video URL,Help-Routing Category\nTrial onboarding,https://example.com/trial,trial_onboarding`;
+    const rows = normaliseSupportEduRows(parseSupportEduCsv(supportCsv));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.title, "Trial onboarding");
+    assert.equal(rows[0]?.preferredCategory, "trial_onboarding");
+});
+test("header aliases tolerate case, spaces, hyphens, and underscores", () => {
+    const rows = normaliseSupportEduRows([
+        {
+            "video-title": "Alias title",
+            video_url: "https://example.com/alias",
+            helpRoutingCategory: "red_ai",
+        },
+    ]);
+    assert.equal(rows[0]?.title, "Alias title");
+    assert.equal(rows[0]?.url, "https://example.com/alias");
+    assert.equal(rows[0]?.preferredCategory, "red_ai");
+});
+test("Help-Routing Category overrides inferred category", () => {
+    const rows = normaliseSupportEduRows([
+        {
+            "Video Title": "Bank feeds overview",
+            "Video URL": "https://example.com/bank-feeds",
+            "Help-Routing Category": "sales_cash_bank_rec",
+        },
+    ]);
+    const enriched = enrich(rows)[0];
+    assert.equal(enriched?.helpRoutingCategory, "sales_cash_bank_rec");
+    assert.equal(enriched?.needsReview, false);
+});
+test("support category values like purchases_payments are preserved in output", () => {
+    const rows = normaliseSupportEduRows([
+        {
+            title: "Supplier payments",
+            url: "https://example.com/purchases",
+            preferredCategory: "purchases_payments",
+        },
+        {
+            title: "Cash book and bank rec",
+            url: "https://example.com/sales",
+            preferredCategory: "sales_cash_bank_rec",
+        },
+    ]);
+    const enriched = enrich(rows);
+    assert.equal(enriched[0]?.helpRoutingCategory, "purchases_payments");
+    assert.equal(enriched[1]?.helpRoutingCategory, "sales_cash_bank_rec");
+});
+test("generated output uses exact generated CSV headers", () => {
+    const supportCsv = [
+        "Video Title,Video URL,Help-Routing Category",
+        "RED AI overview,https://example.com/red-ai,red_ai",
+    ].join("\n");
+    const outputCsv = formatEnrichedEduCsv(enrich(normaliseSupportEduRows(parseSupportEduCsv(supportCsv))));
+    const [header] = outputCsv.trim().split("\n");
+    assert.equal(header, "title,url,helpRoutingCategory,keywords,description,isActive,contentType,source,lastReviewed,generatedFrom,needsReview");
+    assert.deepEqual([...ENRICHED_EDU_CSV_COLUMNS], header.split(","));
+});
 test("CSV round-trip produces generated columns only", () => {
     const supportCsv = [
         "title,url,notes,preferredCategory,active",

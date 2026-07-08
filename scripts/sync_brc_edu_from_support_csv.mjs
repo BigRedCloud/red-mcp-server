@@ -1,41 +1,39 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..");
 const enrichmentModulePath = join(projectRoot, "build", "edu", "brc_edu_enrichment.js");
+const pathsModulePath = join(projectRoot, "build", "edu", "brc_edu_paths.js");
 
-async function loadEnrichmentModule() {
-  if (!existsSync(enrichmentModulePath)) {
+async function loadModules() {
+  if (!existsSync(enrichmentModulePath) || !existsSync(pathsModulePath)) {
     throw new Error(
-      "Enrichment module not built. Run `npm run build` before `npm run sync:brc-edu`.",
+      "BRC Edu modules not built. Run `npm run build` before `npm run sync:brc-edu`.",
     );
   }
-  return import(pathToFileURL(enrichmentModulePath).href);
-}
 
-function resolvePath(envValue, defaultRelativePath) {
-  const candidate = envValue?.trim() || defaultRelativePath;
-  return resolve(projectRoot, candidate);
+  const [enrichment, paths] = await Promise.all([
+    import(pathToFileURL(enrichmentModulePath).href),
+    import(pathToFileURL(pathsModulePath).href),
+  ]);
+
+  return { enrichment, paths };
 }
 
 async function main() {
+  const { enrichment, paths } = await loadModules();
   const {
     enrichSupportEduRows,
     formatEnrichedEduCsv,
     normaliseSupportEduRows,
     parseSupportEduCsv,
-  } = await loadEnrichmentModule();
+  } = enrichment;
+  const { getBrcEduEnrichedCsvPath, getBrcEduSupportCsvPath } = paths;
 
-  const inputPath = resolvePath(
-    process.env.BRC_EDU_SUPPORT_CSV_PATH,
-    "data/webinar_video_routing_index.csv",
-  );
-  const outputPath = resolvePath(
-    process.env.BRC_EDU_ENRICHED_CSV_PATH,
-    "data/_dev_only_video_routing_index_updated.csv",
-  );
+  const inputPath = getBrcEduSupportCsvPath(projectRoot);
+  const outputPath = getBrcEduEnrichedCsvPath(projectRoot);
 
   if (!existsSync(inputPath)) {
     throw new Error(`Support CSV not found: ${inputPath}`);

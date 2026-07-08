@@ -30,7 +30,7 @@ src/
 │   └── mcp_config.ts              MCP server instructions and connection-safety rules
 ├── guards/                        Transaction, reference, VAT, product line, and write-confirmation checks
 ├── data_quality/                  Lightweight data-quality checks (e.g. customer name/email)
-├── edu/                           BRC Edu support spreadsheet enrichment (dev sync only)
+├── edu/                           BRC Edu CSV path resolution, enrichment, and help-resource lookup
 └── tools/
     ├── general/                   Generic list/get/create/update/delete/batch + payload builders
     ├── setup/                     Company context, setup config, readiness, deployment policy, processing settings
@@ -405,19 +405,37 @@ Representative coverage includes the sales invoice safeguards (Gross Price Entry
 
 ## 10. BRC Edu CSV sync (dev only)
 
-Support and webinar teams maintain a simple CSV at `data/webinar_video_routing_index.csv` with columns:
+Support and webinar teams maintain `webinar_video_routing_index.csv` in the shared **Red Edu** OneDrive folder:
 
-- `title`
-- `url`
-- `notes`
-- `preferredCategory`
-- `active`
+[Red Edu folder on SharePoint](https://bigredbook-my.sharepoint.com/my?id=%2Fpersonal%2Flauren%5Fdwyer%5Fbigredbook%5Fcom%2FDocuments%2FRed%20Edu&viewid=c3f46ceb%2D1a27%2D45f7%2Dbcb6%2D3a692ffb1e97)
 
-Developers run `npm run build` then `npm run sync:brc-edu` to generate the enriched routing CSV at `data/_dev_only_video_routing_index_updated.csv`. The sync script reads the support CSV, applies category inference and keyword/description enrichment in `src/edu/brc_edu_enrichment.ts`, and writes the generated columns (`helpRoutingCategory`, `keywords`, `description`, `isActive`, `contentType`, `source`, `lastReviewed`, `generatedFrom`, `needsReview`).
+That SharePoint link is for humans. Red and local development must use the **local OneDrive-synced path**, not the web URL. Microsoft Graph is not used yet.
 
-Red reads the enriched CSV at runtime. Normal user chats do not write to CSV; this is a dev/admin sync process only.
+Support CSV columns (support-friendly headers shown; internal names also accepted):
 
-Optional environment overrides:
+- `Video Title` / `title`
+- `Video URL` / `url`
+- `Help-Routing Category` / `preferredCategory`
+- `notes` (optional)
+- `active` (optional; defaults to true)
 
-- `BRC_EDU_SUPPORT_CSV_PATH` — input support CSV path
-- `BRC_EDU_ENRICHED_CSV_PATH` — output enriched CSV path
+Developers run `npm run build` then `npm run sync:brc-edu`. The sync writes `dev_only_video_routing_index_updated.csv` to the same folder as the support CSV (or to the configured output path). Red reads that generated CSV through `brc_find_help_resources`.
+
+Path configuration (optional):
+
+- `BRC_EDU_SUPPORT_CSV_PATH` — support CSV path (default: `data/webinar_video_routing_index.csv`)
+- `BRC_EDU_ENRICHED_CSV_PATH` — generated CSV path (default: `data/dev_only_video_routing_index_updated.csv`)
+
+Local OneDrive example:
+
+```text
+BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\webinar_video_routing_index.csv
+BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
+```
+
+Implementation:
+
+- `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
+- `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
+- `src/edu/brc_edu_resources.ts` — loads and searches the enriched CSV for `brc_find_help_resources`
+- `scripts/sync_brc_edu_from_support_csv.mjs` — dev/admin sync only; normal user chats do not write CSV

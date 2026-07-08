@@ -97,6 +97,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
     "brc_get_company_processing_settings",
     "brc_get_company_reference_settings",
     "brc_check_transaction_settings",
+    "brc_find_help_resources",
 ]);
 function classifyTool(toolName) {
     if (SESSION_TOOL_NAMES.has(toolName))
