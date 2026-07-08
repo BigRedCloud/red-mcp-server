@@ -403,13 +403,13 @@ Representative coverage includes the sales invoice safeguards (Gross Price Entry
 
 ---
 
-## 10. BRC Edu CSV sync (dev only)
+## 10. BRC Edu help resources
 
 Support and webinar teams maintain `webinar_video_routing_index.csv` in the shared **Red Edu** OneDrive folder:
 
 [Red Edu folder on SharePoint](https://bigredbook-my.sharepoint.com/my?id=%2Fpersonal%2Flauren%5Fdwyer%5Fbigredbook%5Fcom%2FDocuments%2FRed%20Edu&viewid=c3f46ceb%2D1a27%2D45f7%2Dbcb6%2D3a692ffb1e97)
 
-That SharePoint link is for humans. Red and local development must use the **local OneDrive-synced path**, not the web URL. Microsoft Graph is not used yet.
+That SharePoint link is for humans. Red does not write to OneDrive or SharePoint during normal user chats.
 
 Support CSV columns (support-friendly headers shown; internal names also accepted):
 
@@ -419,7 +419,9 @@ Support CSV columns (support-friendly headers shown; internal names also accepte
 - `notes` (optional)
 - `active` (optional; defaults to true)
 
-Developers run `npm run build` then `npm run sync:brc-edu`. The sync writes `dev_only_video_routing_index_updated.csv` to the same folder as the support CSV (or to the configured output path). Red reads that generated CSV through `brc_find_help_resources`.
+### Local / dev workflow
+
+Developers run `npm run build` then `npm run sync:brc-edu`. The sync writes `dev_only_video_routing_index_updated.csv` for local inspection. With `BRC_EDU_SOURCE=local`, Red reads that generated CSV through `brc_find_help_resources`.
 
 Path configuration (optional):
 
@@ -429,13 +431,29 @@ Path configuration (optional):
 Local OneDrive example:
 
 ```text
+BRC_EDU_SOURCE=local
 BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\webinar_video_routing_index.csv
 BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
 ```
 
+### Production / staging (Microsoft Graph)
+
+With `BRC_EDU_SOURCE=graph`, Red reads the support CSV from OneDrive/SharePoint using Microsoft Graph, enriches rows in memory, caches the result, and serves matches through `brc_find_help_resources`. When the support team updates `webinar_video_routing_index.csv`, users see new webinar links after the cache refreshes (default `BRC_EDU_CACHE_TTL_MINUTES=5`).
+
+Graph configuration:
+
+- `BRC_EDU_GRAPH_TENANT_ID`
+- `BRC_EDU_GRAPH_CLIENT_ID`
+- `BRC_EDU_GRAPH_CLIENT_SECRET`
+- `BRC_EDU_GRAPH_DRIVE_ID`
+- `BRC_EDU_GRAPH_ITEM_ID`
+
+If Graph is unavailable or misconfigured, Red logs a safe warning and falls back to the local generated CSV when present.
+
 Implementation:
 
 - `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
+- `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
 - `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
-- `src/edu/brc_edu_resources.ts` — loads and searches the enriched CSV for `brc_find_help_resources`
+- `src/edu/brc_edu_resources.ts` — loads, caches, and searches enriched resources for `brc_find_help_resources`
 - `scripts/sync_brc_edu_from_support_csv.mjs` — dev/admin sync only; normal user chats do not write CSV

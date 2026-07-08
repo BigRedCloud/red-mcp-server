@@ -19,7 +19,7 @@ export function registerHelpResourcesTools(server) {
             .optional()
             .describe("Optional helpRoutingCategory filter, for example bank_feeds or sales_cash_bank_rec."),
     }, async ({ question, category }) => {
-        const resources = loadEnrichedEduResources();
+        const resources = await loadEnrichedEduResources();
         return jsonResponse(buildFindHelpResourcesResponse(question, resources, { category }));
     });
 }

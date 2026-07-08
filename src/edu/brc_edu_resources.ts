@@ -3,7 +3,46 @@ import { existsSync, readFileSync } from "node:fs";
 import { parse } from "csv-parse/sync";
 
 import type { EnrichedEduResource } from "./brc_edu_enrichment.js";
+import {
+  enrichSupportEduRows,
+  normaliseSupportEduRows,
+  parseSupportEduCsv,
+} from "./brc_edu_enrichment.js";
+import { downloadSupportCsvFromGraph, getBrcEduGraphConfig, type FetchLike } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
+
+export type BrcEduSource = "local" | "graph";
+
+type EduResourcesCache = {
+  resources: EnrichedEduResource[];
+  expiresAt: number;
+};
+
+let eduResourcesCache: EduResourcesCache | null = null;
+
+export function resetEduResourcesCacheForTests(): void {
+  eduResourcesCache = null;
+}
+
+export function getBrcEduSource(): BrcEduSource {
+  const source = process.env.BRC_EDU_SOURCE?.trim().toLowerCase();
+  return source === "graph" ? "graph" : "local";
+}
+
+export function getBrcEduCacheTtlMs(): number {
+  const rawMinutes = process.env.BRC_EDU_CACHE_TTL_MINUTES?.trim();
+  const minutes = rawMinutes ? Number(rawMinutes) : 5;
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return 5 * 60 * 1000;
+  }
+  return minutes * 60 * 1000;
+}
+
+function enrichSupportCsvText(csvText: string): EnrichedEduResource[] {
+  const rawRows = parseSupportEduCsv(csvText);
+  const supportRows = normaliseSupportEduRows(rawRows);
+  return enrichSupportEduRows(supportRows);
+}
 
 function asTrimmedString(value: unknown): string {
   if (value == null) {
@@ -91,13 +130,62 @@ export function parseEnrichedEduCsv(csvText: string): EnrichedEduResource[] {
     .filter((row): row is EnrichedEduResource => row != null);
 }
 
-export function loadEnrichedEduResources(baseDir: string = process.cwd()): EnrichedEduResource[] {
+export function loadLocalEnrichedEduResources(baseDir: string = process.cwd()): EnrichedEduResource[] {
   const csvPath = getBrcEduEnrichedCsvPath(baseDir);
   if (!existsSync(csvPath)) {
     return [];
   }
 
   return parseEnrichedEduCsv(readFileSync(csvPath, "utf8"));
+}
+
+export type LoadEnrichedEduResourcesOptions = {
+  now?: number;
+  fetchImpl?: FetchLike;
+};
+
+async function loadEnrichedEduResourcesFromGraph(
+  baseDir: string,
+  options?: LoadEnrichedEduResourcesOptions,
+): Promise<EnrichedEduResource[]> {
+  const now = options?.now ?? Date.now();
+  const ttlMs = getBrcEduCacheTtlMs();
+
+  if (eduResourcesCache && eduResourcesCache.expiresAt > now) {
+    return eduResourcesCache.resources;
+  }
+
+  const graphConfig = getBrcEduGraphConfig();
+  if (!graphConfig) {
+    console.warn(
+      "Red BRC Edu: Microsoft Graph configuration is incomplete; falling back to local enriched CSV.",
+    );
+    return loadLocalEnrichedEduResources(baseDir);
+  }
+
+  try {
+    const csvText = await downloadSupportCsvFromGraph(graphConfig, options?.fetchImpl);
+    const resources = enrichSupportCsvText(csvText);
+    eduResourcesCache = {
+      resources,
+      expiresAt: now + ttlMs,
+    };
+    return resources;
+  } catch {
+    console.warn("Red BRC Edu: Microsoft Graph load failed; falling back to local enriched CSV.");
+    return loadLocalEnrichedEduResources(baseDir);
+  }
+}
+
+export async function loadEnrichedEduResources(
+  baseDir: string = process.cwd(),
+  options?: LoadEnrichedEduResourcesOptions,
+): Promise<EnrichedEduResource[]> {
+  if (getBrcEduSource() === "graph") {
+    return loadEnrichedEduResourcesFromGraph(baseDir, options);
+  }
+
+  return loadLocalEnrichedEduResources(baseDir);
 }
 
 export const BRC_SUPPORT_FALLBACK_URL = "https://bigredcloud.com/support/";
