@@ -85,6 +85,7 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_clear_all_company_api_keys",
     "brc_getting_started",
     "brc_get_deployment_policy",
+    "brc_find_help_resources",
 ]);
 const DEV_TOOL_NAMES = new Set([
     "brc_set_company_api_key",
@@ -97,7 +98,6 @@ const READ_ONLY_TOOL_NAMES = new Set([
     "brc_get_company_processing_settings",
     "brc_get_company_reference_settings",
     "brc_check_transaction_settings",
-    "brc_find_help_resources",
 ]);
 function classifyTool(toolName) {
     if (SESSION_TOOL_NAMES.has(toolName))

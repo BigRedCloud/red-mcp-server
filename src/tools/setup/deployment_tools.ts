@@ -20,6 +20,7 @@ import {
   getCustomerDeploymentCapabilities,
   redServerConfig,
 } from "../../config/server_config.js";
+import { registerHelpResourcesTools } from "../edu/help_resources_tools.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 
 function asNumber(value: unknown): number | null {
@@ -529,6 +530,8 @@ Useful prompts:
 }
 
 export function registerDeploymentTools(server: ServerType) {
+  registerHelpResourcesTools(server);
+
   server.tool(
     "brc_getting_started",
     [

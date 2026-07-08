@@ -21,7 +21,6 @@ import { registerAllocationResolverTools } from "./tools/alloc_tools.js";
 import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
-import { registerHelpResourcesTools } from "./tools/edu/help_resources_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
@@ -98,5 +97,4 @@ export function registerAllTools(server) {
     registerNominalJournalBatchTools(filteredServer);
     registerAccrualTools(filteredServer);
     registerPrepaymentTools(filteredServer);
-    registerHelpResourcesTools(filteredServer);
 }

@@ -100,42 +100,53 @@ export function loadEnrichedEduResources(baseDir: string = process.cwd()): Enric
   return parseEnrichedEduCsv(readFileSync(csvPath, "utf8"));
 }
 
+export const BRC_SUPPORT_FALLBACK_URL = "https://bigredcloud.com/support/";
+
+export const HELP_RESOURCE_RESULT_FIELDS = [
+  "title",
+  "url",
+  "helpRoutingCategory",
+  "description",
+  "contentType",
+] as const;
+
 function normaliseSearchText(value: string): string {
   return value.trim().toLowerCase();
 }
 
 function scoreHelpResource(
   resource: EnrichedEduResource,
-  queryTokens: string[],
+  questionTokens: string[],
   category?: string,
 ): number {
-  if (category && normaliseSearchText(resource.helpRoutingCategory) !== normaliseSearchText(category)) {
+  if (
+    category &&
+    normaliseSearchText(resource.helpRoutingCategory) !== normaliseSearchText(category)
+  ) {
     return 0;
   }
 
-  const haystack = normaliseSearchText(
-    [
-      resource.title,
-      resource.helpRoutingCategory,
-      resource.keywords,
-      resource.description,
-      resource.contentType,
-    ].join(" "),
-  );
+  const title = normaliseSearchText(resource.title);
+  const helpRoutingCategory = normaliseSearchText(resource.helpRoutingCategory);
+  const keywords = normaliseSearchText(resource.keywords);
+  const description = normaliseSearchText(resource.description);
 
   let score = 0;
-  for (const token of queryTokens) {
+  for (const token of questionTokens) {
     if (!token) {
       continue;
     }
-    if (normaliseSearchText(resource.title).includes(token)) {
+    if (title.includes(token)) {
       score += 4;
     }
-    if (normaliseSearchText(resource.helpRoutingCategory).includes(token)) {
+    if (helpRoutingCategory.includes(token)) {
       score += 3;
     }
-    if (haystack.includes(token)) {
-      score += 1;
+    if (keywords.includes(token)) {
+      score += 3;
+    }
+    if (description.includes(token)) {
+      score += 2;
     }
   }
 
@@ -143,7 +154,7 @@ function scoreHelpResource(
 }
 
 export function findHelpResources(
-  query: string,
+  question: string,
   options?: {
     category?: string;
     includeInactive?: boolean;
@@ -151,29 +162,54 @@ export function findHelpResources(
     resources?: EnrichedEduResource[];
   },
 ): EnrichedEduResource[] {
-  const queryTokens = normaliseSearchText(query)
+  const questionTokens = normaliseSearchText(question)
     .split(/[^a-z0-9]+/)
     .filter((token) => token.length >= 2);
   const resources = options?.resources ?? [];
   const includeInactive = options?.includeInactive ?? false;
   const maxResults = options?.maxResults ?? 5;
 
-  const ranked = resources
+  return resources
     .filter((resource) => includeInactive || resource.isActive)
     .map((resource) => ({
       resource,
-      score: scoreHelpResource(resource, queryTokens, options?.category),
+      score: scoreHelpResource(resource, questionTokens, options?.category),
     }))
-    .filter((entry) => entry.score > 0 || queryTokens.length === 0)
-    .sort((left, right) => right.score - left.score || left.resource.title.localeCompare(right.resource.title))
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.resource.title.localeCompare(right.resource.title),
+    )
     .slice(0, maxResults)
     .map((entry) => entry.resource);
+}
 
-  if (queryTokens.length === 0 && ranked.length === 0) {
-    return resources
-      .filter((resource) => includeInactive || resource.isActive)
-      .slice(0, maxResults);
-  }
+export function toHelpResourceResult(resource: EnrichedEduResource) {
+  return {
+    title: resource.title,
+    url: resource.url,
+    helpRoutingCategory: resource.helpRoutingCategory,
+    description: resource.description,
+    contentType: resource.contentType,
+  };
+}
 
-  return ranked;
+export function buildFindHelpResourcesResponse(
+  question: string,
+  resources: EnrichedEduResource[],
+  options?: { category?: string },
+) {
+  const matches = findHelpResources(question, {
+    category: options?.category,
+    resources,
+    maxResults: 5,
+  });
+
+  return {
+    question,
+    category: options?.category ?? null,
+    matchCount: matches.length,
+    resources: matches.map(toHelpResourceResult),
+    supportFallbackUrl: matches.length === 0 ? BRC_SUPPORT_FALLBACK_URL : null,
+  };
 }

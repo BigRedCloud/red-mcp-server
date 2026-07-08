@@ -1,14 +1,17 @@
 import { z } from "zod";
 
-import { findHelpResources, loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
+import {
+  buildFindHelpResourcesResponse,
+  loadEnrichedEduResources,
+} from "../../edu/brc_edu_resources.js";
 import type { ServerType } from "../../server.js";
 import { jsonResponse } from "../../shared.js";
 
 export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
-  "Find Big Red Cloud help videos, webinars, and support resources for how-to questions.",
-  "Use when the user asks how to do something in Big Red Cloud and a relevant video or webinar may help.",
-  "Does not require a connected company.",
-  "Returns titles, URLs, categories, and short descriptions from the enriched BRC Edu routing CSV.",
+  "Find Big Red Cloud help videos, webinars, and training resources for how-to questions.",
+  "Use when the user asks how to use Big Red Cloud, training, tutorials, webinars, videos, or feature guidance.",
+  "Read-only. Does not require a connected company, does not write CSV, and does not call Big Red Cloud APIs.",
+  "Returns up to 5 matching resources from the enriched BRC Edu CSV, or the support fallback URL when nothing matches.",
 ].join(" ");
 
 export function registerHelpResourcesTools(server: ServerType): void {
@@ -16,50 +19,20 @@ export function registerHelpResourcesTools(server: ServerType): void {
     "brc_find_help_resources",
     FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
     {
-      query: z
+      question: z
         .string()
         .min(1)
         .describe(
-          "Plain-English help topic, for example bank feeds, sales invoices, year end, or company setup.",
+          "Plain-English help question, for example how do bank feeds work, create a sales invoice, or close the year end.",
         ),
       category: z
         .string()
         .optional()
-        .describe("Optional helpRoutingCategory filter, for example bank_feeds or sales."),
-      maxResults: z
-        .number()
-        .int()
-        .min(1)
-        .max(10)
-        .optional()
-        .describe("Maximum number of resources to return. Defaults to 5."),
+        .describe("Optional helpRoutingCategory filter, for example bank_feeds or sales_cash_bank_rec."),
     },
-    async ({ query, category, maxResults }) => {
+    async ({ question, category }) => {
       const resources = loadEnrichedEduResources();
-      const matches = findHelpResources(query, {
-        category,
-        maxResults: maxResults ?? 5,
-        resources,
-      });
-
-      return jsonResponse({
-        query,
-        category: category ?? null,
-        matchCount: matches.length,
-        resources: matches.map((resource) => ({
-          title: resource.title,
-          url: resource.url,
-          helpRoutingCategory: resource.helpRoutingCategory,
-          description: resource.description,
-          contentType: resource.contentType,
-          source: resource.source,
-          needsReview: resource.needsReview,
-        })),
-        guidance:
-          matches.length > 0
-            ? "Share the most relevant title and URL in plain English. Mention that Red cannot change Big Red Cloud settings directly when appropriate."
-            : "No matching help resource was found in the current BRC Edu index. Suggest Big Red Cloud support or webinars in general terms.",
-      });
+      return jsonResponse(buildFindHelpResourcesResponse(question, resources, { category }));
     },
   );
 }

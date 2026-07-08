@@ -3,6 +3,7 @@ import { getCompanyProcessingSettings } from "../../guards/company_processing_se
 import { formatReferenceMode, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
 import { brcFetch, companyNameSchema, extractListItems, getCompanyApiContexts, jsonResponse, normaliseCompanyName, textResponse, } from "../../shared.js";
 import { getCustomerDeploymentCapabilities, redServerConfig, } from "../../config/server_config.js";
+import { registerHelpResourcesTools } from "../edu/help_resources_tools.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 function asNumber(value) {
     const n = Number(value);
@@ -446,6 +447,7 @@ Useful prompts:
 `;
 }
 export function registerDeploymentTools(server) {
+    registerHelpResourcesTools(server);
     server.tool("brc_getting_started", [
         "Use this whenever the user asks how to start, says start, says getting started, or asks for help using Big Red Cloud.",
         "Return simple customer-friendly setup steps and example prompts.",
