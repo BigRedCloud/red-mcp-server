@@ -1,12 +1,12 @@
 {
-  "storedAt": "2026-07-09T09:58:13.556Z",
+  "storedAt": "2026-07-09T14:24:30.378Z",
   "resources": [
     {
-      "title": "Lauren Sync Test",
-      "url": "https://youtu.be/test",
-      "helpRoutingCategory": "setup",
-      "keywords": "lauren, sync, test, setup",
-      "description": "Video resource about company setup and getting started: Lauren Sync Test.",
+      "title": "Integration bank feeds",
+      "url": "https://example.com/integration-bank-feeds",
+      "helpRoutingCategory": "bank_feeds",
+      "keywords": "integration, bank, feeds",
+      "description": "Video resource about bank feeds and open banking: Integration bank feeds.",
       "isActive": true,
       "contentType": "video",
       "source": "Big Red Cloud",

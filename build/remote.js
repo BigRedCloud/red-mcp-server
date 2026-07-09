@@ -21,6 +21,8 @@ import { parse } from "csv-parse/sync";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
 import { BRC_EDU_SYNC_SECRET_HEADER, handleBrcEduResourcesSyncRequest, } from "./edu/brc_edu_synced_store.js";
 import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY, BRC_EDU_UPLOAD_FIELD_NAME, BRC_EDU_UPLOAD_MAX_BYTES, createConfiguredBrcEduBlobUploader, handleBrcEduResourceUpload, validateBrcEduAdminUploadSecret, } from "./edu/brc_edu_upload_store.js";
+import { renderBrcEduUploadErrorPage, renderBrcEduUploadPage, renderBrcEduUploadPlainError, renderBrcEduUploadSuccessPage, } from "./edu/brc_edu_upload_page.js";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -107,6 +109,19 @@ const upload = multer({
         fileSize: 1024 * 1024, // 1 MB
     },
 });
+const eduResourceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: BRC_EDU_UPLOAD_MAX_BYTES,
+    },
+});
+function getBrcEduAdminUploadSecretFromQuery(req) {
+    const secret = req.query[BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY];
+    if (Array.isArray(secret)) {
+        return typeof secret[0] === "string" ? secret[0] : undefined;
+    }
+    return typeof secret === "string" ? secret : undefined;
+}
 const rateLimitBuckets = new Map();
 function getClientIp(req) {
     const forwardedFor = req.headers["x-forwarded-for"];
@@ -363,6 +378,52 @@ app.post("/internal/brc-edu/resources/sync", (req, res) => {
         invalidateEduResourcesCache();
     }
     res.status(result.status).json(result.body);
+});
+app.get("/internal/brc-edu/resources/upload", (req, res) => {
+    const secret = getBrcEduAdminUploadSecretFromQuery(req);
+    const authResult = validateBrcEduAdminUploadSecret(secret);
+    if (!authResult.ok) {
+        res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+        return;
+    }
+    res.send(renderBrcEduUploadPage(secret));
+});
+app.post("/internal/brc-edu/resources/upload", (req, res) => {
+    const secret = getBrcEduAdminUploadSecretFromQuery(req);
+    const authResult = validateBrcEduAdminUploadSecret(secret);
+    if (!authResult.ok) {
+        res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+        return;
+    }
+    eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
+        void (async () => {
+            if (uploadError) {
+                const message = uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE"
+                    ? "File exceeds the maximum size of 5 MB."
+                    : "Upload failed.";
+                res.status(400).send(renderBrcEduUploadErrorPage(message, secret));
+                return;
+            }
+            const file = req.file
+                ? {
+                    buffer: req.file.buffer,
+                    originalname: req.file.originalname,
+                    mimetype: req.file.mimetype,
+                    size: req.file.size,
+                }
+                : undefined;
+            const uploadResult = await handleBrcEduResourceUpload(file, createConfiguredBrcEduBlobUploader());
+            if (!uploadResult.ok) {
+                res.status(uploadResult.status).send(renderBrcEduUploadErrorPage(uploadResult.error, secret));
+                return;
+            }
+            res.send(renderBrcEduUploadSuccessPage(uploadResult.latestBlob, uploadResult.archiveBlob, secret));
+        })().catch(() => {
+            if (!res.headersSent) {
+                res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", secret));
+            }
+        });
+    });
 });
 app.delete("/mcp", async (req, res) => {
     const sessionId = resolveMcpSessionIdFromRequest(req);

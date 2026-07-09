@@ -436,6 +436,38 @@ BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\w
 BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
 ```
 
+### Production / staging (admin upload)
+
+Internal/support users can upload the approved BRC Edu resource file through a browser form. Red stores the uploaded file in Azure Blob Storage for downstream processing (for example, an Azure Function). This step does not parse or enrich the file.
+
+Routes (both require `?secret=<BRC_EDU_ADMIN_UPLOAD_SECRET>`):
+
+- `GET /internal/brc-edu/resources/upload` — upload form
+- `POST /internal/brc-edu/resources/upload` — `multipart/form-data` with field name `file`
+
+Accepted files:
+
+- `.xlsx` or `.csv` only
+- Maximum size: 5 MB
+
+Blob paths written on successful upload:
+
+- Latest: `brc-edu/latest/webinar_video_routing_index.<ext>`
+- Archive: `brc-edu/archive/webinar_video_routing_index_YYYYMMDD_HHmmss.<ext>`
+
+Responses:
+
+- `200` — HTML success page (POST) or upload form (GET)
+- `400` — missing file, invalid file type, or file too large
+- `401` — missing or wrong `secret` query parameter
+- `503` — `BRC_EDU_ADMIN_UPLOAD_SECRET` is not configured (GET/POST auth), or blob storage env vars are missing (POST upload only)
+
+Configuration:
+
+- `BRC_EDU_ADMIN_UPLOAD_SECRET` — shared secret for the upload page query parameter (required for upload routes to work)
+- `BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING` — Azure Storage connection string for uploaded files
+- `BRC_EDU_UPLOAD_CONTAINER` — blob container name for uploaded files
+
 ### Production / staging (push sync)
 
 Power Automate or another trusted internal automation can push the support CSV to Red without OneDrive access from the server.
@@ -478,6 +510,8 @@ Implementation:
 
 - `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
 - `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
+- `src/edu/brc_edu_upload_store.ts` — admin upload auth, validation, and Azure Blob Storage writes
+- `src/edu/brc_edu_upload_page.ts` — internal HTML upload form and result pages
 - `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
 - `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
 - `src/edu/brc_edu_resources.ts` — loads synced JSON first, then graph/local CSV; searches enriched resources for `brc_find_help_resources`
