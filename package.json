@@ -11,8 +11,8 @@
     "brc-company-mcp-server": "build/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "postinstall": "npm run build",
+    "build": "tsc && npm run build --prefix functions/brc-edu-resource-processor",
+    "postinstall": "npm install --prefix functions/brc-edu-resource-processor && npm run build",
     "start": "node build/remote.js",
     "start:local": "node build/index.js",
     "dev": "tsx src/remote.ts",
@@ -27,7 +27,7 @@
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "leftovers:scan": "node scripts/tests/dev-only/dev_test_cleanup.mjs scan",
     "leftovers:delete": "node scripts/tests/dev-only/dev_test_cleanup.mjs delete",
-    "test": "npm run build && node --test build/**/*.test.js",
+    "test": "npm run build && node --test build/**/*.test.js && npm test --prefix functions/brc-edu-resource-processor",
     "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs"
   },
   "dependencies": {

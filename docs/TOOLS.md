@@ -468,6 +468,40 @@ Configuration:
 - `BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING` — Azure Storage connection string for uploaded files
 - `BRC_EDU_UPLOAD_CONTAINER` — blob container name for uploaded files
 
+### Production / staging (Azure Function processor)
+
+When a BRC Edu resource file is uploaded to blob storage, an Azure Function can process the latest blob and push CSV text to Red’s existing sync endpoint.
+
+Trigger:
+
+- Blob trigger on `brc-edu-resources/brc-edu/latest/{name}`
+
+Supported files:
+
+- `.csv` — read as UTF-8 text
+- `.xlsx` — first worksheet converted to CSV text
+
+The function POSTs to Red:
+
+- `POST /internal/brc-edu/resources/sync`
+- Header: `x-red-edu-sync-secret: <secret>`
+- Body: `{ "csvText": "..." }`
+
+Function configuration:
+
+- `AzureWebJobsStorage` — storage account connection for the blob trigger
+- `RED_BRC_EDU_SYNC_ENDPOINT` — full Red sync URL
+- `RED_BRC_EDU_SYNC_SECRET` — shared secret for the sync header
+
+Logging:
+
+- Logs filename and success/failure only
+- Does not log the sync secret or full file content
+
+Implementation:
+
+- `functions/brc-edu-resource-processor/` — Azure Function app (`brcEduResourceProcessor`)
+
 ### Production / staging (push sync)
 
 Power Automate or another trusted internal automation can push the support CSV to Red without OneDrive access from the server.
@@ -508,6 +542,7 @@ If Graph is unavailable or misconfigured, Red logs a safe warning and falls back
 
 Implementation:
 
+- `functions/brc-edu-resource-processor/` — Azure Function blob trigger that converts uploaded files and calls Red sync
 - `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
 - `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
 - `src/edu/brc_edu_upload_store.ts` — admin upload auth, validation, and Azure Blob Storage writes
