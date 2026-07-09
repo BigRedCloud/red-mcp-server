@@ -10,6 +10,7 @@ import {
 } from "./brc_edu_enrichment.js";
 import { downloadSupportCsvFromGraph, getBrcEduGraphConfig, type FetchLike } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
+import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
 
 export type BrcEduSource = "local" | "graph";
 
@@ -21,6 +22,10 @@ type EduResourcesCache = {
 let eduResourcesCache: EduResourcesCache | null = null;
 
 export function resetEduResourcesCacheForTests(): void {
+  eduResourcesCache = null;
+}
+
+export function invalidateEduResourcesCache(): void {
   eduResourcesCache = null;
 }
 
@@ -177,10 +182,23 @@ async function loadEnrichedEduResourcesFromGraph(
   }
 }
 
+function loadSyncedEduResourcesIfAvailable(baseDir: string): EnrichedEduResource[] | null {
+  const synced = loadSyncedEduResources(baseDir);
+  if (synced && synced.length > 0) {
+    return synced;
+  }
+  return null;
+}
+
 export async function loadEnrichedEduResources(
   baseDir: string = process.cwd(),
   options?: LoadEnrichedEduResourcesOptions,
 ): Promise<EnrichedEduResource[]> {
+  const synced = loadSyncedEduResourcesIfAvailable(baseDir);
+  if (synced) {
+    return synced;
+  }
+
   if (getBrcEduSource() === "graph") {
     return loadEnrichedEduResourcesFromGraph(baseDir, options);
   }

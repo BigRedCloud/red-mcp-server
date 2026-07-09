@@ -3,8 +3,12 @@ import { parse } from "csv-parse/sync";
 import { enrichSupportEduRows, normaliseSupportEduRows, parseSupportEduCsv, } from "./brc_edu_enrichment.js";
 import { downloadSupportCsvFromGraph, getBrcEduGraphConfig } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
+import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
 let eduResourcesCache = null;
 export function resetEduResourcesCacheForTests() {
+    eduResourcesCache = null;
+}
+export function invalidateEduResourcesCache() {
     eduResourcesCache = null;
 }
 export function getBrcEduSource() {
@@ -132,7 +136,18 @@ async function loadEnrichedEduResourcesFromGraph(baseDir, options) {
         return loadLocalEnrichedEduResources(baseDir);
     }
 }
+function loadSyncedEduResourcesIfAvailable(baseDir) {
+    const synced = loadSyncedEduResources(baseDir);
+    if (synced && synced.length > 0) {
+        return synced;
+    }
+    return null;
+}
 export async function loadEnrichedEduResources(baseDir = process.cwd(), options) {
+    const synced = loadSyncedEduResourcesIfAvailable(baseDir);
+    if (synced) {
+        return synced;
+    }
     if (getBrcEduSource() === "graph") {
         return loadEnrichedEduResourcesFromGraph(baseDir, options);
     }

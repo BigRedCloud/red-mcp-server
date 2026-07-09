@@ -14,6 +14,7 @@ const GRAPH_ENV_KEYS = [
   "BRC_EDU_SOURCE",
   "BRC_EDU_CACHE_TTL_MINUTES",
   "BRC_EDU_ENRICHED_CSV_PATH",
+  "BRC_EDU_SYNCED_RESOURCES_PATH",
   "BRC_EDU_GRAPH_TENANT_ID",
   "BRC_EDU_GRAPH_CLIENT_ID",
   "BRC_EDU_GRAPH_CLIENT_SECRET",
@@ -272,4 +273,75 @@ test("missing graph env vars falls back to local generated CSV", async () => {
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test("loadEnrichedEduResources prefers synced JSON over local CSV", async () => {
+  const fixture = createLocalFixture();
+  const syncedPath = join(fixture.baseDir, "synced-resources.json");
+  const syncedPayload = {
+    storedAt: "2026-07-09T10:00:00.000Z",
+    resources: [
+      {
+        title: "Synced bank feeds video",
+        url: "https://example.com/synced-bank-feeds",
+        helpRoutingCategory: "bank_feeds",
+        keywords: "bank feeds",
+        description: "Synced description",
+        isActive: true,
+        contentType: "video",
+        source: "Big Red Cloud",
+        lastReviewed: "2026-07-09",
+        generatedFrom: "webinar_video_routing_index.csv",
+        needsReview: false,
+      },
+    ],
+  };
+
+  writeFileSync(syncedPath, JSON.stringify(syncedPayload), "utf8");
+
+  await withEduEnv(
+    {
+      BRC_EDU_SOURCE: "local",
+      ...fixtureEnv(fixture),
+      BRC_EDU_SYNCED_RESOURCES_PATH: syncedPath,
+    },
+    async () => {
+      const resources = await loadEnrichedEduResources(fixture.baseDir);
+      assert.equal(resources.length, 1);
+      assert.equal(resources[0]?.title, "Synced bank feeds video");
+      assert.equal(resources[0]?.url, "https://example.com/synced-bank-feeds");
+    },
+  );
+});
+
+test("invalid or missing synced JSON falls back to local CSV", async () => {
+  const fixture = createLocalFixture();
+  const syncedPath = join(fixture.baseDir, "synced-resources.json");
+
+  await withEduEnv(
+    {
+      BRC_EDU_SOURCE: "local",
+      ...fixtureEnv(fixture),
+      BRC_EDU_SYNCED_RESOURCES_PATH: syncedPath,
+    },
+    async () => {
+      const missingFileResources = await loadEnrichedEduResources(fixture.baseDir);
+      assert.equal(missingFileResources.length, 1);
+      assert.equal(missingFileResources[0]?.title, "Local fallback video");
+
+      writeFileSync(syncedPath, "{ not valid json", "utf8");
+      const invalidJsonResources = await loadEnrichedEduResources(fixture.baseDir);
+      assert.equal(invalidJsonResources.length, 1);
+      assert.equal(invalidJsonResources[0]?.title, "Local fallback video");
+
+      writeFileSync(
+        syncedPath,
+        JSON.stringify({ storedAt: "2026-07-09T10:00:00.000Z", resources: [] }),
+        "utf8",
+      );
+      const emptyResources = await loadEnrichedEduResources(fixture.baseDir);
+      assert.equal(emptyResources.length, 1);
+      assert.equal(emptyResources[0]?.title, "Local fallback video");
+    },
+  );
 });

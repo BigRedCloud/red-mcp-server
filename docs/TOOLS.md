@@ -436,9 +436,33 @@ BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\w
 BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
 ```
 
-### Production / staging (Microsoft Graph)
+### Production / staging (push sync)
 
-With `BRC_EDU_SOURCE=graph`, Red reads the support CSV from OneDrive/SharePoint using Microsoft Graph, enriches rows in memory, caches the result, and serves matches through `brc_find_help_resources`. When the support team updates `webinar_video_routing_index.csv`, users see new webinar links after the cache refreshes (default `BRC_EDU_CACHE_TTL_MINUTES=5`).
+Power Automate or another trusted internal automation can push the support CSV to Red without OneDrive access from the server.
+
+Endpoint:
+
+- `POST /internal/brc-edu/resources/sync`
+- Header: `x-red-edu-sync-secret: <secret>` (from `BRC_EDU_SYNC_SECRET`)
+- Body: `{ "csvText": "Video Title,Video URL,Help-Routing Category\n..." }`
+
+Responses:
+
+- `200` — `{ ok, rowsRead, rowsEnriched, inactiveRows, needsReviewRows, storedAt }`
+- `400` — missing or invalid `csvText`
+- `401` — missing or wrong sync secret header
+- `503` — `BRC_EDU_SYNC_SECRET` is not configured
+
+Red validates the secret, parses and enriches the CSV, and writes `data/brc_edu_synced_resources.json` (or `BRC_EDU_SYNCED_RESOURCES_PATH`). `brc_find_help_resources` prefers this synced JSON over the local generated CSV fallback.
+
+Configuration:
+
+- `BRC_EDU_SYNC_SECRET` — shared secret for the sync endpoint (required for sync to work)
+- `BRC_EDU_SYNCED_RESOURCES_PATH` — JSON store path (default: `data/brc_edu_synced_resources.json`)
+
+### Production / staging (Microsoft Graph, optional)
+
+With `BRC_EDU_SOURCE=graph`, Red can still read the support CSV from OneDrive/SharePoint using Microsoft Graph when no synced JSON is available. This path is optional and not the default for new deployments.
 
 Graph configuration:
 
@@ -448,12 +472,13 @@ Graph configuration:
 - `BRC_EDU_GRAPH_DRIVE_ID`
 - `BRC_EDU_GRAPH_ITEM_ID`
 
-If Graph is unavailable or misconfigured, Red logs a safe warning and falls back to the local generated CSV when present.
+If Graph is unavailable or misconfigured, Red logs a safe warning and falls back to the local generated CSV when present. Synced JSON (from push sync) is always preferred when available.
 
 Implementation:
 
 - `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
+- `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
 - `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
 - `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
-- `src/edu/brc_edu_resources.ts` — loads, caches, and searches enriched resources for `brc_find_help_resources`
+- `src/edu/brc_edu_resources.ts` — loads synced JSON first, then graph/local CSV; searches enriched resources for `brc_find_help_resources`
 - `scripts/sync_brc_edu_from_support_csv.mjs` — dev/admin sync only; normal user chats do not write CSV
