@@ -9,6 +9,8 @@ import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "../edu/brc_edu_upload_store.j
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
 const SERVER_START_TIMEOUT_MS = 30_000;
 const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
+const WORKBOOK_PATH = `${UPLOAD_PATH}/workbook`;
+const WORKBOOK_DOWNLOAD_PATH = `${UPLOAD_PATH}/workbook/download`;
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -120,6 +122,24 @@ function uploadUrl(port: number, secret?: string): string {
   return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
 }
 
+function workbookUrl(port: number, secret?: string): string {
+  const base = `http://127.0.0.1:${port}${WORKBOOK_PATH}`;
+  if (!secret) {
+    return base;
+  }
+
+  return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+}
+
+function workbookDownloadUrl(port: number, secret?: string): string {
+  const base = `http://127.0.0.1:${port}${WORKBOOK_DOWNLOAD_PATH}`;
+  if (!secret) {
+    return base;
+  }
+
+  return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+}
+
 function buildMultipartBody(
   fieldName: string,
   filename: string,
@@ -177,12 +197,57 @@ test("GET /internal/brc-edu/resources/upload returns form with correct secret", 
   assert.equal(response.status, 200);
 
   const html = await response.text();
-  assert.match(html, /BRC Edu resource upload/i);
+  assert.match(html, /BRC Edu webinar resources/i);
+  assert.match(html, /Refresh from Azure/i);
+  assert.match(html, /Save &amp; Publish/i);
   assert.match(html, /multipart\/form-data/i);
   assert.match(html, /\.xlsx/);
   assert.match(html, /\.csv/);
   assert.match(html, /5 MB/);
   assert.match(html, /name="file"/);
+});
+
+test("workbook admin endpoints require admin secret", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+  });
+
+  const missingGet = await fetch(workbookUrl(port));
+  const wrongGet = await fetch(workbookUrl(port, "wrong-secret"));
+  const missingDownload = await fetch(workbookDownloadUrl(port));
+  const wrongDownload = await fetch(workbookDownloadUrl(port, "wrong-secret"));
+  const missingPut = await fetch(workbookUrl(port), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rows: [] }),
+  });
+  const wrongPut = await fetch(workbookUrl(port, "wrong-secret"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rows: [] }),
+  });
+
+  assert.equal(missingGet.status, 401);
+  assert.equal(wrongGet.status, 401);
+  assert.equal(missingDownload.status, 401);
+  assert.equal(wrongDownload.status, 401);
+  assert.equal(missingPut.status, 401);
+  assert.equal(wrongPut.status, 401);
+});
+
+test("GET workbook returns 503 when upload storage is not configured", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+  });
+
+  const response = await fetch(workbookUrl(port, "configured-secret"));
+  assert.equal(response.status, 503);
+
+  const body = (await response.json()) as { error: string };
+  assert.match(body.error, /not configured/i);
+  assert.equal(body.error.includes("configured-secret"), false);
 });
 
 test("POST /internal/brc-edu/resources/upload rejects missing or wrong secret", async (t) => {
