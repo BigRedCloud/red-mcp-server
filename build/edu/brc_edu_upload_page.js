@@ -6,6 +6,42 @@ const BRC_RED_DARK = "#8f0e16";
 const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
 const WORKBOOK_API_PATH = `${UPLOAD_PATH}/workbook`;
 const WORKBOOK_DOWNLOAD_PATH = `${UPLOAD_PATH}/workbook/download`;
+/** Element IDs the admin page script requires at init time. */
+export const BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS = [
+    "admin-status",
+    "meta-updated",
+    "meta-count",
+    "unsaved-badge",
+    "resource-rows",
+    "refresh-btn",
+    "download-btn",
+    "upload-excel-btn",
+    "add-btn",
+    "save-btn",
+    "cancel-btn",
+];
+/** Element IDs referenced by the admin script but safe to omit. */
+export const BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS = [
+    BRC_EDU_UPLOAD_FIELD_NAME,
+];
+export function getAdminPageScriptReferencedElementIds() {
+    return [
+        ...BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS,
+        ...BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS,
+    ];
+}
+/** Returns every `id="..."` value appearing in HTML before the admin init script. */
+export function findAdminPageElementIdsBeforeScript(html) {
+    const scriptMarker = "function requireElement(id)";
+    const scriptIndex = html.indexOf(scriptMarker);
+    const markup = scriptIndex >= 0 ? html.slice(0, scriptIndex) : html.slice(0, html.indexOf("</main>"));
+    const ids = new Set();
+    const pattern = /\bid="([^"]+)"/g;
+    for (const match of markup.matchAll(pattern)) {
+        ids.add(match[1]);
+    }
+    return ids;
+}
 function pageShell(title, content, extraHead = "") {
     return `<!doctype html>
 <html lang="en">
@@ -281,8 +317,18 @@ function adminPageScript(secret) {
     const downloadUrl = workbookDownloadUrl(secret);
     return `<script>
 (() => {
+  function requireElement(id) {
+    const element = document.getElementById(id);
+    if (!element) {
+      throw new Error("Admin page element missing: " + id);
+    }
+    return element;
+  }
+
+  function initAdminPage() {
   const apiUrl = ${JSON.stringify(apiUrl)};
   const downloadUrl = ${JSON.stringify(downloadUrl)};
+  const fileInputId = ${JSON.stringify(BRC_EDU_UPLOAD_FIELD_NAME)};
   const state = {
     rows: [],
     etag: "",
@@ -293,15 +339,17 @@ function adminPageScript(secret) {
   };
 
   const els = {
-    status: document.getElementById("admin-status"),
-    metaUpdated: document.getElementById("meta-updated"),
-    metaCount: document.getElementById("meta-count"),
-    unsaved: document.getElementById("unsaved-badge"),
-    tbody: document.getElementById("resource-rows"),
-    saveBtn: document.getElementById("save-btn"),
-    refreshBtn: document.getElementById("refresh-btn"),
-    addBtn: document.getElementById("add-btn"),
-    cancelBtn: document.getElementById("cancel-btn"),
+    status: requireElement("admin-status"),
+    metaUpdated: requireElement("meta-updated"),
+    metaCount: requireElement("meta-count"),
+    unsaved: requireElement("unsaved-badge"),
+    tbody: requireElement("resource-rows"),
+    saveBtn: requireElement("save-btn"),
+    refreshBtn: requireElement("refresh-btn"),
+    addBtn: requireElement("add-btn"),
+    cancelBtn: requireElement("cancel-btn"),
+    downloadBtn: requireElement("download-btn"),
+    uploadExcelBtn: requireElement("upload-excel-btn"),
   };
 
   function setStatus(message, kind) {
@@ -495,30 +543,30 @@ function adminPageScript(secret) {
     }
   }
 
-  document.getElementById("refresh-btn").addEventListener("click", () => {
+  els.refreshBtn.addEventListener("click", () => {
     if (state.dirty && !window.confirm("Discard unsaved changes and refresh from Azure?")) return;
     loadWorkbook();
   });
 
-  document.getElementById("cancel-btn").addEventListener("click", () => {
+  els.cancelBtn.addEventListener("click", () => {
     if (state.dirty && !window.confirm("Discard unsaved changes and reload from Azure?")) return;
     loadWorkbook();
   });
 
-  document.getElementById("add-btn").addEventListener("click", () => {
+  els.addBtn.addEventListener("click", () => {
     state.rows.push(defaultRow());
     markDirty(true);
     renderRows();
     updateMeta();
   });
 
-  document.getElementById("save-btn").addEventListener("click", saveWorkbook);
-  document.getElementById("download-btn").addEventListener("click", () => {
+  els.saveBtn.addEventListener("click", saveWorkbook);
+  els.downloadBtn.addEventListener("click", () => {
     window.location.href = downloadUrl;
   });
 
-  document.getElementById("upload-excel-btn").addEventListener("click", () => {
-    const fileInput = document.getElementById("${BRC_EDU_UPLOAD_FIELD_NAME}");
+  els.uploadExcelBtn.addEventListener("click", () => {
+    const fileInput = document.getElementById(fileInputId);
     if (fileInput instanceof HTMLInputElement) {
       fileInput.click();
     }
@@ -529,6 +577,13 @@ function adminPageScript(secret) {
   els.tbody.addEventListener("click", onTableClick);
 
   loadWorkbook();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAdminPage);
+  } else {
+    initAdminPage();
+  }
 })();
 </script>`;
 }
@@ -595,7 +650,7 @@ export function renderBrcEduUploadPage(secret) {
           <button class="btn btn-primary" type="submit">Upload Excel</button>
         </form>
       </div>`;
-    return pageShell("BRC Edu webinar resources", content, adminPageScript(secret));
+    return pageShell("BRC Edu webinar resources", content + adminPageScript(secret));
 }
 export function renderBrcEduUploadSuccessPage(latestBlob, archiveBlob, secret) {
     const content = `
