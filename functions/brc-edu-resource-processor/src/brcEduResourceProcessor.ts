@@ -1,6 +1,6 @@
 import { app, type InvocationContext } from "@azure/functions";
 
-import { BRC_EDU_BLOB_TRIGGER_PATH } from "./constants.js";
+import { BRC_EDU_BLOB_TRIGGER_PATH, BRC_EDU_STORAGE_CONNECTION } from "./constants.js";
 import { processBrcEduBlob } from "./processBrcEduBlob.js";
 
 function resolveBlobFileName(context: InvocationContext): string {
@@ -43,6 +43,6 @@ export async function brcEduResourceProcessor(
 
 app.storageBlob("brcEduResourceProcessor", {
   path: BRC_EDU_BLOB_TRIGGER_PATH,
-  connection: "AzureWebJobsStorage",
+  connection: BRC_EDU_STORAGE_CONNECTION,
   handler: brcEduResourceProcessor,
 });

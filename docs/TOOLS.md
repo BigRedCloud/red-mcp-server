@@ -489,7 +489,8 @@ The function POSTs to Red:
 
 Function configuration:
 
-- `AzureWebJobsStorage` — storage account connection for the blob trigger
+- `AzureWebJobsStorage` — Function App runtime storage account
+- `BRC_EDU_STORAGE_CONNECTION` — BRC Edu blob storage account connection for the blob trigger
 - `RED_BRC_EDU_SYNC_ENDPOINT` — full Red sync URL
 - `RED_BRC_EDU_SYNC_SECRET` — shared secret for the sync header
 

@@ -1,5 +1,5 @@
 import { app } from "@azure/functions";
-import { BRC_EDU_BLOB_TRIGGER_PATH } from "./constants.js";
+import { BRC_EDU_BLOB_TRIGGER_PATH, BRC_EDU_STORAGE_CONNECTION } from "./constants.js";
 import { processBrcEduBlob } from "./processBrcEduBlob.js";
 function resolveBlobFileName(context) {
     const triggerMetadata = context.triggerMetadata;
@@ -31,6 +31,6 @@ export async function brcEduResourceProcessor(blob, context) {
 }
 app.storageBlob("brcEduResourceProcessor", {
     path: BRC_EDU_BLOB_TRIGGER_PATH,
-    connection: "AzureWebJobsStorage",
+    connection: BRC_EDU_STORAGE_CONNECTION,
     handler: brcEduResourceProcessor,
 });
