@@ -4,6 +4,7 @@ import { enrichSupportEduRows, normaliseSupportEduRows, parseSupportEduCsv, } fr
 import { downloadSupportCsvFromGraph, getBrcEduGraphConfig } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
 import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
+import { freshdeskHelpResultDedupeKey, normaliseHelpSearchText, scoreFreshdeskHelpArticle, toFreshdeskHelpResourceResult, tokenizeHelpSearchQuestion, } from "../brc-edu/freshdesk/freshdesk-help-search.js";
 let eduResourcesCache = null;
 export function resetEduResourcesCacheForTests() {
     eduResourcesCache = null;
@@ -160,19 +161,29 @@ export const HELP_RESOURCE_RESULT_FIELDS = [
     "helpRoutingCategory",
     "description",
     "contentType",
+    "source",
 ];
-function normaliseSearchText(value) {
-    return value.trim().toLowerCase();
-}
-function scoreHelpResource(resource, questionTokens, category) {
+function scoreHelpResource(resource, question, questionTokens, category) {
     if (category &&
-        normaliseSearchText(resource.helpRoutingCategory) !== normaliseSearchText(category)) {
+        normaliseHelpSearchText(resource.helpRoutingCategory) !==
+            normaliseHelpSearchText(category)) {
         return 0;
     }
-    const title = normaliseSearchText(resource.title);
-    const helpRoutingCategory = normaliseSearchText(resource.helpRoutingCategory);
-    const keywords = normaliseSearchText(resource.keywords);
-    const description = normaliseSearchText(resource.description);
+    const query = normaliseHelpSearchText(question);
+    const title = normaliseHelpSearchText(resource.title);
+    const helpRoutingCategory = normaliseHelpSearchText(resource.helpRoutingCategory);
+    const keywords = normaliseHelpSearchText(resource.keywords);
+    const description = normaliseHelpSearchText(resource.description);
+    if (query && query === title) {
+        return 1000;
+    }
+    if (query && title.includes(query)) {
+        return 800;
+    }
+    if (questionTokens.length > 0 &&
+        questionTokens.every((token) => title.includes(token))) {
+        return 600;
+    }
     let score = 0;
     for (const token of questionTokens) {
         if (!token) {
@@ -193,10 +204,56 @@ function scoreHelpResource(resource, questionTokens, category) {
     }
     return score;
 }
+export function mergeHelpSearchResults(question, resources, freshdeskArticles, options) {
+    const questionTokens = tokenizeHelpSearchQuestion(question);
+    const maxResults = options?.maxResults ?? 5;
+    const includeInactive = options?.includeInactive ?? false;
+    const entries = [];
+    for (const resource of resources) {
+        if (!includeInactive && !resource.isActive) {
+            continue;
+        }
+        const score = scoreHelpResource(resource, question, questionTokens, options?.category);
+        if (score > 0) {
+            entries.push({
+                score,
+                result: toHelpResourceResult(resource),
+                dedupeKey: `webinar:${resource.url}`,
+            });
+        }
+    }
+    for (const article of freshdeskArticles) {
+        const score = scoreFreshdeskHelpArticle(article, question, questionTokens, options?.category);
+        if (score > 0) {
+            entries.push({
+                score,
+                result: toFreshdeskHelpResourceResult(article),
+                dedupeKey: freshdeskHelpResultDedupeKey(article),
+            });
+        }
+    }
+    const seenDedupeKeys = new Set();
+    const seenTitles = new Set();
+    return entries
+        .sort((left, right) => right.score - left.score ||
+        left.result.title.localeCompare(right.result.title))
+        .filter((entry) => {
+        if (seenDedupeKeys.has(entry.dedupeKey)) {
+            return false;
+        }
+        const titleKey = normaliseHelpSearchText(entry.result.title);
+        if (seenTitles.has(titleKey)) {
+            return false;
+        }
+        seenDedupeKeys.add(entry.dedupeKey);
+        seenTitles.add(titleKey);
+        return true;
+    })
+        .slice(0, maxResults)
+        .map((entry) => entry.result);
+}
 export function findHelpResources(question, options) {
-    const questionTokens = normaliseSearchText(question)
-        .split(/[^a-z0-9]+/)
-        .filter((token) => token.length >= 2);
+    const questionTokens = tokenizeHelpSearchQuestion(question);
     const resources = options?.resources ?? [];
     const includeInactive = options?.includeInactive ?? false;
     const maxResults = options?.maxResults ?? 5;
@@ -204,7 +261,7 @@ export function findHelpResources(question, options) {
         .filter((resource) => includeInactive || resource.isActive)
         .map((resource) => ({
         resource,
-        score: scoreHelpResource(resource, questionTokens, options?.category),
+        score: scoreHelpResource(resource, question, questionTokens, options?.category),
     }))
         .filter((entry) => entry.score > 0)
         .sort((left, right) => right.score - left.score || left.resource.title.localeCompare(right.resource.title))
@@ -218,19 +275,19 @@ export function toHelpResourceResult(resource) {
         helpRoutingCategory: resource.helpRoutingCategory,
         description: resource.description,
         contentType: resource.contentType,
+        source: resource.source,
     };
 }
 export function buildFindHelpResourcesResponse(question, resources, options) {
-    const matches = findHelpResources(question, {
+    const matches = mergeHelpSearchResults(question, resources, options?.freshdeskArticles ?? [], {
         category: options?.category,
-        resources,
         maxResults: 5,
     });
     return {
         question,
         category: options?.category ?? null,
         matchCount: matches.length,
-        resources: matches.map(toHelpResourceResult),
+        resources: matches,
         supportFallbackUrl: matches.length === 0 ? BRC_SUPPORT_FALLBACK_URL : null,
     };
 }

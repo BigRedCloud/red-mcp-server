@@ -1,12 +1,13 @@
 import { z } from "zod";
+import { loadFreshdeskArticlesForHelpSearch } from "../../brc-edu/freshdesk/freshdesk-help-search.js";
 import { buildFindHelpResourcesResponse, loadEnrichedEduResources, } from "../../edu/brc_edu_resources.js";
 import { jsonResponse } from "../../shared.js";
 export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
-    "Find Big Red Cloud help videos, webinars, and training resources for how-to questions.",
+    "Find Big Red Cloud help videos, webinars, training resources, and Freshdesk support articles for how-to questions.",
     "Use only when the user asks how to use a Big Red Cloud feature, training, tutorials, webinars, videos, or feature guidance.",
     "Do not use for connecting or reconnecting companies, listing connected companies, clearing connections, or any company books data.",
     "Read-only. Does not require a connected company, does not write CSV, and does not call Big Red Cloud APIs.",
-    "Returns up to 5 matching resources from the enriched BRC Edu CSV, or the support fallback URL when nothing matches.",
+    "Returns up to 5 matching resources from webinars and synced Freshdesk support articles, or the support fallback URL when nothing matches.",
 ].join(" ");
 export function registerHelpResourcesTools(server) {
     server.tool("brc_find_help_resources", FIND_HELP_RESOURCES_TOOL_DESCRIPTION, {
@@ -19,7 +20,13 @@ export function registerHelpResourcesTools(server) {
             .optional()
             .describe("Optional helpRoutingCategory filter, for example bank_feeds or sales_cash_bank_rec."),
     }, async ({ question, category }) => {
-        const resources = await loadEnrichedEduResources();
-        return jsonResponse(buildFindHelpResourcesResponse(question, resources, { category }));
+        const [resources, freshdeskArticles] = await Promise.all([
+            loadEnrichedEduResources(),
+            loadFreshdeskArticlesForHelpSearch(),
+        ]);
+        return jsonResponse(buildFindHelpResourcesResponse(question, resources, {
+            category,
+            freshdeskArticles: freshdeskArticles ?? undefined,
+        }));
     });
 }

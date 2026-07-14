@@ -12,6 +12,17 @@ import { downloadSupportCsvFromGraph, getBrcEduGraphConfig, type FetchLike } fro
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
 import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
 
+import {
+  freshdeskHelpResultDedupeKey,
+  normaliseHelpSearchText,
+  scoreFreshdeskHelpArticle,
+  toFreshdeskHelpResourceResult,
+  tokenizeHelpSearchQuestion,
+  type HelpResourceResult,
+} from "../brc-edu/freshdesk/freshdesk-help-search.js";
+
+import type { SyncedFreshdeskArticle } from "../brc-edu/freshdesk/freshdesk-sync-service.js";
+
 export type BrcEduSource = "local" | "graph";
 
 type EduResourcesCache = {
@@ -214,28 +225,47 @@ export const HELP_RESOURCE_RESULT_FIELDS = [
   "helpRoutingCategory",
   "description",
   "contentType",
+  "source",
 ] as const;
 
-function normaliseSearchText(value: string): string {
-  return value.trim().toLowerCase();
-}
+export type { HelpResourceResult };
 
 function scoreHelpResource(
   resource: EnrichedEduResource,
+  question: string,
   questionTokens: string[],
   category?: string,
 ): number {
   if (
     category &&
-    normaliseSearchText(resource.helpRoutingCategory) !== normaliseSearchText(category)
+    normaliseHelpSearchText(resource.helpRoutingCategory) !==
+      normaliseHelpSearchText(category)
   ) {
     return 0;
   }
 
-  const title = normaliseSearchText(resource.title);
-  const helpRoutingCategory = normaliseSearchText(resource.helpRoutingCategory);
-  const keywords = normaliseSearchText(resource.keywords);
-  const description = normaliseSearchText(resource.description);
+  const query = normaliseHelpSearchText(question);
+  const title = normaliseHelpSearchText(resource.title);
+  const helpRoutingCategory = normaliseHelpSearchText(
+    resource.helpRoutingCategory,
+  );
+  const keywords = normaliseHelpSearchText(resource.keywords);
+  const description = normaliseHelpSearchText(resource.description);
+
+  if (query && query === title) {
+    return 1000;
+  }
+
+  if (query && title.includes(query)) {
+    return 800;
+  }
+
+  if (
+    questionTokens.length > 0 &&
+    questionTokens.every((token) => title.includes(token))
+  ) {
+    return 600;
+  }
 
   let score = 0;
   for (const token of questionTokens) {
@@ -259,6 +289,91 @@ function scoreHelpResource(
   return score;
 }
 
+export function mergeHelpSearchResults(
+  question: string,
+  resources: EnrichedEduResource[],
+  freshdeskArticles: SyncedFreshdeskArticle[],
+  options?: {
+    category?: string;
+    maxResults?: number;
+    includeInactive?: boolean;
+  },
+): HelpResourceResult[] {
+  const questionTokens = tokenizeHelpSearchQuestion(question);
+  const maxResults = options?.maxResults ?? 5;
+  const includeInactive = options?.includeInactive ?? false;
+
+  const entries: Array<{
+    score: number;
+    result: HelpResourceResult;
+    dedupeKey: string;
+  }> = [];
+
+  for (const resource of resources) {
+    if (!includeInactive && !resource.isActive) {
+      continue;
+    }
+
+    const score = scoreHelpResource(
+      resource,
+      question,
+      questionTokens,
+      options?.category,
+    );
+
+    if (score > 0) {
+      entries.push({
+        score,
+        result: toHelpResourceResult(resource),
+        dedupeKey: `webinar:${resource.url}`,
+      });
+    }
+  }
+
+  for (const article of freshdeskArticles) {
+    const score = scoreFreshdeskHelpArticle(
+      article,
+      question,
+      questionTokens,
+      options?.category,
+    );
+
+    if (score > 0) {
+      entries.push({
+        score,
+        result: toFreshdeskHelpResourceResult(article),
+        dedupeKey: freshdeskHelpResultDedupeKey(article),
+      });
+    }
+  }
+
+  const seenDedupeKeys = new Set<string>();
+  const seenTitles = new Set<string>();
+
+  return entries
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.result.title.localeCompare(right.result.title),
+    )
+    .filter((entry) => {
+      if (seenDedupeKeys.has(entry.dedupeKey)) {
+        return false;
+      }
+
+      const titleKey = normaliseHelpSearchText(entry.result.title);
+      if (seenTitles.has(titleKey)) {
+        return false;
+      }
+
+      seenDedupeKeys.add(entry.dedupeKey);
+      seenTitles.add(titleKey);
+      return true;
+    })
+    .slice(0, maxResults)
+    .map((entry) => entry.result);
+}
+
 export function findHelpResources(
   question: string,
   options?: {
@@ -268,9 +383,7 @@ export function findHelpResources(
     resources?: EnrichedEduResource[];
   },
 ): EnrichedEduResource[] {
-  const questionTokens = normaliseSearchText(question)
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length >= 2);
+  const questionTokens = tokenizeHelpSearchQuestion(question);
   const resources = options?.resources ?? [];
   const includeInactive = options?.includeInactive ?? false;
   const maxResults = options?.maxResults ?? 5;
@@ -279,7 +392,12 @@ export function findHelpResources(
     .filter((resource) => includeInactive || resource.isActive)
     .map((resource) => ({
       resource,
-      score: scoreHelpResource(resource, questionTokens, options?.category),
+      score: scoreHelpResource(
+        resource,
+        question,
+        questionTokens,
+        options?.category,
+      ),
     }))
     .filter((entry) => entry.score > 0)
     .sort(
@@ -290,32 +408,42 @@ export function findHelpResources(
     .map((entry) => entry.resource);
 }
 
-export function toHelpResourceResult(resource: EnrichedEduResource) {
+export function toHelpResourceResult(
+  resource: EnrichedEduResource,
+): HelpResourceResult {
   return {
     title: resource.title,
     url: resource.url,
     helpRoutingCategory: resource.helpRoutingCategory,
     description: resource.description,
     contentType: resource.contentType,
+    source: resource.source,
   };
 }
 
 export function buildFindHelpResourcesResponse(
   question: string,
   resources: EnrichedEduResource[],
-  options?: { category?: string },
+  options?: {
+    category?: string;
+    freshdeskArticles?: SyncedFreshdeskArticle[];
+  },
 ) {
-  const matches = findHelpResources(question, {
-    category: options?.category,
+  const matches = mergeHelpSearchResults(
+    question,
     resources,
-    maxResults: 5,
-  });
+    options?.freshdeskArticles ?? [],
+    {
+      category: options?.category,
+      maxResults: 5,
+    },
+  );
 
   return {
     question,
     category: options?.category ?? null,
     matchCount: matches.length,
-    resources: matches.map(toHelpResourceResult),
+    resources: matches,
     supportFallbackUrl: matches.length === 0 ? BRC_SUPPORT_FALLBACK_URL : null,
   };
 }

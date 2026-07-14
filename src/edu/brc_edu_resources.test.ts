@@ -76,9 +76,11 @@ test("buildFindHelpResourcesResponse returns only required result fields", () =>
     "contentType",
     "description",
     "helpRoutingCategory",
+    "source",
     "title",
     "url",
   ]);
+  assert.equal(result.source, "Big Red Cloud");
   assert.equal(response.supportFallbackUrl, null);
   assert.equal(toHelpResourceResult(sampleResources()[0]!).url, "https://example.com/bank-feeds");
 });
