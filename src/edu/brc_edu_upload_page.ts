@@ -16,10 +16,14 @@ export const BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS = [
   "admin-status",
   "meta-updated",
   "meta-count",
+  "unsaved-badge",
   "resource-rows",
   "refresh-btn",
   "download-btn",
   "upload-excel-btn",
+  "add-btn",
+  "save-btn",
+  "cancel-btn",
 ] as const;
 
 /** Element IDs referenced by the admin script but safe to omit. */
@@ -180,6 +184,12 @@ function pageShell(title: string, content: string, extraHead = ""): string {
         border: none;
       }
 
+      .btn-danger {
+        color: #991b1b;
+        border-color: #fecaca;
+        background: #fff5f5;
+      }
+
       .meta-bar {
         display: flex;
         flex-wrap: wrap;
@@ -215,15 +225,23 @@ function pageShell(title: string, content: string, extraHead = ""): string {
         letter-spacing: 0.03em;
       }
 
-      td a {
-        color: ${BRC_RED};
-        word-break: break-all;
+      td input, td select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font: inherit;
       }
 
-      .empty-state {
-        padding: 24px;
-        text-align: center;
-        color: #6b7280;
+      td input.invalid, td select.invalid {
+        border-color: #dc2626;
+        background: #fef2f2;
+      }
+
+      .field-error {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #b91c1c;
       }
 
       label {
@@ -249,6 +267,30 @@ function pageShell(title: string, content: string, extraHead = ""): string {
       }
 
       .instructions li { margin-bottom: 6px; }
+
+      .unsaved-badge {
+        display: none;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #fffbeb;
+        color: #92400e;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .unsaved-badge.visible { display: inline-flex; }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
 
       @media (max-width: 720px) {
         .toolbar { flex-direction: column; }
@@ -302,149 +344,271 @@ function adminPageScript(secret: string): string {
   }
 
   function initAdminPage() {
-    const apiUrl = ${JSON.stringify(apiUrl)};
-    const downloadUrl = ${JSON.stringify(downloadUrl)};
-    const fileInputId = ${JSON.stringify(BRC_EDU_UPLOAD_FIELD_NAME)};
+  const apiUrl = ${JSON.stringify(apiUrl)};
+  const downloadUrl = ${JSON.stringify(downloadUrl)};
+  const fileInputId = ${JSON.stringify(BRC_EDU_UPLOAD_FIELD_NAME)};
+  const state = {
+    rows: [],
+    etag: "",
+    lastModified: "",
+    dirty: false,
+    busy: false,
+    rowErrors: {},
+  };
 
-    const els = {
-      status: requireElement("admin-status"),
-      metaUpdated: requireElement("meta-updated"),
-      metaCount: requireElement("meta-count"),
-      tbody: requireElement("resource-rows"),
-      refreshBtn: requireElement("refresh-btn"),
-      downloadBtn: requireElement("download-btn"),
-      uploadExcelBtn: requireElement("upload-excel-btn"),
+  const els = {
+    status: requireElement("admin-status"),
+    metaUpdated: requireElement("meta-updated"),
+    metaCount: requireElement("meta-count"),
+    unsaved: requireElement("unsaved-badge"),
+    tbody: requireElement("resource-rows"),
+    saveBtn: requireElement("save-btn"),
+    refreshBtn: requireElement("refresh-btn"),
+    addBtn: requireElement("add-btn"),
+    cancelBtn: requireElement("cancel-btn"),
+    downloadBtn: requireElement("download-btn"),
+    uploadExcelBtn: requireElement("upload-excel-btn"),
+  };
+
+  function setStatus(message, kind) {
+    els.status.textContent = message || "";
+    els.status.className = "notice" + (kind ? " " + kind : "");
+    els.status.style.display = message ? "block" : "none";
+  }
+
+  function setBusy(busy) {
+    state.busy = busy;
+    for (const button of document.querySelectorAll("button")) {
+      if (button.id === "save-btn" || button.dataset.busyDisable === "true") {
+        button.disabled = busy;
+      }
+    }
+  }
+
+  function markDirty(dirty) {
+    state.dirty = dirty;
+    els.unsaved.classList.toggle("visible", dirty);
+  }
+
+  function defaultRow() {
+    return {
+      videoTitle: "",
+      videoUrl: "",
+      helpRoutingCategory: "",
+      description: "",
+      active: "Yes",
     };
+  }
 
-    let busy = false;
-
-    function setStatus(message, kind) {
-      els.status.textContent = message || "";
-      els.status.className = "notice" + (kind ? " " + kind : "");
-      els.status.style.display = message ? "block" : "none";
-    }
-
-    function setBusy(nextBusy) {
-      busy = nextBusy;
-      for (const button of document.querySelectorAll("button[data-busy-disable='true']")) {
-        button.disabled = nextBusy;
-      }
-    }
-
-    function appendTextCell(row, value) {
-      const cell = document.createElement("td");
-      cell.textContent = value == null ? "" : String(value);
-      row.appendChild(cell);
-    }
-
-    function appendUrlCell(row, value) {
-      const cell = document.createElement("td");
-      const trimmed = value == null ? "" : String(value).trim();
-      if (!trimmed) {
-        cell.textContent = "";
-        row.appendChild(cell);
-        return;
-      }
-
+  function validateClientRow(row, index) {
+    const errors = [];
+    if (!row.videoTitle.trim()) errors.push("Video Title is required.");
+    if (!row.videoUrl.trim()) errors.push("Video URL is required.");
+    else {
       try {
-        const parsed = new URL(trimmed);
-        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-          const link = document.createElement("a");
-          link.href = trimmed;
-          link.textContent = trimmed;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          cell.appendChild(link);
-          row.appendChild(cell);
-          return;
+        const parsed = new URL(row.videoUrl.trim());
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          errors.push("Video URL must use http or https.");
         }
       } catch {
-        // Fall through to plain text.
+        errors.push("Video URL must be valid.");
       }
-
-      cell.textContent = trimmed;
-      row.appendChild(cell);
     }
+    if (!row.helpRoutingCategory.trim()) errors.push("Help-Routing Category is required.");
+    if (!row.active.trim()) errors.push("Active is required.");
+    state.rowErrors[index] = errors;
+    return errors;
+  }
 
-    function renderRows(rows) {
-      els.tbody.replaceChildren();
+  function renderRows() {
+    els.tbody.innerHTML = "";
+    state.rows.forEach((row, index) => {
+      const tr = document.createElement("tr");
+      const errors = state.rowErrors[index] || [];
+      const invalidClass = errors.length ? " invalid" : "";
+      tr.innerHTML = \`
+        <td><label class="sr-only" for="title-\${index}">Video Title</label><input id="title-\${index}" data-field="videoTitle" data-index="\${index}" value="" /></td>
+        <td><label class="sr-only" for="url-\${index}">Video URL</label><input id="url-\${index}" data-field="videoUrl" data-index="\${index}" value="" /></td>
+        <td><label class="sr-only" for="category-\${index}">Help-Routing Category</label><input id="category-\${index}" data-field="helpRoutingCategory" data-index="\${index}" value="" /></td>
+        <td><label class="sr-only" for="description-\${index}">Description</label><input id="description-\${index}" data-field="description" data-index="\${index}" value="" /></td>
+        <td><label class="sr-only" for="active-\${index}">Active</label><select id="active-\${index}" data-field="active" data-index="\${index}"><option>Yes</option><option>No</option></select></td>
+        <td><button type="button" class="btn btn-danger" data-delete="\${index}" aria-label="Delete row \${index + 1}">Delete</button></td>
+      \`;
+      els.tbody.appendChild(tr);
+      tr.querySelector('[data-field="videoTitle"]').value = row.videoTitle;
+      tr.querySelector('[data-field="videoUrl"]').value = row.videoUrl;
+      tr.querySelector('[data-field="helpRoutingCategory"]').value = row.helpRoutingCategory;
+      tr.querySelector('[data-field="description"]').value = row.description;
+      tr.querySelector('[data-field="active"]').value = row.active || "Yes";
+      for (const input of tr.querySelectorAll("input, select")) {
+        if (errors.length) input.classList.add("invalid");
+        else input.classList.remove("invalid");
+      }
+      if (errors.length) {
+        const errorEl = document.createElement("div");
+        errorEl.className = "field-error";
+        errorEl.textContent = errors.join(" ");
+        tr.querySelector("td").appendChild(errorEl);
+      }
+    });
+  }
 
-      if (!Array.isArray(rows) || rows.length === 0) {
-        const emptyRow = document.createElement("tr");
-        const emptyCell = document.createElement("td");
-        emptyCell.colSpan = 5;
-        emptyCell.className = "empty-state";
-        emptyCell.textContent = "No workbook rows to display. Download the current Excel file or upload a replacement workbook.";
-        emptyRow.appendChild(emptyCell);
-        els.tbody.appendChild(emptyRow);
+  function updateMeta() {
+    els.metaCount.textContent = String(state.rows.length);
+    els.metaUpdated.textContent = state.lastModified
+      ? new Date(state.lastModified).toLocaleString()
+      : "Not loaded";
+  }
+
+  function applyPayload(payload) {
+    state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+    state.etag = payload.etag || "";
+    state.lastModified = payload.lastModified || "";
+    state.rowErrors = {};
+    markDirty(false);
+    renderRows();
+    updateMeta();
+  }
+
+  async function loadWorkbook() {
+    setBusy(true);
+    setStatus("Loading workbook from Azure...", "warning");
+    try {
+      const response = await fetch(apiUrl, { headers: { Accept: "application/json" } });
+      if (response.status === 404) {
+        applyPayload({ rows: [], etag: "", lastModified: "", rowCount: 0 });
+        setStatus("No latest workbook found. Add resources and save to publish.", "warning");
         return;
       }
-
-      for (const row of rows) {
-        const tr = document.createElement("tr");
-        appendTextCell(tr, row.videoTitle);
-        appendUrlCell(tr, row.videoUrl);
-        appendTextCell(tr, row.helpRoutingCategory);
-        appendTextCell(tr, row.description);
-        appendTextCell(tr, row.active);
-        els.tbody.appendChild(tr);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Could not load workbook.");
       }
-    }
-
-    function updateMeta(payload) {
-      const rows = Array.isArray(payload?.rows) ? payload.rows : [];
-      els.metaCount.textContent = String(rows.length);
-      els.metaUpdated.textContent = payload?.lastModified
-        ? new Date(payload.lastModified).toLocaleString()
-        : "Not loaded";
-    }
-
-    function applyPayload(payload) {
-      const rows = Array.isArray(payload?.rows) ? payload.rows : [];
-      renderRows(rows);
-      updateMeta(payload);
-    }
-
-    async function loadWorkbook() {
-      setBusy(true);
-      setStatus("Loading workbook from Azure...", "warning");
-      try {
-        const response = await fetch(apiUrl, { headers: { Accept: "application/json" } });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || "Could not load workbook.");
-        }
-        const payload = await response.json();
-        applyPayload(payload);
-        const rows = Array.isArray(payload.rows) ? payload.rows : [];
-        if (rows.length === 0 && !payload.lastModified) {
-          setStatus("No latest workbook found. Upload a replacement file to publish one.", "warning");
-        } else {
-          setStatus("Workbook loaded from Azure.", "success");
-        }
-      } catch (error) {
-        setStatus(error.message || "Could not load workbook.", "error");
-      } finally {
-        setBusy(false);
+      const payload = await response.json();
+      applyPayload(payload);
+      if (Array.isArray(payload.warnings) && payload.warnings.length) {
+        setStatus(
+          "Workbook loaded from Azure. " + payload.warnings.join(" "),
+          "warning",
+        );
+      } else {
+        setStatus("Workbook loaded from Azure.", "success");
       }
+    } catch (error) {
+      setStatus(error.message || "Could not load workbook.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveWorkbook() {
+    let hasErrors = false;
+    state.rowErrors = {};
+    state.rows.forEach((row, index) => {
+      const errors = validateClientRow(row, index);
+      if (errors.length) hasErrors = true;
+    });
+    renderRows();
+    if (hasErrors) {
+      setStatus("Fix validation errors before saving.", "error");
+      return;
     }
 
-    els.refreshBtn.addEventListener("click", () => {
-      loadWorkbook();
-    });
-
-    els.downloadBtn.addEventListener("click", () => {
-      window.location.href = downloadUrl;
-    });
-
-    els.uploadExcelBtn.addEventListener("click", () => {
-      const fileInput = document.getElementById(fileInputId);
-      if (fileInput instanceof HTMLInputElement) {
-        fileInput.click();
+    setBusy(true);
+    setStatus("Saving workbook to Azure...", "warning");
+    try {
+      const response = await fetch(apiUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ rows: state.rows, ifMatch: state.etag || undefined }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        setStatus(body.error || "Workbook changed in Azure. Refresh before saving.", "error");
+        return;
       }
-    });
+      if (!response.ok) {
+        const detail = Array.isArray(body.errors) ? " " + body.errors.join(" ") : "";
+        throw new Error((body.error || "Save failed.") + detail);
+      }
+      applyPayload(body);
+      if (Array.isArray(body.warnings) && body.warnings.length) {
+        setStatus(
+          "Workbook saved and published to Azure. " + body.warnings.join(" "),
+          "warning",
+        );
+      } else {
+        setStatus("Workbook saved and published to Azure.", "success");
+      }
+    } catch (error) {
+      setStatus(error.message || "Save failed.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
+  function onInputChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+    const index = Number(target.dataset.index);
+    const field = target.dataset.field;
+    if (!Number.isInteger(index) || !field || !state.rows[index]) return;
+    state.rows[index][field] = target.value;
+    markDirty(true);
+    validateClientRow(state.rows[index], index);
+  }
+
+  function onTableClick(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.dataset.delete != null) {
+      const index = Number(target.dataset.delete);
+      if (!Number.isInteger(index)) return;
+      if (!window.confirm("Delete this resource row?")) return;
+      state.rows.splice(index, 1);
+      markDirty(true);
+      renderRows();
+      updateMeta();
+    }
+  }
+
+  els.refreshBtn.addEventListener("click", () => {
+    if (state.dirty && !window.confirm("Discard unsaved changes and refresh from Azure?")) return;
     loadWorkbook();
+  });
+
+  els.cancelBtn.addEventListener("click", () => {
+    if (state.dirty && !window.confirm("Discard unsaved changes and reload from Azure?")) return;
+    loadWorkbook();
+  });
+
+  els.addBtn.addEventListener("click", () => {
+    state.rows.push(defaultRow());
+    markDirty(true);
+    renderRows();
+    updateMeta();
+  });
+
+  els.saveBtn.addEventListener("click", saveWorkbook);
+  els.downloadBtn.addEventListener("click", () => {
+    window.location.href = downloadUrl;
+  });
+
+  els.uploadExcelBtn.addEventListener("click", () => {
+    const fileInput = document.getElementById(fileInputId);
+    if (fileInput instanceof HTMLInputElement) {
+      fileInput.click();
+    }
+  });
+
+  els.tbody.addEventListener("input", onInputChange);
+  els.tbody.addEventListener("change", onInputChange);
+  els.tbody.addEventListener("click", onTableClick);
+
+  loadWorkbook();
   }
 
   if (document.readyState === "loading") {
@@ -461,19 +625,18 @@ export function renderBrcEduUploadPage(secret: string): string {
       <div class="card instructions">
         <h2>How to manage Red webinar resources</h2>
         <ol class="lead">
-          <li>Click Refresh from Azure to view the latest workbook.</li>
-          <li>Click Download current Excel.</li>
-          <li>Open the downloaded file in Excel and make the required changes.</li>
-          <li>Keep the existing column headers unchanged.</li>
-          <li>Save the updated file as .xlsx or .csv.</li>
-          <li>Use Upload Excel to upload the replacement file.</li>
+          <li>Refresh from Azure before editing.</li>
+          <li>Add or update resource rows in the table below.</li>
+          <li>Use public URLs for each video resource. Each Video URL must be unique; titles may repeat when URLs differ.</li>
+          <li>Set Active to control visibility in Red.</li>
+          <li>Save &amp; Publish when finished.</li>
           <li>Previous versions are archived automatically.</li>
-          <li>Red updates after the uploaded file is processed.</li>
         </ol>
       </div>
 
       <div class="card">
         <div class="meta-bar">
+          <span id="unsaved-badge" class="unsaved-badge" aria-live="polite">Unsaved changes</span>
           <span><strong>Last updated:</strong> <span id="meta-updated">Not loaded</span></span>
           <span><strong>Rows:</strong> <span id="meta-count">0</span></span>
         </div>
@@ -482,6 +645,9 @@ export function renderBrcEduUploadPage(secret: string): string {
           <button type="button" class="btn" id="refresh-btn" data-busy-disable="true">Refresh from Azure</button>
           <button type="button" class="btn" id="download-btn" data-busy-disable="true">Download current Excel</button>
           <button type="button" class="btn" id="upload-excel-btn" data-busy-disable="true">Upload Excel</button>
+          <button type="button" class="btn" id="add-btn" data-busy-disable="true">Add resource</button>
+          <button type="button" class="btn btn-primary" id="save-btn" data-busy-disable="true">Save &amp; Publish</button>
+          <button type="button" class="btn" id="cancel-btn" data-busy-disable="true">Cancel changes / reload</button>
         </div>
         <div class="table-wrap">
           <table aria-label="Webinar resources">
@@ -492,6 +658,7 @@ export function renderBrcEduUploadPage(secret: string): string {
                 <th scope="col">Help-Routing Category</th>
                 <th scope="col">Description</th>
                 <th scope="col">Active</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody id="resource-rows"></tbody>
@@ -502,7 +669,7 @@ export function renderBrcEduUploadPage(secret: string): string {
       <div class="card">
         <h2>Upload Excel file</h2>
         <p class="lead">
-          Upload an approved <strong>.xlsx</strong> or <strong>.csv</strong> file. Red stores the file in Azure Blob Storage for downstream processing.
+          You can still upload an approved <strong>.xlsx</strong> or <strong>.csv</strong> file directly. Red stores the file in Azure Blob Storage for downstream processing.
         </p>
         <form method="POST" action="${escapeHtml(uploadActionUrl(secret))}" enctype="multipart/form-data">
           <label for="${BRC_EDU_UPLOAD_FIELD_NAME}">Resource file</label>
