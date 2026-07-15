@@ -28,6 +28,8 @@ export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
     "Recorded webinars return title, description, public video URL, and category.",
     "Upcoming webinars return title, weekday, description, topics, registration URL, and webinar-series page URL.",
     "Read-only. Does not require a connected company.",
+    "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps.",
+    "Use returned MCP image content where relevant. Do not claim screenshots were supplied when imageCount is 0.",
     "Do not expose Azure blob names, storage URLs, private Freshdesk image URLs, or sync metadata in customer-facing text.",
 ].join(" ");
 export function registerHelpResourcesTools(server) {
@@ -74,8 +76,22 @@ export function registerHelpResourcesTools(server) {
             .string()
             .min(1)
             .describe("Resource ID from brc_find_help_resources, for example customer_docs:bank-reconciliation or freshdesk:1001."),
-    }, async ({ resourceId }) => {
-        const result = await getHelpResourceDetails(resourceId);
+        includeImages: z
+            .boolean()
+            .optional()
+            .describe("When true, Freshdesk articles may include mirrored screenshot image content. Defaults to true."),
+        maxImages: z
+            .number()
+            .int()
+            .min(1)
+            .max(8)
+            .optional()
+            .describe("Maximum Freshdesk screenshots to return. Defaults to 5. Hard maximum 8."),
+    }, async ({ resourceId, includeImages, maxImages }) => {
+        const result = await getHelpResourceDetails(resourceId, {
+            includeImages: includeImages ?? true,
+            maxImages,
+        });
         if (!result.ok) {
             return jsonResponse({ error: result.error });
         }

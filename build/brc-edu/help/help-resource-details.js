@@ -1,61 +1,16 @@
 import { loadCustomerDocsForHelpSearch } from "../customer-docs/customer-docs-index-store.js";
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "../freshdesk/freshdesk-index-store.js";
-import { createConfiguredFreshdeskImageContainer, } from "../freshdesk/image-sync.js";
+import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
+import { buildFreshdeskImageLoadDiagnostics, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
+import { createConfiguredFreshdeskImageContainer, isFreshdeskImageContainerConfigured, } from "../freshdesk/image-sync.js";
 import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming-webinar-index-store.js";
 import { loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
 import { parseHelpResourceId, } from "./help-resource-types.js";
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
-import { FRESHDESK_LINK_RESPONSE_GUIDANCE, getSyncedFreshdeskArticlePublicUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUIDANCE, } from "./unified-help-search.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
 export const HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
-async function readBlobBytes(container, blobName) {
-    try {
-        const blobClient = container.getBlockBlobClient(blobName);
-        const exists = await blobClient.exists();
-        if (!exists) {
-            return null;
-        }
-        const response = await blobClient.download(0);
-        const chunks = [];
-        for await (const chunk of response.readableStreamBody ?? []) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        return Buffer.concat(chunks);
-    }
-    catch {
-        return null;
-    }
-}
-export async function loadFreshdeskImageBlocks(article, container, options = {}) {
-    if (!container || article.syncedImages.length === 0) {
-        return [];
-    }
-    const maxImages = options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES;
-    const maxImageBytes = options.maxImageBytes ?? HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES;
-    const maxTotalBytes = options.maxTotalBytes ?? HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES;
-    const blocks = [];
-    let totalBytes = 0;
-    for (const image of article.syncedImages.slice(0, maxImages)) {
-        const buffer = await readBlobBytes(container, image.blobName);
-        if (!buffer || buffer.byteLength === 0) {
-            continue;
-        }
-        if (buffer.byteLength > maxImageBytes) {
-            continue;
-        }
-        if (totalBytes + buffer.byteLength > maxTotalBytes) {
-            break;
-        }
-        totalBytes += buffer.byteLength;
-        blocks.push({
-            mimeType: image.contentType,
-            data: buffer.toString("base64"),
-        });
-    }
-    return blocks;
-}
 async function findFreshdeskArticleById(freshdeskArticleId, container) {
     if (!container) {
         return null;
@@ -91,6 +46,7 @@ function buildDetailsGuidance() {
     return {
         supportFooter: SUPPORT_FOOTER_GUIDANCE,
         freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
+        images: "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps. Use returned MCP image content where relevant. Do not claim screenshots were supplied when imageCount is 0.",
         doNotExpose: [
             "resource IDs in customer-facing text",
             "Azure blob names",
@@ -98,6 +54,7 @@ function buildDetailsGuidance() {
             "Freshdesk source image URLs",
             "sync metadata",
             "invented Freshdesk article URLs",
+            "internal image metadata",
         ],
     };
 }
@@ -112,6 +69,8 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
     const imageContainer = options.freshdeskImageContainer === undefined
         ? createConfiguredFreshdeskImageContainer()
         : options.freshdeskImageContainer;
+    const includeImages = options.includeImages ?? true;
+    const maxImages = Math.min(options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD);
     try {
         if (parsed.source === "freshdesk") {
             const article = await findFreshdeskArticleById(parsed.id, freshdeskIndexContainer);
@@ -119,7 +78,13 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                 return { ok: false, error: "Help resource was not found." };
             }
             const normalized = fromFreshdeskResource(article);
-            const images = await loadFreshdeskImageBlocks(article, imageContainer);
+            const imageResult = await loadFreshdeskImageBlocks(article, imageContainer, {
+                includeImages,
+                maxImages,
+                maxImageBytes: HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES,
+                maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
+            });
+            logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
             return {
                 ok: true,
                 payload: {
@@ -131,10 +96,14 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     publicUrl: getSyncedFreshdeskArticlePublicUrl(article),
                     category: normalized.category,
                     topics: normalized.topics,
-                    imageCount: images.length,
+                    imageAvailable: freshdeskArticleImageAvailable(article),
+                    imageCount: imageResult.imageCount,
+                    requestedImageCount: imageResult.requestedImageCount,
+                    skippedImageCount: imageResult.skippedImageCount,
+                    imageWarning: imageResult.storageWarning,
                     responseGuidance: buildDetailsGuidance(),
                 },
-                images,
+                images: imageResult.blocks,
             };
         }
         if (parsed.source === "customer_docs") {
@@ -215,17 +184,23 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
     }
 }
 export function helpResourceDetailResponse(payload, images) {
+    const sortedImages = [...images].sort((left, right) => left.order - right.order);
     return {
         content: [
             {
                 type: "text",
                 text: JSON.stringify(payload, null, 2),
             },
-            ...images.map((image) => ({
-                type: "image",
-                data: image.data,
-                mimeType: image.mimeType,
-            })),
+            ...sortedImages.flatMap((image) => [
+                ...(image.caption
+                    ? [{ type: "text", text: image.caption }]
+                    : []),
+                {
+                    type: "image",
+                    data: image.data,
+                    mimeType: image.mimeType,
+                },
+            ]),
         ],
     };
 }

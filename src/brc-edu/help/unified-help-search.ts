@@ -7,10 +7,11 @@ import {
 } from "../freshdesk/freshdesk-help-search.js";
 import type { SyncedFreshdeskArticle } from "../freshdesk/freshdesk-sync-service.js";
 import {
-  FRESHDESK_LINK_RESPONSE_GUIDANCE,
   getSyncedFreshdeskArticlePublicUrl,
+  FRESHDESK_LINK_RESPONSE_GUIDANCE,
   isFreshdeskPublicArticleUrl,
 } from "../freshdesk/freshdesk-article-url.js";
+import { getNormalizedFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-load.js";
 import type {
   HelpResourceSource,
   HelpResourceSourceFilter,
@@ -146,6 +147,8 @@ function fromRecordedWebinarResource(
 function fromFreshdeskResource(
   article: SyncedFreshdeskArticle,
 ): NormalizedHelpResource {
+  const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+
   return {
     resourceId: `freshdesk:${article.freshdeskArticleId}`,
     source: "freshdesk",
@@ -155,7 +158,7 @@ function fromFreshdeskResource(
     url: getSyncedFreshdeskArticlePublicUrl(article) ?? "",
     category: article.folderName,
     topics: [article.folderName],
-    imageBlobNames: article.syncedImages.map((image) => image.blobName),
+    imageBlobNames: syncedImages.map((image) => image.blobName),
     enabled: article.enabled,
     lastSyncedAt: article.updatedAt,
   };

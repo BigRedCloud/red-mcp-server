@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { BlobServiceClient, } from "@azure/storage-blob";
 import { getBrcEduUploadContainer, getBrcEduUploadStorageConnectionString, } from "../../edu/brc_edu_upload_store.js";
 import { repairStoredFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
+import { getNormalizedFreshdeskSyncedImages, } from "./freshdesk-image-load.js";
 export const FRESHDESK_ARTICLES_INDEX_BLOB_PATH = "brc-edu/freshdesk/latest/articles.json";
 export const FRESHDESK_ARTICLES_INDEX_CONTENT_TYPE = "application/json; charset=utf-8";
 export const FRESHDESK_ARTICLES_INDEX_CACHE_CONTROL = "no-store";
@@ -107,10 +108,20 @@ function repairLoadedFreshdeskArticle(article) {
                 : null,
         slug: typeof article.slug === "string" ? article.slug : null,
     });
+    const syncedImages = getNormalizedFreshdeskSyncedImages(article).map((image, index) => ({
+        sourceUrl: image.sourceUrl ?? "",
+        blobName: image.blobName,
+        sha256: image.sha256 ?? "",
+        contentType: image.mimeType,
+        order: image.order ?? index,
+        altText: image.altText ?? null,
+        sizeBytes: image.sizeBytes,
+    }));
     return {
         ...article,
         slug: repaired.slug,
         publicUrl: repaired.publicUrl,
+        syncedImages,
     };
 }
 export function normalizeLoadedFreshdeskArticlesIndex(index) {

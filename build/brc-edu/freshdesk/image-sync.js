@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { BlobServiceClient, } from "@azure/storage-blob";
+import { getFreshdeskKbImageContainerName, getFreshdeskKbStorageConnectionString, } from "./freshdesk-kb-storage.js";
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set([
     "image/png",
@@ -70,12 +71,15 @@ export function createFreshdeskImageContainer(connectionString, containerName) {
     return blobServiceClient.getContainerClient(containerName);
 }
 export function createConfiguredFreshdeskImageContainer() {
-    const connectionString = process.env.BRC_EDU_KB_STORAGE_CONNECTION?.trim();
-    const containerName = process.env.BRC_EDU_KB_IMAGE_CONTAINER?.trim() || "brc-edu-images";
+    const connectionString = getFreshdeskKbStorageConnectionString();
+    const containerName = getFreshdeskKbImageContainerName();
     if (!connectionString) {
         return null;
     }
     return createFreshdeskImageContainer(connectionString, containerName);
+}
+export function isFreshdeskImageContainerConfigured() {
+    return getFreshdeskKbStorageConnectionString() !== null;
 }
 export async function syncFreshdeskImages(articleId, images, container) {
     await container.createIfNotExists();
@@ -110,6 +114,8 @@ export async function syncFreshdeskImages(articleId, images, container) {
             blobName,
             sha256,
             contentType,
+            order: syncedImages.length,
+            altText: image.altText,
         });
     }
     return syncedImages;

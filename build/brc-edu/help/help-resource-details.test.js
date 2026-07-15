@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getHelpResourceDetails, loadFreshdeskImageBlocks, } from "./help-resource-details.js";
+import { getHelpResourceDetails, helpResourceDetailResponse, } from "./help-resource-details.js";
 function freshdeskArticle() {
     return {
         id: "freshdesk-1001",
@@ -18,12 +18,8 @@ function freshdeskArticle() {
                 blobName: "freshdesk/1001/a.png",
                 sha256: "a",
                 contentType: "image/png",
-            },
-            {
-                sourceUrl: "https://cdn.freshdesk.com/b.png",
-                blobName: "freshdesk/1001/b.png",
-                sha256: "b",
-                contentType: "image/png",
+                altText: "Cash book screen",
+                order: 0,
             },
         ],
         updatedAt: "2026-07-01T00:00:00.000Z",
@@ -32,50 +28,8 @@ function freshdeskArticle() {
         publicUrl: null,
     };
 }
-test("loadFreshdeskImageBlocks returns ordered supported image blocks with limits", async () => {
+test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", async () => {
     const png = Buffer.from("fake-image-bytes");
-    const container = {
-        getBlockBlobClient(blobName) {
-            return {
-                async exists() {
-                    return blobName.startsWith("freshdesk/1001/");
-                },
-                async download() {
-                    return {
-                        readableStreamBody: (async function* () {
-                            yield png;
-                        })(),
-                    };
-                },
-            };
-        },
-    };
-    const blocks = await loadFreshdeskImageBlocks(freshdeskArticle(), container, {
-        maxImages: 1,
-        maxImageBytes: png.byteLength,
-        maxTotalBytes: png.byteLength,
-    });
-    assert.equal(blocks.length, 1);
-    assert.equal(blocks[0]?.mimeType, "image/png");
-    assert.match(blocks[0]?.data ?? "", /^[A-Za-z0-9+/=]+$/);
-});
-test("loadFreshdeskImageBlocks skips missing images safely", async () => {
-    const container = {
-        getBlockBlobClient() {
-            return {
-                async exists() {
-                    return false;
-                },
-                async download() {
-                    throw new Error("should not download");
-                },
-            };
-        },
-    };
-    const blocks = await loadFreshdeskImageBlocks(freshdeskArticle(), container);
-    assert.deepEqual(blocks, []);
-});
-test("getHelpResourceDetails returns Freshdesk instructions without storage URLs", async () => {
     const index = {
         generatedAt: "2026-07-15T10:00:00.000Z",
         articleCount: 1,
@@ -100,10 +54,17 @@ test("getHelpResourceDetails returns Freshdesk instructions without storage URLs
         },
     };
     const imageContainer = {
-        getBlockBlobClient() {
+        getBlockBlobClient(blobName) {
             return {
                 async exists() {
-                    return false;
+                    return blobName === "freshdesk/1001/a.png";
+                },
+                async download() {
+                    return {
+                        readableStreamBody: (async function* () {
+                            yield png;
+                        })(),
+                    };
                 },
             };
         },
@@ -114,11 +75,40 @@ test("getHelpResourceDetails returns Freshdesk instructions without storage URLs
     });
     assert.equal(result.ok, true);
     if (result.ok) {
-        assert.match(result.payload.instructions, /Step one/i);
+        assert.equal(result.payload.imageAvailable, true);
+        assert.equal(result.payload.imageCount, 1);
         assert.equal(result.payload.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation");
-        assert.match(result.payload.responseGuidance.freshdeskLinks ?? "", /bigredcloud\.freshdesk\.com/i);
+        assert.equal(JSON.stringify(result.payload).includes("freshdesk/1001"), false);
         assert.equal(JSON.stringify(result.payload).includes("AccountKey="), false);
     }
+});
+test("helpResourceDetailResponse includes MCP image blocks and caption text", () => {
+    const response = helpResourceDetailResponse({
+        resourceId: "freshdesk:1001",
+        source: "freshdesk",
+        title: "Test",
+        summary: "Summary",
+        instructions: "Instructions",
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-test",
+        category: "Help",
+        topics: ["Help"],
+        imageCount: 1,
+        responseGuidance: {
+            supportFooter: "footer",
+            doNotExpose: [],
+        },
+    }, [
+        {
+            mimeType: "image/png",
+            data: Buffer.from("x").toString("base64"),
+            caption: "Screenshot 1: Cash book screen",
+            order: 0,
+        },
+    ]);
+    assert.equal(response.content.length, 3);
+    assert.equal(response.content[0]?.type, "text");
+    assert.equal(response.content[1]?.type, "text");
+    assert.equal(response.content[2]?.type, "image");
 });
 test("getHelpResourceDetails rejects invalid resource IDs safely", async () => {
     const result = await getHelpResourceDetails("not-a-valid-id");
@@ -126,4 +116,8 @@ test("getHelpResourceDetails rejects invalid resource IDs safely", async () => {
     if (!result.ok) {
         assert.match(result.error, /invalid/i);
     }
+});
+test("customer docs do not attempt Azure image loading", async () => {
+    const result = await getHelpResourceDetails("customer_docs:missing");
+    assert.equal(result.ok, false);
 });

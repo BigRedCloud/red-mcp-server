@@ -314,6 +314,8 @@ test("syncFreshdeskImages returns the expected synced-image metadata", async () 
       blobName: `freshdesk/${ARTICLE_ID}/${sha256Hex(buffer)}.png`,
       sha256: sha256Hex(buffer),
       contentType: "image/png",
+      order: 0,
+      altText: "ignored by sync",
     },
   ]);
 });

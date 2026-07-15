@@ -6,9 +6,13 @@ import {
   type ContainerClient,
 } from "@azure/storage-blob";
 
-import type {
-  FreshdeskImageReference,
-} from "./types.js";
+import type { FreshdeskImageReference } from "./types.js";
+import {
+  getFreshdeskKbImageContainerName,
+  getFreshdeskKbStorageConnectionString,
+} from "./freshdesk-kb-storage.js";
+
+export type { FreshdeskSyncedImage } from "./freshdesk-image-metadata.js";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -110,6 +114,9 @@ export type SyncedFreshdeskImage = {
   blobName: string;
   sha256: string;
   contentType: string;
+  order?: number;
+  altText?: string | null;
+  sizeBytes?: number;
 };
 
 export function createFreshdeskImageContainer(
@@ -123,15 +130,18 @@ export function createFreshdeskImageContainer(
 }
 
 export function createConfiguredFreshdeskImageContainer(): ContainerClient | null {
-  const connectionString = process.env.BRC_EDU_KB_STORAGE_CONNECTION?.trim();
-  const containerName =
-    process.env.BRC_EDU_KB_IMAGE_CONTAINER?.trim() || "brc-edu-images";
+  const connectionString = getFreshdeskKbStorageConnectionString();
+  const containerName = getFreshdeskKbImageContainerName();
 
   if (!connectionString) {
     return null;
   }
 
   return createFreshdeskImageContainer(connectionString, containerName);
+}
+
+export function isFreshdeskImageContainerConfigured(): boolean {
+  return getFreshdeskKbStorageConnectionString() !== null;
 }
 
 export async function syncFreshdeskImages(
@@ -185,6 +195,8 @@ export async function syncFreshdeskImages(
       blobName,
       sha256,
       contentType,
+      order: syncedImages.length,
+      altText: image.altText,
     });
   }
 

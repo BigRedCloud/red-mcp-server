@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { normaliseHelpSearchText, tokenizeHelpSearchQuestion, } from "../freshdesk/freshdesk-help-search.js";
-import { FRESHDESK_LINK_RESPONSE_GUIDANCE, getSyncedFreshdeskArticlePublicUrl, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
+import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
+import { getNormalizedFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-load.js";
 import { isPublicHttpsUrl } from "./help-resource-types.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = "https://bigredcloud.com/contact/";
@@ -86,6 +87,7 @@ function fromRecordedWebinarResource(resource, syncedAt) {
     };
 }
 function fromFreshdeskResource(article) {
+    const syncedImages = getNormalizedFreshdeskSyncedImages(article);
     return {
         resourceId: `freshdesk:${article.freshdeskArticleId}`,
         source: "freshdesk",
@@ -95,7 +97,7 @@ function fromFreshdeskResource(article) {
         url: getSyncedFreshdeskArticlePublicUrl(article) ?? "",
         category: article.folderName,
         topics: [article.folderName],
-        imageBlobNames: article.syncedImages.map((image) => image.blobName),
+        imageBlobNames: syncedImages.map((image) => image.blobName),
         enabled: article.enabled,
         lastSyncedAt: article.updatedAt,
     };

@@ -16,6 +16,9 @@ import type {
   SyncedFreshdeskArticle,
 } from "./freshdesk-sync-service.js";
 import { repairStoredFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
+import {
+  getNormalizedFreshdeskSyncedImages,
+} from "./freshdesk-image-load.js";
 
 export const FRESHDESK_ARTICLES_INDEX_BLOB_PATH =
   "brc-edu/freshdesk/latest/articles.json";
@@ -174,10 +177,23 @@ function repairLoadedFreshdeskArticle(
     slug: typeof article.slug === "string" ? article.slug : null,
   });
 
+  const syncedImages = getNormalizedFreshdeskSyncedImages(article).map(
+    (image, index) => ({
+      sourceUrl: image.sourceUrl ?? "",
+      blobName: image.blobName,
+      sha256: image.sha256 ?? "",
+      contentType: image.mimeType,
+      order: image.order ?? index,
+      altText: image.altText ?? null,
+      sizeBytes: image.sizeBytes,
+    }),
+  );
+
   return {
     ...article,
     slug: repaired.slug,
     publicUrl: repaired.publicUrl,
+    syncedImages,
   };
 }
 
