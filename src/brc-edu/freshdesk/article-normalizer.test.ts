@@ -113,3 +113,47 @@ test("normalizeFreshdeskArticle preserves category, folder, article ID, folder n
   assert.equal(normalized.folderName, "  Billing FAQ  ");
   assert.equal(normalized.updatedAt, "2026-07-14T09:30:00Z");
 });
+
+test("normalizeFreshdeskArticle preserves API url field as publicUrl", () => {
+  const canonicalUrl =
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-";
+
+  const normalized = normalizeFreshdeskArticle(
+    createArticle({
+      id: 157000368991,
+      url: canonicalUrl,
+      slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
+    }),
+    "Cash Book",
+  );
+
+  assert.equal(normalized.publicUrl, canonicalUrl);
+  assert.equal(normalized.slug, "how-do-i-do-the-bank-reconciliation-bank-rec-");
+});
+
+test("normalizeFreshdeskArticle builds publicUrl from API slug when url is absent", () => {
+  const normalized = normalizeFreshdeskArticle(
+    createArticle({
+      id: 1001,
+      slug: "complete-a-bank-reconciliation",
+    }),
+    "Cash Book",
+  );
+
+  assert.equal(
+    normalized.publicUrl,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
+  );
+});
+
+test("normalizeFreshdeskArticle does not guess publicUrl from title", () => {
+  const normalized = normalizeFreshdeskArticle(
+    createArticle({
+      id: 1001,
+      title: "How do I do the Bank Reconciliation (Bank Rec)?",
+    }),
+    "Cash Book",
+  );
+
+  assert.equal(normalized.publicUrl, null);
+});

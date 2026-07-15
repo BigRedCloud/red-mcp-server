@@ -179,6 +179,30 @@ test("syncFreshdeskKnowledgeBase excludes internal and hidden folders", async ()
   assert.equal(result.articles[0]?.folderId, 301);
 });
 
+test("syncFreshdeskKnowledgeBase stores canonical Freshdesk publicUrl from API slug", async () => {
+  const folder = createFolder({ id: 301, name: "Cash Book" });
+  const visibleArticle = createArticle({
+    id: 3001,
+    folder_id: 301,
+    slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
+  });
+
+  const client = createMockClient({
+    folders: [folder],
+    articlesByFolder: new Map([[301, [visibleArticle]]]),
+    fullArticles: new Map([[3001, visibleArticle]]),
+  });
+
+  const result = await syncFreshdeskKnowledgeBase(client, MOCK_CONTAINER, {
+    syncImages: createMockSyncImages(),
+  });
+
+  assert.equal(
+    result.articles[0]?.publicUrl,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/3001-how-do-i-do-the-bank-reconciliation-bank-rec-",
+  );
+});
+
 test("syncFreshdeskKnowledgeBase excludes unpublished articles", async () => {
   const folder = createFolder({ id: 400, name: "FAQ" });
   const published = createArticle({

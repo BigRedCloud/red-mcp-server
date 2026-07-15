@@ -10,6 +10,9 @@ import {
   searchUnifiedHelpResources,
 } from "./unified-help-search.js";
 
+const BANK_RECON_CANONICAL_URL =
+  "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-";
+
 const WEBINAR_CSV = [
   "title,url,helpRoutingCategory,keywords,description,isActive,contentType,source,lastReviewed,generatedFrom,needsReview",
   "Bank Reconciliation Webinar,https://www.youtube.com/watch?v=bank-rec,bank_feeds,bank reconciliation,Video walkthrough,true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false",
@@ -30,6 +33,9 @@ function freshdeskArticle(): SyncedFreshdeskArticle {
     syncedImages: [{ sourceUrl: "https://cdn.freshdesk.com/a.png", blobName: "freshdesk/1001/a.png", sha256: "a", contentType: "image/png" }],
     updatedAt: "2026-07-01T00:00:00.000Z",
     enabled: true,
+    slug: "complete-a-bank-reconciliation",
+    publicUrl:
+      "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
   };
 }
 
@@ -155,7 +161,10 @@ test("search results expose public URLs only and mark Freshdesk image availabili
   assert.match(doc?.publicUrl ?? "", /^https:\/\//);
 
   const fd = results.find((result) => result.source === "freshdesk");
-  assert.equal(fd?.publicUrl, null);
+  assert.match(
+    fd?.publicUrl ?? "",
+    /^https:\/\/bigredcloud\.freshdesk\.com\/support\/solutions\/articles\//,
+  );
   assert.equal(fd?.imageAvailable, true);
 });
 
@@ -172,4 +181,38 @@ test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance
     /concise synthesized direct answer/i,
   );
   assert.match(response.responseGuidance.supportFooter, /bigredcloud.com\/contact/);
+  assert.match(
+    response.responseGuidance.format.join(" "),
+    /never invent Freshdesk links/i,
+  );
+});
+
+test("bank reconciliation Freshdesk search returns exact canonical URL", () => {
+  const article: SyncedFreshdeskArticle = {
+    id: "freshdesk-157000368991",
+    source: "freshdesk",
+    freshdeskArticleId: 157000368991,
+    categoryId: 1,
+    folderId: 2,
+    folderName: "Cash Book",
+    title: "How do I do the Bank Reconciliation (Bank Rec)?",
+    bodyText: "Open the cash book and complete the bank reconciliation.",
+    images: [],
+    syncedImages: [],
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    enabled: true,
+    slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
+    publicUrl: BANK_RECON_CANONICAL_URL,
+  };
+
+  const results = searchUnifiedHelpResources("bank reconciliation", {
+    freshdeskArticles: [article],
+  });
+
+  const freshdesk = results.find((result) => result.source === "freshdesk");
+  assert.equal(freshdesk?.publicUrl, BANK_RECON_CANONICAL_URL);
+  assert.notEqual(
+    freshdesk?.publicUrl,
+    "https://bigredcloud.com/support/how-do-i-do-the-bank-reconciliation-bank-rec/",
+  );
 });

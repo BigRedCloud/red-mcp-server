@@ -39,6 +39,8 @@ function createSyncedArticle(
     updatedAt: "2026-07-01T00:00:00Z",
     enabled: true,
     syncedImages: [],
+    slug: null,
+    publicUrl: null,
     ...overrides,
   };
 }
@@ -274,4 +276,59 @@ test("toSafeIndexStorageErrorMessage redacts SAS tokens and authorization values
     ),
     "Freshdesk articles index storage operation failed.",
   );
+});
+
+test("canonical Freshdesk URL survives index save and load", async () => {
+  const canonicalUrl =
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-";
+  const { container } = createMockContainer();
+  const syncResult = createSyncResult({
+    articles: [
+      createSyncedArticle({
+        freshdeskArticleId: 157000368991,
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
+        publicUrl: canonicalUrl,
+      }),
+    ],
+    failures: [],
+  });
+
+  await saveFreshdeskArticlesIndex(container, syncResult);
+  const loaded = await loadFreshdeskArticlesIndex(container);
+
+  assert.equal(loaded?.articles[0]?.publicUrl, canonicalUrl);
+});
+
+test("loadFreshdeskArticlesIndex repairs legacy bigredcloud.com/support URLs", async () => {
+  const canonicalUrl =
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-";
+  const legacyIndex = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 1,
+    failureCount: 0,
+    articles: [
+      createSyncedArticle({
+        freshdeskArticleId: 157000368991,
+        slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
+        publicUrl:
+          "https://bigredcloud.com/support/how-do-i-do-the-bank-reconciliation-bank-rec/",
+      }),
+    ],
+    failures: [],
+  };
+
+  const { container } = createMockContainer(
+    new Map([
+      [
+        FRESHDESK_ARTICLES_INDEX_BLOB_PATH,
+        {
+          body: Buffer.from(JSON.stringify(legacyIndex), "utf8"),
+        },
+      ],
+    ]),
+  );
+
+  const loaded = await loadFreshdeskArticlesIndex(container);
+  assert.equal(loaded?.articles[0]?.publicUrl, canonicalUrl);
 });
