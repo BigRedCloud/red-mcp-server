@@ -2,6 +2,7 @@ import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } 
 import { FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES, getNormalizedFreshdeskSyncedImages, } from "./freshdesk-image-load.js";
 import { isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, } from "./freshdesk-image-metadata.js";
 import { resolveFreshdeskImageKey, verifyFreshdeskPublicImageToken, } from "./freshdesk-public-image-token.js";
+import { buildFreshdeskPublicImageViewerHtml, prefersFreshdeskPublicImageViewer, } from "./freshdesk-public-image-viewer.js";
 import { createConfiguredFreshdeskImageContainer } from "./image-sync.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE = "/public/brc-edu/freshdesk-images/:articleId/:imageToken";
 export const FRESHDESK_PUBLIC_IMAGE_MAX_BYTES = FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES;
@@ -13,9 +14,11 @@ const SECRET_PATTERNS = [
     /blob\.core\.windows\.net/i,
 ];
 const SAFE_LOG_IDENTIFIER_PATTERN = /^[a-z0-9-]+$/i;
-function setFreshdeskPublicImageSecurityHeaders(res) {
+function setFreshdeskPublicImageSecurityHeaders(res, options = {}) {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'");
+    res.setHeader("Content-Security-Policy", options.viewer
+        ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        : "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'");
     res.setHeader("Cache-Control", "public, max-age=3600");
 }
 function sendNotFound(res) {
@@ -136,16 +139,29 @@ export async function handleFreshdeskPublicImageRequest(req, res, deps = {}) {
         sendNotFound(res);
         return;
     }
-    setFreshdeskPublicImageSecurityHeaders(res);
-    res.setHeader("Content-Type", mimeType);
-    res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Content-Length", String(buffer.byteLength));
+    const serveViewer = req.method === "GET" && prefersFreshdeskPublicImageViewer(req);
     console.info("Freshdesk public image request:", JSON.stringify({
         identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
         status: 200,
         bytes: buffer.byteLength,
         mimeType,
+        viewer: serveViewer,
     }));
+    if (serveViewer) {
+        const imageSrc = req.originalUrl.split("?")[0] ?? req.url.split("?")[0] ?? req.url;
+        const html = buildFreshdeskPublicImageViewerHtml({
+            imageSrc,
+            caption: syncedImage.altText,
+        });
+        setFreshdeskPublicImageSecurityHeaders(res, { viewer: true });
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.status(200).send(html);
+        return;
+    }
+    setFreshdeskPublicImageSecurityHeaders(res);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Content-Length", String(buffer.byteLength));
     if (req.method === "HEAD") {
         res.status(200).end();
         return;
