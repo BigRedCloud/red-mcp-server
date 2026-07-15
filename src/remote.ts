@@ -687,6 +687,7 @@ app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
     rowCount: result.rowCount,
     latestBlob: result.latestBlob,
     archiveBlob: result.archiveBlob,
+    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
   });
 });
 

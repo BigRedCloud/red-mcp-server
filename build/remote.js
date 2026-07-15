@@ -460,6 +460,7 @@ app.put(WORKBOOK_API_PATH, async (req, res) => {
         rowCount: result.rowCount,
         latestBlob: result.latestBlob,
         archiveBlob: result.archiveBlob,
+        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
     });
 });
 app.post("/internal/brc-edu/resources/upload", (req, res) => {

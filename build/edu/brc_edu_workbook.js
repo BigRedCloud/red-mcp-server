@@ -216,6 +216,7 @@ export function isValidActiveValue(value) {
 }
 export function validateWebinarAdminRows(rows) {
     const errors = [];
+    const warnings = [];
     const seenTitles = new Map();
     const seenUrls = new Map();
     rows.forEach((row, index) => {
@@ -242,7 +243,7 @@ export function validateWebinarAdminRows(rows) {
         if (titleKey) {
             const previousTitleRow = seenTitles.get(titleKey);
             if (previousTitleRow != null) {
-                errors.push(`${rowLabel}: Duplicate Video Title matches row ${previousTitleRow + 1}.`);
+                warnings.push(`${rowLabel}: Duplicate Video Title matches row ${previousTitleRow + 1}.`);
             }
             else {
                 seenTitles.set(titleKey, index);
@@ -260,9 +261,9 @@ export function validateWebinarAdminRows(rows) {
         }
     });
     if (errors.length > 0) {
-        return { ok: false, errors };
+        return { ok: false, errors, warnings };
     }
-    return { ok: true };
+    return { ok: true, warnings };
 }
 export async function validateWorkbookBufferSize(buffer) {
     if (buffer.byteLength > BRC_EDU_UPLOAD_MAX_BYTES) {

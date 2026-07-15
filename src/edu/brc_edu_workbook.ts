@@ -43,6 +43,7 @@ export type WebinarWorkbookMetadata = {
 
 export type WebinarWorkbookPayload = WebinarWorkbookMetadata & {
   rows: WebinarResourceAdminRow[];
+  warnings?: string[];
 };
 
 const HEADER_ALIASES: Record<string, keyof WebinarResourceAdminRow> = {
@@ -284,13 +285,15 @@ export function isValidActiveValue(value: string): boolean {
   ].includes(normalized);
 }
 
-export function validateWebinarAdminRows(rows: WebinarResourceAdminRow[]): {
-  ok: true;
-} | {
-  ok: false;
-  errors: string[];
-} {
+export type WebinarAdminValidationResult =
+  | { ok: true; warnings: string[] }
+  | { ok: false; errors: string[]; warnings: string[] };
+
+export function validateWebinarAdminRows(
+  rows: WebinarResourceAdminRow[],
+): WebinarAdminValidationResult {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const seenTitles = new Map<string, number>();
   const seenUrls = new Map<string, number>();
 
@@ -321,7 +324,7 @@ export function validateWebinarAdminRows(rows: WebinarResourceAdminRow[]): {
     if (titleKey) {
       const previousTitleRow = seenTitles.get(titleKey);
       if (previousTitleRow != null) {
-        errors.push(
+        warnings.push(
           `${rowLabel}: Duplicate Video Title matches row ${previousTitleRow + 1}.`,
         );
       } else {
@@ -343,10 +346,10 @@ export function validateWebinarAdminRows(rows: WebinarResourceAdminRow[]): {
   });
 
   if (errors.length > 0) {
-    return { ok: false, errors };
+    return { ok: false, errors, warnings };
   }
 
-  return { ok: true };
+  return { ok: true, warnings };
 }
 
 export async function validateWorkbookBufferSize(

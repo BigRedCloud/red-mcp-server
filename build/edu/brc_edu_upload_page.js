@@ -468,7 +468,14 @@ function adminPageScript(secret) {
       }
       const payload = await response.json();
       applyPayload(payload);
-      setStatus("Workbook loaded from Azure.", "success");
+      if (Array.isArray(payload.warnings) && payload.warnings.length) {
+        setStatus(
+          "Workbook loaded from Azure. " + payload.warnings.join(" "),
+          "warning",
+        );
+      } else {
+        setStatus("Workbook loaded from Azure.", "success");
+      }
     } catch (error) {
       setStatus(error.message || "Could not load workbook.", "error");
     } finally {
@@ -510,7 +517,14 @@ function adminPageScript(secret) {
         throw new Error((body.error || "Save failed.") + detail);
       }
       applyPayload(body);
-      setStatus("Workbook saved and published to Azure.", "success");
+      if (Array.isArray(body.warnings) && body.warnings.length) {
+        setStatus(
+          "Workbook saved and published to Azure. " + body.warnings.join(" "),
+          "warning",
+        );
+      } else {
+        setStatus("Workbook saved and published to Azure.", "success");
+      }
     } catch (error) {
       setStatus(error.message || "Save failed.", "error");
     } finally {
@@ -594,7 +608,7 @@ export function renderBrcEduUploadPage(secret) {
         <ol class="lead">
           <li>Refresh from Azure before editing.</li>
           <li>Add or update resource rows in the table below.</li>
-          <li>Use public URLs for each video resource.</li>
+          <li>Use public URLs for each video resource. Each Video URL must be unique; titles may repeat when URLs differ.</li>
           <li>Set Active to control visibility in Red.</li>
           <li>Save &amp; Publish when finished.</li>
           <li>Previous versions are archived automatically.</li>

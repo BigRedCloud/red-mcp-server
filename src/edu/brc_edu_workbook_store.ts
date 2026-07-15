@@ -191,6 +191,7 @@ export async function loadWebinarWorkbookForAdmin(
     }
 
     const rows = await parseWorkbookBufferToAdminRows(downloaded.buffer);
+    const validation = validateWebinarAdminRows(rows);
 
     return {
       ok: true,
@@ -199,6 +200,9 @@ export async function loadWebinarWorkbookForAdmin(
         etag: downloaded.etag,
         lastModified: downloaded.lastModified,
         rowCount: rows.length,
+        ...(validation.warnings.length > 0
+          ? { warnings: validation.warnings }
+          : {}),
       },
     };
   } catch (error) {
@@ -227,6 +231,7 @@ export async function saveWebinarWorkbookForAdmin(
       etag: string;
       rowCount: number;
       lastModified: string;
+      warnings: string[];
     }
   | { ok: false; status: 400 | 409 | 503; error: string; errors?: string[] }
 > {
@@ -280,6 +285,7 @@ export async function saveWebinarWorkbookForAdmin(
     etag: uploadResult.etag,
     rowCount: request.rows.length,
     lastModified: now.toISOString(),
+    warnings: validation.warnings,
   };
 }
 

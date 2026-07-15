@@ -173,14 +173,15 @@ test("validateWebinarAdminRows rejects missing required field", () => {
         assert.match(result.errors.join(" "), /Video Title is required/i);
     }
 });
-test("validateWebinarAdminRows rejects duplicate title", () => {
+test("validateWebinarAdminRows accepts same title with different URLs", () => {
     const result = validateWebinarAdminRows([
         sampleRow(),
         sampleRow({ videoUrl: "https://example.com/other" }),
     ]);
-    assert.equal(result.ok, false);
-    if (!result.ok) {
-        assert.match(result.errors.join(" "), /Duplicate Video Title/i);
+    assert.equal(result.ok, true);
+    if (result.ok) {
+        assert.equal(result.warnings.length, 1);
+        assert.match(result.warnings.join(" "), /Duplicate Video Title/i);
     }
 });
 test("validateWebinarAdminRows rejects duplicate URL", () => {
@@ -192,6 +193,71 @@ test("validateWebinarAdminRows rejects duplicate URL", () => {
     if (!result.ok) {
         assert.match(result.errors.join(" "), /Duplicate Video URL/i);
     }
+});
+test("validateWebinarAdminRows rejects same title and same URL as duplicate URL", () => {
+    const result = validateWebinarAdminRows([
+        sampleRow(),
+        sampleRow(),
+    ]);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+        assert.match(result.errors.join(" "), /Duplicate Video URL/i);
+        assert.equal(result.errors.some((error) => /Duplicate Video Title/i.test(error)), false);
+    }
+});
+test("validateWebinarAdminRows rejects duplicate URL case-insensitively", () => {
+    const result = validateWebinarAdminRows([
+        sampleRow({ videoUrl: "https://example.com/bank-feeds" }),
+        sampleRow({
+            videoTitle: "Different title",
+            videoUrl: "  HTTPS://EXAMPLE.COM/bank-feeds  ",
+        }),
+    ]);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+        assert.match(result.errors.join(" "), /Duplicate Video URL/i);
+    }
+});
+test("legacy workbook with repeated titles can be loaded, edited and saved", async () => {
+    const buffer = await createXlsxBuffer([
+        ["Video Title", "Video URL", "Help-Routing Category", "Description", "Active"],
+        [
+            "Monthly webinar",
+            "https://example.com/webinar-jan",
+            "webinars",
+            "January recording",
+            "Yes",
+        ],
+        [
+            "Monthly webinar",
+            "https://example.com/webinar-feb",
+            "webinars",
+            "February recording",
+            "Yes",
+        ],
+    ]);
+    const { access, uploads } = createMockWorkbookAccess({
+        initial: {
+            buffer,
+            etag: '"legacy-etag"',
+            lastModified: "2026-07-14T12:00:00.000Z",
+        },
+    });
+    const loaded = await loadWebinarWorkbookForAdmin(access);
+    assert.equal(loaded.ok, true);
+    if (!loaded.ok) {
+        return;
+    }
+    assert.equal(loaded.payload.rows.length, 2);
+    assert.equal(loaded.payload.warnings?.length, 1);
+    const editedRows = loaded.payload.rows.map((row, index) => index === 1 ? { ...row, description: "Updated February notes" } : row);
+    const saved = await saveWebinarWorkbookForAdmin({ rows: editedRows, ifMatch: loaded.payload.etag }, access);
+    assert.equal(saved.ok, true);
+    if (saved.ok) {
+        assert.equal(saved.rowCount, 2);
+        assert.equal(saved.warnings.length, 1);
+    }
+    assert.equal(uploads.length, 1);
 });
 test("validateWebinarAdminRows rejects invalid Active value", () => {
     const result = validateWebinarAdminRows([

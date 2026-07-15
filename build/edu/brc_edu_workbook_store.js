@@ -116,6 +116,7 @@ export async function loadWebinarWorkbookForAdmin(access = createConfiguredWorkb
             };
         }
         const rows = await parseWorkbookBufferToAdminRows(downloaded.buffer);
+        const validation = validateWebinarAdminRows(rows);
         return {
             ok: true,
             payload: {
@@ -123,6 +124,9 @@ export async function loadWebinarWorkbookForAdmin(access = createConfiguredWorkb
                 etag: downloaded.etag,
                 lastModified: downloaded.lastModified,
                 rowCount: rows.length,
+                ...(validation.warnings.length > 0
+                    ? { warnings: validation.warnings }
+                    : {}),
             },
         };
     }
@@ -180,6 +184,7 @@ export async function saveWebinarWorkbookForAdmin(request, access = createConfig
         etag: uploadResult.etag,
         rowCount: request.rows.length,
         lastModified: now.toISOString(),
+        warnings: validation.warnings,
     };
 }
 export async function downloadWebinarWorkbookForAdmin(access = createConfiguredWorkbookBlobAccess()) {
