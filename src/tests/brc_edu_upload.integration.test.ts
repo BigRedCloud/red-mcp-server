@@ -199,7 +199,9 @@ test("GET /internal/brc-edu/resources/upload returns form with correct secret", 
   const html = await response.text();
   assert.match(html, /BRC Edu webinar resources/i);
   assert.match(html, /Refresh from Azure/i);
-  assert.match(html, /Save &amp; Publish/i);
+  assert.match(html, /Download current Excel/i);
+  assert.match(html, /Upload Excel/i);
+  assert.equal(html.includes("Save &amp; Publish"), false);
   assert.match(html, /multipart\/form-data/i);
   assert.match(html, /\.xlsx/);
   assert.match(html, /\.csv/);
@@ -217,23 +219,26 @@ test("workbook admin endpoints require admin secret", async (t) => {
   const wrongGet = await fetch(workbookUrl(port, "wrong-secret"));
   const missingDownload = await fetch(workbookDownloadUrl(port));
   const wrongDownload = await fetch(workbookDownloadUrl(port, "wrong-secret"));
-  const missingPut = await fetch(workbookUrl(port), {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ rows: [] }),
-  });
-  const wrongPut = await fetch(workbookUrl(port, "wrong-secret"), {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ rows: [] }),
-  });
 
   assert.equal(missingGet.status, 401);
   assert.equal(wrongGet.status, 401);
   assert.equal(missingDownload.status, 401);
   assert.equal(wrongDownload.status, 401);
-  assert.equal(missingPut.status, 401);
-  assert.equal(wrongPut.status, 401);
+});
+
+test("PUT workbook route is not available", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+  });
+
+  const response = await fetch(workbookUrl(port, "configured-secret"), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rows: [] }),
+  });
+
+  assert.equal(response.status, 404);
 });
 
 test("GET workbook returns 503 when upload storage is not configured", async (t) => {

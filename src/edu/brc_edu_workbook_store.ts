@@ -1,21 +1,14 @@
 import {
   BlobServiceClient,
   type BlobDownloadResponseParsed,
-  RestError,
 } from "@azure/storage-blob";
 
 import {
-  buildWorkbookBufferFromAdminRows,
   parseWorkbookBufferToAdminRows,
-  validateWebinarAdminRows,
-  validateWorkbookBufferSize,
   WEBINAR_WORKBOOK_LATEST_BLOB,
-  type WebinarResourceAdminRow,
   type WebinarWorkbookPayload,
 } from "./brc_edu_workbook.js";
 import {
-  buildBrcEduBlobNames,
-  contentTypeForUploadExtension,
   getBrcEduUploadContainer,
   getBrcEduUploadStorageConnectionString,
 } from "./brc_edu_upload_store.js";
@@ -37,15 +30,6 @@ export type WorkbookDownloadResult = {
 
 export interface BrcEduWorkbookBlobAccess {
   downloadLatestWorkbook(): Promise<WorkbookDownloadResult | null>;
-  uploadWorkbook(params: {
-    latestBuffer: Buffer;
-    archiveBuffer: Buffer;
-    ifMatch?: string;
-  }): Promise<
-    | { ok: true; etag: string; latestBlob: string; archiveBlob: string }
-    | { ok: false; status: 409; error: string }
-    | { ok: false; status: 503; error: string }
-  >;
 }
 
 export function toSafeWorkbookStorageErrorMessage(error: unknown): string {
@@ -108,50 +92,6 @@ export function createAzureWorkbookBlobAccess(
         throw new Error(toSafeWorkbookStorageErrorMessage(error));
       }
     },
-
-    async uploadWorkbook({ latestBuffer, archiveBuffer, ifMatch }) {
-      const blobNames = buildBrcEduBlobNames("xlsx");
-      const contentType = contentTypeForUploadExtension("xlsx");
-      const archiveClient = container.getBlockBlobClient(blobNames.archive);
-      const latestClient = container.getBlockBlobClient(blobNames.latest);
-
-      try {
-        await archiveClient.uploadData(archiveBuffer, {
-          blobHTTPHeaders: { blobContentType: contentType },
-        });
-
-        await latestClient.uploadData(latestBuffer, {
-          blobHTTPHeaders: { blobContentType: contentType },
-          conditions: ifMatch ? { ifMatch } : undefined,
-        });
-
-        const properties = await latestClient.getProperties();
-
-        return {
-          ok: true,
-          etag: properties.etag ?? "",
-          latestBlob: blobNames.latest,
-          archiveBlob: blobNames.archive,
-        };
-      } catch (error) {
-        if (error instanceof RestError && error.statusCode === 412) {
-          return {
-            ok: false,
-            status: 409,
-            error:
-              "The workbook changed in Azure. Refresh from Azure before saving.",
-          };
-        }
-
-        const message = toSafeWorkbookStorageErrorMessage(error);
-
-        return {
-          ok: false,
-          status: 503,
-          error: message,
-        };
-      }
-    },
   };
 }
 
@@ -191,18 +131,13 @@ export async function loadWebinarWorkbookForAdmin(
     }
 
     const rows = await parseWorkbookBufferToAdminRows(downloaded.buffer);
-    const validation = validateWebinarAdminRows(rows);
 
     return {
       ok: true,
       payload: {
         rows,
-        etag: downloaded.etag,
         lastModified: downloaded.lastModified,
         rowCount: rows.length,
-        ...(validation.warnings.length > 0
-          ? { warnings: validation.warnings }
-          : {}),
       },
     };
   } catch (error) {
@@ -212,81 +147,6 @@ export async function loadWebinarWorkbookForAdmin(
       error: toSafeWorkbookStorageErrorMessage(error),
     };
   }
-}
-
-export type SaveWebinarWorkbookRequest = {
-  rows: WebinarResourceAdminRow[];
-  ifMatch?: string;
-};
-
-export async function saveWebinarWorkbookForAdmin(
-  request: SaveWebinarWorkbookRequest,
-  access: BrcEduWorkbookBlobAccess | null = createConfiguredWorkbookBlobAccess(),
-  now: Date = new Date(),
-): Promise<
-  | {
-      ok: true;
-      latestBlob: string;
-      archiveBlob: string;
-      etag: string;
-      rowCount: number;
-      lastModified: string;
-      warnings: string[];
-    }
-  | { ok: false; status: 400 | 409 | 503; error: string; errors?: string[] }
-> {
-  if (!access) {
-    return {
-      ok: false,
-      status: 503,
-      error: "BRC Edu upload storage is not configured.",
-    };
-  }
-
-  const validation = validateWebinarAdminRows(request.rows);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Workbook validation failed.",
-      errors: validation.errors,
-    };
-  }
-
-  const latestBuffer = await buildWorkbookBufferFromAdminRows(request.rows);
-  const sizeValidation = await validateWorkbookBufferSize(latestBuffer);
-  if (!sizeValidation.ok) {
-    return {
-      ok: false,
-      status: 400,
-      error: sizeValidation.error,
-    };
-  }
-
-  const archiveBuffer = latestBuffer;
-  const uploadResult = await access.uploadWorkbook({
-    latestBuffer,
-    archiveBuffer,
-    ifMatch: request.ifMatch?.trim() || undefined,
-  });
-
-  if (!uploadResult.ok) {
-    return {
-      ok: false,
-      status: uploadResult.status,
-      error: uploadResult.error,
-    };
-  }
-
-  return {
-    ok: true,
-    latestBlob: uploadResult.latestBlob,
-    archiveBlob: uploadResult.archiveBlob,
-    etag: uploadResult.etag,
-    rowCount: request.rows.length,
-    lastModified: now.toISOString(),
-    warnings: validation.warnings,
-  };
 }
 
 export async function downloadWebinarWorkbookForAdmin(

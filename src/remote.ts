@@ -63,7 +63,6 @@ import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
 import {
   downloadWebinarWorkbookForAdmin,
   loadWebinarWorkbookForAdmin,
-  saveWebinarWorkbookForAdmin,
   createConfiguredWorkbookBlobAccess,
 } from "./edu/brc_edu_workbook_store.js";
 import {
@@ -599,7 +598,6 @@ app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
     if (result.status === 404) {
       res.status(200).json({
         rows: [],
-        etag: "",
         lastModified: "",
         rowCount: 0,
       });
@@ -640,55 +638,6 @@ app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
     'attachment; filename="webinar_video_routing_index.xlsx"',
   );
   res.send(result.buffer);
-});
-
-app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
-
-  if (!authResult.ok) {
-    res.status(authResult.status).json({ error: authResult.error });
-    return;
-  }
-
-  const body = req.body as {
-    rows?: unknown;
-    ifMatch?: unknown;
-  };
-
-  const rows = Array.isArray(body?.rows) ? body.rows : null;
-  if (!rows) {
-    res.status(400).json({ error: "Workbook rows are required." });
-    return;
-  }
-
-  const result = await saveWebinarWorkbookForAdmin(
-    {
-      rows,
-      ifMatch: typeof body?.ifMatch === "string" ? body.ifMatch : undefined,
-    },
-    createConfiguredWorkbookBlobAccess(),
-  );
-
-  if (!result.ok) {
-    res.status(result.status).json({
-      error: result.error,
-      errors: result.errors,
-    });
-    return;
-  }
-
-  invalidateEduResourcesCache();
-
-  res.json({
-    rows,
-    etag: result.etag,
-    lastModified: result.lastModified,
-    rowCount: result.rowCount,
-    latestBlob: result.latestBlob,
-    archiveBlob: result.archiveBlob,
-    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
-  });
 });
 
 app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
