@@ -69,6 +69,14 @@ export function createFreshdeskImageContainer(connectionString, containerName) {
     const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
     return blobServiceClient.getContainerClient(containerName);
 }
+export function createConfiguredFreshdeskImageContainer() {
+    const connectionString = process.env.BRC_EDU_KB_STORAGE_CONNECTION?.trim();
+    const containerName = process.env.BRC_EDU_KB_IMAGE_CONTAINER?.trim() || "brc-edu-images";
+    if (!connectionString) {
+        return null;
+    }
+    return createFreshdeskImageContainer(connectionString, containerName);
+}
 export async function syncFreshdeskImages(articleId, images, container) {
     await container.createIfNotExists();
     const syncedImages = [];

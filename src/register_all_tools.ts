@@ -53,6 +53,7 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_getting_started",
   "brc_get_deployment_policy",
   "brc_find_help_resources",
+  "brc_get_help_resource_details",
 ]);
 
 function createFilteredServer(server: McpServer): McpServer {

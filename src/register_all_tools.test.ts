@@ -72,6 +72,28 @@ test("register_all_tools includes brc_find_help_resources", () => {
   assert.equal(isToolEnabled("brc_find_help_resources"), true);
 });
 
+test("register_all_tools includes brc_get_help_resource_details", () => {
+  assert.ok(registeredTools.has("brc_get_help_resource_details"));
+  assert.equal(isToolEnabled("brc_get_help_resource_details"), true);
+});
+
+test("brc_get_help_resource_details does not require company credentials", () => {
+  assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_get_help_resource_details"));
+
+  const tool = registeredTools.get("brc_get_help_resource_details");
+  assert.ok(tool);
+  assert.ok(tool.schema);
+  assert.ok(tool.schema!.resourceId);
+});
+
+test("brc_find_help_resources description requests concise synthesized answers", () => {
+  const tool = registeredTools.get("brc_find_help_resources");
+  assert.ok(tool);
+  assert.match(tool.description, /concise synthesized answer/i);
+  assert.match(tool.description, /customer documentation/i);
+  assert.match(tool.description, /support contact footer/i);
+});
+
 test("brc_find_help_resources does not require company credentials", () => {
   assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_find_help_resources"));
 
@@ -89,6 +111,7 @@ test("adding brc_find_help_resources does not reduce registered enabled tools un
   assert.ok(registeredTools.has("brc_clear_company_api_key"));
   assert.ok(registeredTools.has("brc_clear_all_company_api_keys"));
   assert.ok(registeredTools.has("brc_find_help_resources"));
+  assert.ok(registeredTools.has("brc_get_help_resource_details"));
   assert.ok(enabledToolCount >= 150);
 });
 

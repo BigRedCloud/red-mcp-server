@@ -122,6 +122,18 @@ export function createFreshdeskImageContainer(
   return blobServiceClient.getContainerClient(containerName);
 }
 
+export function createConfiguredFreshdeskImageContainer(): ContainerClient | null {
+  const connectionString = process.env.BRC_EDU_KB_STORAGE_CONNECTION?.trim();
+  const containerName =
+    process.env.BRC_EDU_KB_IMAGE_CONTAINER?.trim() || "brc-edu-images";
+
+  if (!connectionString) {
+    return null;
+  }
+
+  return createFreshdeskImageContainer(connectionString, containerName);
+}
+
 export async function syncFreshdeskImages(
   articleId: number,
   images: FreshdeskImageReference[],

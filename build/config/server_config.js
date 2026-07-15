@@ -86,6 +86,7 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_getting_started",
     "brc_get_deployment_policy",
     "brc_find_help_resources",
+    "brc_get_help_resource_details",
 ]);
 const DEV_TOOL_NAMES = new Set([
     "brc_set_company_api_key",
