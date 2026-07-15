@@ -3,7 +3,6 @@ import { FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES, getNormalizedFreshdeskSyncedImage
 import { isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, } from "./freshdesk-image-metadata.js";
 import { resolveFreshdeskImageKey, verifyFreshdeskPublicImageToken, } from "./freshdesk-public-image-token.js";
 import { createConfiguredFreshdeskImageContainer } from "./image-sync.js";
-import { normalizeFreshdeskPublicImageBuffer } from "./freshdesk-public-image-crop.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE = "/public/brc-edu/freshdesk-images/:articleId/:imageToken";
 export const FRESHDESK_PUBLIC_IMAGE_MAX_BYTES = FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES;
 const SECRET_PATTERNS = [
@@ -137,24 +136,21 @@ export async function handleFreshdeskPublicImageRequest(req, res, deps = {}) {
         sendNotFound(res);
         return;
     }
-    const normalized = await normalizeFreshdeskPublicImageBuffer(buffer, mimeType);
-    const outputBuffer = normalized.buffer;
     setFreshdeskPublicImageSecurityHeaders(res);
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Content-Length", String(outputBuffer.byteLength));
+    res.setHeader("Content-Length", String(buffer.byteLength));
     console.info("Freshdesk public image request:", JSON.stringify({
         identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
         status: 200,
-        bytes: outputBuffer.byteLength,
+        bytes: buffer.byteLength,
         mimeType,
-        cropped: normalized.cropped,
     }));
     if (req.method === "HEAD") {
         res.status(200).end();
         return;
     }
-    res.status(200).send(outputBuffer);
+    res.status(200).send(buffer);
 }
 export function registerFreshdeskPublicImageRoute(app) {
     const handler = (req, res) => {

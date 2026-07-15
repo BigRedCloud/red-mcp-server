@@ -19,7 +19,6 @@ import {
   verifyFreshdeskPublicImageToken,
 } from "./freshdesk-public-image-token.js";
 import { createConfiguredFreshdeskImageContainer } from "./image-sync.js";
-import { normalizeFreshdeskPublicImageBuffer } from "./freshdesk-public-image-crop.js";
 import type { SyncedFreshdeskArticle } from "./freshdesk-sync-service.js";
 
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE =
@@ -219,22 +218,18 @@ export async function handleFreshdeskPublicImageRequest(
     return;
   }
 
-  const normalized = await normalizeFreshdeskPublicImageBuffer(buffer, mimeType);
-  const outputBuffer = normalized.buffer;
-
   setFreshdeskPublicImageSecurityHeaders(res);
   res.setHeader("Content-Type", mimeType);
   res.setHeader("Content-Disposition", "inline");
-  res.setHeader("Content-Length", String(outputBuffer.byteLength));
+  res.setHeader("Content-Length", String(buffer.byteLength));
 
   console.info(
     "Freshdesk public image request:",
     JSON.stringify({
       identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
       status: 200,
-      bytes: outputBuffer.byteLength,
+      bytes: buffer.byteLength,
       mimeType,
-      cropped: normalized.cropped,
     }),
   );
 
@@ -243,7 +238,7 @@ export async function handleFreshdeskPublicImageRequest(
     return;
   }
 
-  res.status(200).send(outputBuffer);
+  res.status(200).send(buffer);
 }
 
 export function registerFreshdeskPublicImageRoute(app: Application): void {

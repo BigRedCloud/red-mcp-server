@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import sharp from "sharp";
 
 import {
   createFreshdeskPublicImageToken,
@@ -125,54 +124,6 @@ function createImageContainer(png: Buffer) {
     },
   };
 }
-
-test("public image endpoint crops large black canvas before streaming", async () => {
-  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = SECRET;
-  const token = createFreshdeskPublicImageToken(ARTICLE_ID, IMAGE_KEY, tokenOptions());
-
-  const screenshot = await sharp({
-    create: {
-      width: 320,
-      height: 200,
-      channels: 3,
-      background: { r: 230, g: 235, b: 245 },
-    },
-  })
-    .png()
-    .toBuffer();
-
-  const source = await sharp({
-    create: {
-      width: 900,
-      height: 700,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 },
-    },
-  })
-    .composite([{ input: screenshot, left: 20, top: 16 }])
-    .png()
-    .toBuffer();
-
-  const res = createMockResponse();
-
-  await handleFreshdeskPublicImageRequest(
-    {
-      method: "GET",
-      params: { articleId: ARTICLE_ID, imageToken: token },
-    } as never,
-    res as never,
-    {
-      freshdeskIndexContainer: createIndexContainer(freshdeskArticle()) as never,
-      freshdeskImageContainer: createImageContainer(source) as never,
-    },
-  );
-
-  assert.equal(res.statusCode, 200);
-  assert.ok(Buffer.isBuffer(res.body));
-  const metadata = await sharp(res.body as Buffer).metadata();
-  assert.ok((metadata.width ?? 0) < 900);
-  assert.ok((metadata.height ?? 0) < 700);
-});
 
 test("valid token streams the expected image with inline headers", async () => {
   process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = SECRET;
