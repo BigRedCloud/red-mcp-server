@@ -15,6 +15,7 @@ import type {
   FreshdeskSyncResult,
   SyncedFreshdeskArticle,
 } from "./freshdesk-sync-service.js";
+import { repairStoredFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
 
 export const FRESHDESK_ARTICLES_INDEX_BLOB_PATH =
   "brc-edu/freshdesk/latest/articles.json";
@@ -158,6 +159,36 @@ export function parseFreshdeskArticlesIndex(
   return value as FreshdeskArticlesIndex;
 }
 
+function repairLoadedFreshdeskArticle(
+  article: SyncedFreshdeskArticle,
+): SyncedFreshdeskArticle {
+  const repaired = repairStoredFreshdeskArticlePublicUrl({
+    freshdeskArticleId: article.freshdeskArticleId,
+    publicUrl:
+      typeof article.publicUrl === "string"
+        ? article.publicUrl
+        : typeof (article as { url?: string }).url === "string"
+          ? (article as { url?: string }).url
+          : null,
+    slug: typeof article.slug === "string" ? article.slug : null,
+  });
+
+  return {
+    ...article,
+    slug: repaired.slug,
+    publicUrl: repaired.publicUrl,
+  };
+}
+
+export function normalizeLoadedFreshdeskArticlesIndex(
+  index: FreshdeskArticlesIndex,
+): FreshdeskArticlesIndex {
+  return {
+    ...index,
+    articles: index.articles.map(repairLoadedFreshdeskArticle),
+  };
+}
+
 export function createBrcEduFreshdeskIndexContainer(
   connectionString: string,
   containerName: string,
@@ -232,12 +263,12 @@ export async function loadFreshdeskArticlesIndex(
       throw new Error("Freshdesk articles index JSON is malformed.");
     }
 
-    const index = parseFreshdeskArticlesIndex(parsed);
-    if (!index) {
+    const parsedIndex = parseFreshdeskArticlesIndex(parsed);
+    if (!parsedIndex) {
       throw new Error("Freshdesk articles index has an invalid shape.");
     }
 
-    return index;
+    return normalizeLoadedFreshdeskArticlesIndex(parsedIndex);
   } catch (error) {
     if (
       error instanceof Error &&

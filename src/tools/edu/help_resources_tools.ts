@@ -19,6 +19,8 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
   "Do not use for connecting companies, listing connected companies, clearing connections, or any company books data.",
   "Read-only. Does not require a connected company.",
   "Return a concise synthesized answer for the customer: direct answer, clear steps where applicable, then a Helpful resources section with 3–5 descriptive links.",
+  "Use only publicUrl values returned in resources for hyperlinks. Never invent Freshdesk links from titles, slugs, or article IDs.",
+  "If a Freshdesk resource has no publicUrl, mention its title without a hyperlink.",
   "Prefer customer documentation for procedural questions, Freshdesk for detailed step-by-step instructions, recorded webinars for video walkthroughs, and upcoming webinars for training/onboarding/live help requests.",
   "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata to the customer.",
   "For Freshdesk screenshots or full article text, call brc_get_help_resource_details with the resourceId from search results.",
@@ -27,7 +29,8 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
 
 export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Load full help-resource details for a resourceId returned by brc_find_help_resources.",
-  "Freshdesk resources may include ordered mirrored screenshots as MCP image content.",
+  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, and may include ordered mirrored screenshots as MCP image content.",
+  "Use only the publicUrl returned by this tool for Freshdesk links. Never construct links from titles, slugs, or article IDs.",
   "Customer documentation returns cleaned article text and the public docs URL.",
   "Recorded webinars return title, description, public video URL, and category.",
   "Upcoming webinars return title, weekday, description, topics, registration URL, and webinar-series page URL.",

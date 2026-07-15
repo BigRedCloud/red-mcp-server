@@ -1,3 +1,7 @@
+import {
+  readFreshdeskArticleUrlFields,
+  resolveFreshdeskArticlePublicUrl,
+} from "./freshdesk-article-url.js";
 import { extractFreshdeskImages } from "./image-extractor.js";
 
 import type {
@@ -9,6 +13,16 @@ export function normalizeFreshdeskArticle(
   article: FreshdeskArticle,
   folderName: string,
 ): NormalizedFreshdeskArticle {
+  const { apiUrl, apiPath, apiSlug } = readFreshdeskArticleUrlFields(
+    article as Record<string, unknown>,
+  );
+  const publicUrl = resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: article.id,
+    apiUrl,
+    apiPath,
+    apiSlug,
+  });
+
   return {
     id: `freshdesk-${article.id}`,
     source: "freshdesk",
@@ -24,5 +38,7 @@ export function normalizeFreshdeskArticle(
     images: extractFreshdeskImages(article.description),
     updatedAt: article.updated_at,
     enabled: article.status === 2,
+    slug: apiSlug,
+    publicUrl,
   };
 }

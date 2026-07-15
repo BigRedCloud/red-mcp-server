@@ -19,6 +19,12 @@ export type FreshdeskFolder = {
     updated_at: string;
     description: string;
     description_text: string;
+    /** Public article URL when returned by the Freshdesk API. */
+    url?: string;
+    /** Article path or slug segment when returned by the Freshdesk API. */
+    path?: string;
+    /** Article slug when returned by the Freshdesk API. */
+    slug?: string;
   };
   
   export type FreshdeskImageReference = {
@@ -38,4 +44,6 @@ export type FreshdeskFolder = {
     images: FreshdeskImageReference[];
     updatedAt: string;
     enabled: boolean;
+    slug: string | null;
+    publicUrl: string | null;
   };

@@ -260,7 +260,7 @@ export function toFreshdeskHelpResourceResult(
 ): HelpResourceResult {
   return {
     title: article.title,
-    url: null,
+    url: article.publicUrl,
     helpRoutingCategory: article.folderName,
     description: createFreshdeskBodyExcerpt(article.bodyText),
     contentType: "support",

@@ -144,7 +144,7 @@ export function findFreshdeskHelpArticles(question, articles, options) {
 export function toFreshdeskHelpResourceResult(article) {
     return {
         title: article.title,
-        url: null,
+        url: article.publicUrl,
         helpRoutingCategory: article.folderName,
         description: createFreshdeskBodyExcerpt(article.bodyText),
         contentType: "support",

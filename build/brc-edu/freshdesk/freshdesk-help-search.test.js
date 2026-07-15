@@ -37,6 +37,8 @@ function createFreshdeskArticle(overrides = {}) {
         ],
         updatedAt: "2026-07-01T00:00:00Z",
         enabled: true,
+        slug: "create-a-sales-invoice",
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-create-a-sales-invoice",
         ...overrides,
     };
 }
@@ -205,13 +207,17 @@ test("toFreshdeskHelpResourceResult does not return the full article body", () =
     assert.ok(result.description.length <= 200);
     assert.notEqual(result.description, longBody);
 });
+test("toFreshdeskHelpResourceResult returns canonical Freshdesk publicUrl", () => {
+    const result = toFreshdeskHelpResourceResult(createFreshdeskArticle());
+    assert.equal(result.url, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-create-a-sales-invoice");
+});
 test("toFreshdeskHelpResourceResult does not return source image URLs", () => {
     const result = toFreshdeskHelpResourceResult(createFreshdeskArticle());
     const serialized = JSON.stringify(result);
     assert.equal(serialized.includes("cdn.freshdesk.com"), false);
     assert.equal(serialized.includes("blob.core.windows.net"), false);
     assert.equal(serialized.includes("freshdesk/1001"), false);
-    assert.equal(result.url, null);
+    assert.match(result.url ?? "", /^https:\/\/bigredcloud\.freshdesk\.com\/support\/solutions\/articles\//);
 });
 test("Freshdesk help results use support content type and freshdesk source", () => {
     const result = toFreshdeskHelpResourceResult(createFreshdeskArticle());

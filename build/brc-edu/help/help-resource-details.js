@@ -5,6 +5,7 @@ import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming
 import { loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
 import { parseHelpResourceId, } from "./help-resource-types.js";
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
+import { FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUIDANCE, } from "./unified-help-search.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
@@ -89,12 +90,14 @@ async function findRecordedWebinarById(resourceId) {
 function buildDetailsGuidance() {
     return {
         supportFooter: SUPPORT_FOOTER_GUIDANCE,
+        freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
         doNotExpose: [
             "resource IDs in customer-facing text",
             "Azure blob names",
             "storage URLs",
             "Freshdesk source image URLs",
             "sync metadata",
+            "invented Freshdesk article URLs",
         ],
     };
 }
@@ -125,7 +128,9 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     title: normalized.title,
                     summary: normalized.summary,
                     instructions: normalized.bodyText,
-                    publicUrl: null,
+                    publicUrl: normalized.url && isFreshdeskPublicArticleUrl(normalized.url)
+                        ? normalized.url
+                        : null,
                     category: normalized.category,
                     topics: normalized.topics,
                     imageCount: images.length,

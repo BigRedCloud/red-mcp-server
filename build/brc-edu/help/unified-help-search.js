@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { normaliseHelpSearchText, tokenizeHelpSearchQuestion, } from "../freshdesk/freshdesk-help-search.js";
+import { FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { isPublicHttpsUrl } from "./help-resource-types.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = "https://bigredcloud.com/contact/";
@@ -91,7 +92,7 @@ function fromFreshdeskResource(article) {
         title: article.title,
         summary: article.bodyText.slice(0, 220),
         bodyText: article.bodyText,
-        url: "",
+        url: article.publicUrl ?? "",
         category: article.folderName,
         topics: [article.folderName],
         imageBlobNames: article.syncedImages.map((image) => image.blobName),
@@ -101,7 +102,9 @@ function fromFreshdeskResource(article) {
 }
 export function toHelpSearchResult(resource, relevanceScore) {
     const publicUrl = resource.source === "freshdesk"
-        ? null
+        ? resource.url && isFreshdeskPublicArticleUrl(resource.url)
+            ? resource.url
+            : null
         : resource.url && isPublicHttpsUrl(resource.url)
             ? resource.url
             : null;
@@ -255,6 +258,9 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
                 "Provide a concise synthesized direct answer first.",
                 "Add clear steps where applicable.",
                 "Include a Helpful resources section with 3–5 descriptive customer-facing links only.",
+                "Use only publicUrl values returned in resources. Never invent Freshdesk links from titles, slugs, or article IDs.",
+                "If a Freshdesk resource has no publicUrl, mention its title without a hyperlink.",
+                FRESHDESK_LINK_RESPONSE_GUIDANCE,
                 "Use brc_get_help_resource_details for Freshdesk images or full article text when useful.",
                 "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata.",
             ],

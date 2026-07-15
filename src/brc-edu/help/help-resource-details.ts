@@ -18,6 +18,10 @@ import {
 } from "./help-resource-types.js";
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
 import {
+  FRESHDESK_LINK_RESPONSE_GUIDANCE,
+  isFreshdeskPublicArticleUrl,
+} from "../freshdesk/freshdesk-article-url.js";
+import {
   fromFreshdeskResource,
   fromRecordedWebinarResource,
   SUPPORT_FOOTER_GUIDANCE,
@@ -46,6 +50,7 @@ export type HelpResourceDetailsPayload = {
   imageCount: number;
   responseGuidance: {
     supportFooter: string;
+    freshdeskLinks?: string;
     doNotExpose: string[];
   };
 };
@@ -172,12 +177,14 @@ async function findRecordedWebinarById(
 function buildDetailsGuidance() {
   return {
     supportFooter: SUPPORT_FOOTER_GUIDANCE,
+    freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
     doNotExpose: [
       "resource IDs in customer-facing text",
       "Azure blob names",
       "storage URLs",
       "Freshdesk source image URLs",
       "sync metadata",
+      "invented Freshdesk article URLs",
     ],
   };
 }
@@ -233,7 +240,10 @@ export async function getHelpResourceDetails(
           title: normalized.title,
           summary: normalized.summary,
           instructions: normalized.bodyText,
-          publicUrl: null,
+          publicUrl:
+            normalized.url && isFreshdeskPublicArticleUrl(normalized.url)
+              ? normalized.url
+              : null,
           category: normalized.category,
           topics: normalized.topics,
           imageCount: images.length,

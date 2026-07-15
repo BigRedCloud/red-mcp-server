@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import { BlobServiceClient, } from "@azure/storage-blob";
 import { getBrcEduUploadContainer, getBrcEduUploadStorageConnectionString, } from "../../edu/brc_edu_upload_store.js";
+import { repairStoredFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
 export const FRESHDESK_ARTICLES_INDEX_BLOB_PATH = "brc-edu/freshdesk/latest/articles.json";
 export const FRESHDESK_ARTICLES_INDEX_CONTENT_TYPE = "application/json; charset=utf-8";
 export const FRESHDESK_ARTICLES_INDEX_CACHE_CONTROL = "no-store";
@@ -95,6 +96,28 @@ export function parseFreshdeskArticlesIndex(value) {
     }
     return value;
 }
+function repairLoadedFreshdeskArticle(article) {
+    const repaired = repairStoredFreshdeskArticlePublicUrl({
+        freshdeskArticleId: article.freshdeskArticleId,
+        publicUrl: typeof article.publicUrl === "string"
+            ? article.publicUrl
+            : typeof article.url === "string"
+                ? article.url
+                : null,
+        slug: typeof article.slug === "string" ? article.slug : null,
+    });
+    return {
+        ...article,
+        slug: repaired.slug,
+        publicUrl: repaired.publicUrl,
+    };
+}
+export function normalizeLoadedFreshdeskArticlesIndex(index) {
+    return {
+        ...index,
+        articles: index.articles.map(repairLoadedFreshdeskArticle),
+    };
+}
 export function createBrcEduFreshdeskIndexContainer(connectionString, containerName) {
     return BlobServiceClient.fromConnectionString(connectionString).getContainerClient(containerName);
 }
@@ -140,11 +163,11 @@ export async function loadFreshdeskArticlesIndex(container) {
         catch {
             throw new Error("Freshdesk articles index JSON is malformed.");
         }
-        const index = parseFreshdeskArticlesIndex(parsed);
-        if (!index) {
+        const parsedIndex = parseFreshdeskArticlesIndex(parsed);
+        if (!parsedIndex) {
             throw new Error("Freshdesk articles index has an invalid shape.");
         }
-        return index;
+        return normalizeLoadedFreshdeskArticlesIndex(parsedIndex);
     }
     catch (error) {
         if (error instanceof Error &&
