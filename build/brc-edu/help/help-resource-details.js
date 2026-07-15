@@ -5,7 +5,7 @@ import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming
 import { loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
 import { parseHelpResourceId, } from "./help-resource-types.js";
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
-import { FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
+import { FRESHDESK_LINK_RESPONSE_GUIDANCE, getSyncedFreshdeskArticlePublicUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUIDANCE, } from "./unified-help-search.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
@@ -128,9 +128,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     title: normalized.title,
                     summary: normalized.summary,
                     instructions: normalized.bodyText,
-                    publicUrl: normalized.url && isFreshdeskPublicArticleUrl(normalized.url)
-                        ? normalized.url
-                        : null,
+                    publicUrl: getSyncedFreshdeskArticlePublicUrl(article),
                     category: normalized.category,
                     topics: normalized.topics,
                     imageCount: images.length,

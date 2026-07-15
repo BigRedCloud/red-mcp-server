@@ -6,11 +6,13 @@ import {
   extractSlugFromLegacyBigredcloudSupportUrl,
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
   FRESHDESK_PUBLIC_ARTICLES_BASE_URL,
+  getSyncedFreshdeskArticlePublicUrl,
   isFreshdeskPublicArticleUrl,
   isLegacyBigredcloudSupportArticleUrl,
   readFreshdeskArticleUrlFields,
   repairStoredFreshdeskArticlePublicUrl,
   resolveFreshdeskArticlePublicUrl,
+  slugifyFreshdeskArticleTitle,
 } from "./freshdesk-article-url.js";
 
 const BANK_RECON_CANONICAL_URL =
@@ -27,19 +29,36 @@ export const BANK_RECON_FRESHDESK_ARTICLE = {
   legacyUrl: BANK_RECON_LEGACY_URL,
 };
 
+test("slugifyFreshdeskArticleTitle matches bank reconciliation regression slug", () => {
+  assert.equal(
+    slugifyFreshdeskArticleTitle(
+      "How do I do the Bank Reconciliation (Bank Rec)?",
+    ),
+    "how-do-i-do-the-bank-reconciliation-bank-rec-",
+  );
+});
+
+test("slugifyFreshdeskArticleTitle matches add-a-customer regression slug", () => {
+  assert.equal(
+    slugifyFreshdeskArticleTitle("How do I add a Customer?"),
+    "how-do-i-add-a-customer-",
+  );
+});
+
 test("API-provided canonical Freshdesk URL is preserved", () => {
   const url = resolveFreshdeskArticlePublicUrl({
     freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
     apiUrl: BANK_RECON_CANONICAL_URL,
   });
 
   assert.equal(url, BANK_RECON_CANONICAL_URL);
 });
 
-test("bank reconciliation regression never returns bigredcloud.com/support URL", () => {
+test("bank reconciliation regression returns canonical Freshdesk URL from title", () => {
   const url = resolveFreshdeskArticlePublicUrl({
     freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
-    apiSlug: BANK_RECON_FRESHDESK_ARTICLE.slug,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
   });
 
   assert.equal(url, BANK_RECON_CANONICAL_URL);
@@ -47,9 +66,23 @@ test("bank reconciliation regression never returns bigredcloud.com/support URL",
   assert.equal(isLegacyBigredcloudSupportArticleUrl(url ?? ""), false);
 });
 
+test("add-a-customer regression returns canonical URL pattern from title", () => {
+  const articleId = 157000123456;
+  const url = resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: articleId,
+    title: "How do I add a Customer?",
+  });
+
+  assert.equal(
+    url,
+    `${FRESHDESK_PUBLIC_ARTICLES_BASE_URL}${articleId}-how-do-i-add-a-customer-`,
+  );
+});
+
 test("canonical URL is built from article ID and API slug field", () => {
   const url = resolveFreshdeskArticlePublicUrl({
     freshdeskArticleId: 1001,
+    title: "Ignored when slug is present",
     apiSlug: "complete-a-bank-reconciliation",
   });
 
@@ -62,6 +95,7 @@ test("canonical URL is built from article ID and API slug field", () => {
 test("API path under /support/solutions/articles/ is accepted", () => {
   const url = resolveFreshdeskArticlePublicUrl({
     freshdeskArticleId: 1001,
+    title: "Fallback title",
     apiPath:
       "/support/solutions/articles/1001-complete-a-bank-reconciliation",
   });
@@ -86,21 +120,44 @@ test("readFreshdeskArticleUrlFields reads url, path, and slug from API payload",
   assert.equal(fields.apiSlug, "sample-slug");
 });
 
-test("wrong bigredcloud.com/support URL is rejected as canonical Freshdesk URL", () => {
+test("missing API URL and slug falls back to slugifying the title", () => {
+  const url = resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
+  });
+
+  assert.equal(url, BANK_RECON_CANONICAL_URL);
+});
+
+test("article ID and title always produce a publicUrl", () => {
+  const url = resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: 42,
+    title: "Create a sales invoice",
+  });
+
+  assert.equal(
+    url,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/42-create-a-sales-invoice",
+  );
+});
+
+test("wrong bigredcloud.com/support URL is replaced using title fallback", () => {
   assert.equal(isFreshdeskPublicArticleUrl(BANK_RECON_LEGACY_URL), false);
   assert.equal(isLegacyBigredcloudSupportArticleUrl(BANK_RECON_LEGACY_URL), true);
 
   const url = resolveFreshdeskArticlePublicUrl({
     freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
     storedPublicUrl: BANK_RECON_LEGACY_URL,
   });
 
-  assert.equal(url, null);
+  assert.equal(url, BANK_RECON_CANONICAL_URL);
 });
 
 test("legacy wrong URL is repaired using article ID and slug", () => {
   const repaired = repairStoredFreshdeskArticlePublicUrl({
     freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
     publicUrl: BANK_RECON_LEGACY_URL,
     slug: BANK_RECON_FRESHDESK_ARTICLE.slug,
   });
@@ -108,7 +165,18 @@ test("legacy wrong URL is repaired using article ID and slug", () => {
   assert.equal(repaired.publicUrl, BANK_RECON_CANONICAL_URL);
 });
 
-test("legacy wrong URL is repaired using slug extracted from legacy path", () => {
+test("legacy publicUrl null is repaired during index repair using title", () => {
+  const repaired = repairStoredFreshdeskArticlePublicUrl({
+    freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+    title: BANK_RECON_FRESHDESK_ARTICLE.title,
+    publicUrl: null,
+  });
+
+  assert.equal(repaired.publicUrl, BANK_RECON_CANONICAL_URL);
+  assert.equal(repaired.slug, BANK_RECON_FRESHDESK_ARTICLE.slug);
+});
+
+test("legacy wrong URL is repaired using slug extracted from legacy path when title is absent", () => {
   const legacySlug = extractSlugFromLegacyBigredcloudSupportUrl(
     BANK_RECON_LEGACY_URL,
   );
@@ -128,12 +196,18 @@ test("legacy wrong URL is repaired using slug extracted from legacy path", () =>
   );
 });
 
-test("missing URL is not guessed from title", () => {
-  const url = resolveFreshdeskArticlePublicUrl({
-    freshdeskArticleId: BANK_RECON_FRESHDESK_ARTICLE.freshdeskArticleId,
+test("getSyncedFreshdeskArticlePublicUrl resolves legacy articles without stored publicUrl", () => {
+  const url = getSyncedFreshdeskArticlePublicUrl({
+    freshdeskArticleId: 1001,
+    title: "Complete a bank reconciliation",
+    publicUrl: null,
+    slug: null,
   });
 
-  assert.equal(url, null);
+  assert.equal(
+    url,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
+  );
 });
 
 test("invalid host is rejected", () => {
@@ -162,7 +236,8 @@ test("malformed URL is rejected", () => {
   );
 });
 
-test("response guidance tells the model not to invent links", () => {
-  assert.match(FRESHDESK_LINK_RESPONSE_GUIDANCE, /never construct or guess/i);
-  assert.match(FRESHDESK_LINK_RESPONSE_GUIDANCE, /publicUrl is null/i);
+test("response guidance tells the model to use exact Freshdesk publicUrl", () => {
+  assert.match(FRESHDESK_LINK_RESPONSE_GUIDANCE, /exact publicUrl/i);
+  assert.match(FRESHDESK_LINK_RESPONSE_GUIDANCE, /bigredcloud\.freshdesk\.com/i);
+  assert.match(FRESHDESK_LINK_RESPONSE_GUIDANCE, /never rewrite/i);
 });

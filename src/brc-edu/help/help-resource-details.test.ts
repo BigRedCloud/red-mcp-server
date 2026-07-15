@@ -34,9 +34,8 @@ function freshdeskArticle(): SyncedFreshdeskArticle {
     ],
     updatedAt: "2026-07-01T00:00:00.000Z",
     enabled: true,
-    slug: "complete-a-bank-reconciliation",
-    publicUrl:
-      "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
+    slug: null,
+    publicUrl: null,
   };
 }
 
@@ -139,7 +138,7 @@ test("getHelpResourceDetails returns Freshdesk instructions without storage URLs
     );
     assert.match(
       result.payload.responseGuidance.freshdeskLinks ?? "",
-      /never construct or guess/i,
+      /bigredcloud\.freshdesk\.com/i,
     );
     assert.equal(JSON.stringify(result.payload).includes("AccountKey="), false);
   }

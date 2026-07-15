@@ -6,7 +6,7 @@ export const FRESHDESK_PUBLIC_ARTICLES_PATH_PREFIX =
 export const FRESHDESK_PUBLIC_ARTICLES_BASE_URL = `https://${FRESHDESK_PUBLIC_HOST}${FRESHDESK_PUBLIC_ARTICLES_PATH_PREFIX}`;
 
 export const FRESHDESK_LINK_RESPONSE_GUIDANCE =
-  "Use only the publicUrl field for Freshdesk article links. Never construct or guess Freshdesk links from titles, slugs, article IDs, or domain assumptions. If publicUrl is null, mention the article title without a hyperlink.";
+  "Use the exact publicUrl returned by Red for Freshdesk article links. Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.";
 
 const BLOCKED_URL_PREFIXES = ["javascript:", "data:", "file:"];
 
@@ -14,11 +14,24 @@ const LEGACY_BIGREDCLOUD_SUPPORT_HOST = "bigredcloud.com";
 
 export type FreshdeskArticleUrlInput = {
   freshdeskArticleId: number;
+  title?: string | null;
   apiUrl?: string | null;
   apiPath?: string | null;
   apiSlug?: string | null;
   storedPublicUrl?: string | null;
+  storedSlug?: string | null;
 };
+
+export function slugifyFreshdeskArticleTitle(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/[''`´""]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+/, "");
+}
 
 export function isFreshdeskPublicArticleUrl(value: string): boolean {
   const trimmed = value.trim();
@@ -183,18 +196,31 @@ function resolveFromApiPath(
   return isFreshdeskPublicArticleUrl(url) ? url : null;
 }
 
+function resolveFromTitleSlug(
+  freshdeskArticleId: number,
+  title: string,
+): string | null {
+  const slug = slugifyFreshdeskArticleTitle(title);
+  if (!slug) {
+    return null;
+  }
+
+  const url = buildFreshdeskPublicArticleUrl(freshdeskArticleId, slug);
+  return isFreshdeskPublicArticleUrl(url) ? url : null;
+}
+
 export function resolveFreshdeskArticlePublicUrl(
   input: FreshdeskArticleUrlInput,
 ): string | null {
-  const candidates = [
-    input.apiUrl,
-    input.storedPublicUrl,
-  ].filter((value): value is string => typeof value === "string");
+  if (input.apiUrl && isFreshdeskPublicArticleUrl(input.apiUrl)) {
+    return input.apiUrl.trim();
+  }
 
-  for (const candidate of candidates) {
-    if (isFreshdeskPublicArticleUrl(candidate)) {
-      return candidate.trim();
-    }
+  if (
+    input.storedPublicUrl &&
+    isFreshdeskPublicArticleUrl(input.storedPublicUrl)
+  ) {
+    return input.storedPublicUrl.trim();
   }
 
   if (input.apiPath) {
@@ -217,55 +243,110 @@ export function resolveFreshdeskArticlePublicUrl(
     }
   }
 
+  if (input.storedSlug) {
+    const fromStoredSlug = buildFreshdeskPublicArticleUrl(
+      input.freshdeskArticleId,
+      input.storedSlug,
+    );
+    if (isFreshdeskPublicArticleUrl(fromStoredSlug)) {
+      return fromStoredSlug;
+    }
+  }
+
+  if (input.title?.trim()) {
+    const fromTitle = resolveFromTitleSlug(
+      input.freshdeskArticleId,
+      input.title,
+    );
+    if (fromTitle) {
+      return fromTitle;
+    }
+  }
+
+  if (
+    input.storedPublicUrl &&
+    isLegacyBigredcloudSupportArticleUrl(input.storedPublicUrl)
+  ) {
+    const legacySlug = extractSlugFromLegacyBigredcloudSupportUrl(
+      input.storedPublicUrl,
+    );
+    if (legacySlug) {
+      const repaired = buildFreshdeskPublicArticleUrl(
+        input.freshdeskArticleId,
+        legacySlug,
+      );
+      if (isFreshdeskPublicArticleUrl(repaired)) {
+        return repaired;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function resolveFreshdeskArticleSlug(
+  input: Pick<
+    FreshdeskArticleUrlInput,
+    "apiSlug" | "storedSlug" | "title" | "storedPublicUrl"
+  >,
+): string | null {
+  if (input.apiSlug) {
+    return input.apiSlug;
+  }
+
+  if (input.storedSlug) {
+    return input.storedSlug;
+  }
+
+  if (
+    input.storedPublicUrl &&
+    isLegacyBigredcloudSupportArticleUrl(input.storedPublicUrl)
+  ) {
+    return extractSlugFromLegacyBigredcloudSupportUrl(input.storedPublicUrl);
+  }
+
+  if (input.title?.trim()) {
+    return slugifyFreshdeskArticleTitle(input.title);
+  }
+
   return null;
 }
 
 export function repairStoredFreshdeskArticlePublicUrl(input: {
   freshdeskArticleId: number;
+  title?: string | null;
   publicUrl?: string | null;
   slug?: string | null;
 }): { publicUrl: string | null; slug: string | null } {
-  const storedPublicUrl = normalizeOptionalString(input.publicUrl);
-  const storedSlug = normalizeOptionalString(input.slug);
+  const publicUrl = resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: input.freshdeskArticleId,
+    title: input.title,
+    storedPublicUrl: input.publicUrl,
+    storedSlug: input.slug,
+    apiSlug: input.slug,
+  });
 
-  if (storedPublicUrl && isFreshdeskPublicArticleUrl(storedPublicUrl)) {
-    return {
-      publicUrl: storedPublicUrl,
-      slug: storedSlug,
-    };
-  }
+  const slug = resolveFreshdeskArticleSlug({
+    apiSlug: input.slug,
+    storedSlug: input.slug,
+    title: input.title,
+    storedPublicUrl: input.publicUrl,
+  });
 
-  if (storedPublicUrl && isLegacyBigredcloudSupportArticleUrl(storedPublicUrl)) {
-    const legacySlug =
-      storedSlug ??
-      extractSlugFromLegacyBigredcloudSupportUrl(storedPublicUrl);
-    if (legacySlug) {
-      const repaired = resolveFreshdeskArticlePublicUrl({
-        freshdeskArticleId: input.freshdeskArticleId,
-        apiSlug: legacySlug,
-      });
-      return {
-        publicUrl: repaired,
-        slug: legacySlug,
-      };
-    }
+  return { publicUrl, slug };
+}
 
-    return { publicUrl: null, slug: storedSlug };
-  }
-
-  if (storedSlug) {
-    return {
-      publicUrl: resolveFreshdeskArticlePublicUrl({
-        freshdeskArticleId: input.freshdeskArticleId,
-        apiSlug: storedSlug,
-      }),
-      slug: storedSlug,
-    };
-  }
-
-  if (storedPublicUrl) {
-    return { publicUrl: null, slug: storedSlug };
-  }
-
-  return { publicUrl: null, slug: storedSlug };
+export function getSyncedFreshdeskArticlePublicUrl(article: {
+  freshdeskArticleId: number;
+  title: string;
+  publicUrl?: string | null;
+  slug?: string | null;
+}): string | null {
+  return resolveFreshdeskArticlePublicUrl({
+    freshdeskArticleId: article.freshdeskArticleId,
+    title: article.title,
+    storedPublicUrl: article.publicUrl,
+    storedSlug: article.slug,
+    apiSlug: article.slug,
+  });
 }

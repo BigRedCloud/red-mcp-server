@@ -10,10 +10,12 @@ import {
   FRESHDESK_ARTICLES_INDEX_CACHE_CONTROL,
   FRESHDESK_ARTICLES_INDEX_CONTENT_TYPE,
   loadFreshdeskArticlesIndex,
+  normalizeLoadedFreshdeskArticlesIndex,
   saveFreshdeskArticlesIndex,
   serializeFreshdeskArticlesIndex,
   toSafeIndexStorageErrorMessage,
 } from "./freshdesk-index-store.js";
+import { isLegacyBigredcloudSupportArticleUrl } from "./freshdesk-article-url.js";
 
 import type {
   FreshdeskSyncResult,
@@ -181,7 +183,7 @@ test("loadFreshdeskArticlesIndex loads an existing index", async () => {
 
   const loaded = await loadFreshdeskArticlesIndex(container);
 
-  assert.deepEqual(loaded, index);
+  assert.deepEqual(loaded, normalizeLoadedFreshdeskArticlesIndex(index));
 });
 
 test("loadFreshdeskArticlesIndex returns null when the blob is missing", async () => {
@@ -300,6 +302,52 @@ test("canonical Freshdesk URL survives index save and load", async () => {
   assert.equal(loaded?.articles[0]?.publicUrl, canonicalUrl);
 });
 
+test("loadFreshdeskArticlesIndex repairs legacy articles missing publicUrl", async () => {
+  const legacyIndex = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 2,
+    failureCount: 0,
+    articles: [
+      createSyncedArticle({
+        freshdeskArticleId: 157000368991,
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        publicUrl: null,
+        slug: null,
+      }),
+      createSyncedArticle({
+        freshdeskArticleId: 157000123456,
+        title: "How do I add a Customer?",
+        publicUrl:
+          "https://bigredcloud.com/support/how-do-i-add-a-customer/",
+        slug: null,
+      }),
+    ],
+    failures: [],
+  };
+
+  const { container } = createMockContainer(
+    new Map([
+      [
+        FRESHDESK_ARTICLES_INDEX_BLOB_PATH,
+        {
+          body: Buffer.from(JSON.stringify(legacyIndex), "utf8"),
+        },
+      ],
+    ]),
+  );
+
+  const loaded = await loadFreshdeskArticlesIndex(container);
+  assert.equal(loaded?.articles.length, 2);
+  assert.equal(
+    loaded?.articles[0]?.publicUrl,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-",
+  );
+  assert.equal(
+    loaded?.articles[1]?.publicUrl,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000123456-how-do-i-add-a-customer-",
+  );
+});
+
 test("loadFreshdeskArticlesIndex repairs legacy bigredcloud.com/support URLs", async () => {
   const canonicalUrl =
     "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-";
@@ -310,6 +358,7 @@ test("loadFreshdeskArticlesIndex repairs legacy bigredcloud.com/support URLs", a
     articles: [
       createSyncedArticle({
         freshdeskArticleId: 157000368991,
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
         slug: "how-do-i-do-the-bank-reconciliation-bank-rec-",
         publicUrl:
           "https://bigredcloud.com/support/how-do-i-do-the-bank-reconciliation-bank-rec/",
@@ -331,4 +380,50 @@ test("loadFreshdeskArticlesIndex repairs legacy bigredcloud.com/support URLs", a
 
   const loaded = await loadFreshdeskArticlesIndex(container);
   assert.equal(loaded?.articles[0]?.publicUrl, canonicalUrl);
+});
+
+test("normalizeLoadedFreshdeskArticlesIndex assigns publicUrl to every article with ID and title", () => {
+  const index = normalizeLoadedFreshdeskArticlesIndex({
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 3,
+    failureCount: 0,
+    articles: [
+      createSyncedArticle({
+        freshdeskArticleId: 1,
+        title: "Getting started",
+        publicUrl: null,
+        slug: null,
+      }),
+      createSyncedArticle({
+        freshdeskArticleId: 2,
+        title: "How do I add a Customer?",
+        publicUrl: null,
+        slug: null,
+      }),
+      createSyncedArticle({
+        freshdeskArticleId: 157000368991,
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        publicUrl:
+          "https://bigredcloud.com/support/how-do-i-do-the-bank-reconciliation-bank-rec/",
+        slug: null,
+      }),
+    ],
+    failures: [],
+  });
+
+  assert.equal(index.articles.length, 3);
+  assert.equal(
+    index.articles.filter((article) => article.publicUrl).length,
+    3,
+  );
+  for (const article of index.articles) {
+    assert.match(
+      article.publicUrl ?? "",
+      /^https:\/\/bigredcloud\.freshdesk\.com\/support\/solutions\/articles\//,
+    );
+    assert.equal(
+      isLegacyBigredcloudSupportArticleUrl(article.publicUrl ?? ""),
+      false,
+    );
+  }
 });

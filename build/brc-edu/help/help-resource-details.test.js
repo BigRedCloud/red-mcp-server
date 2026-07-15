@@ -28,8 +28,8 @@ function freshdeskArticle() {
         ],
         updatedAt: "2026-07-01T00:00:00.000Z",
         enabled: true,
-        slug: "complete-a-bank-reconciliation",
-        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
+        slug: null,
+        publicUrl: null,
     };
 }
 test("loadFreshdeskImageBlocks returns ordered supported image blocks with limits", async () => {
@@ -116,7 +116,7 @@ test("getHelpResourceDetails returns Freshdesk instructions without storage URLs
     if (result.ok) {
         assert.match(result.payload.instructions, /Step one/i);
         assert.equal(result.payload.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation");
-        assert.match(result.payload.responseGuidance.freshdeskLinks ?? "", /never construct or guess/i);
+        assert.match(result.payload.responseGuidance.freshdeskLinks ?? "", /bigredcloud\.freshdesk\.com/i);
         assert.equal(JSON.stringify(result.payload).includes("AccountKey="), false);
     }
 });

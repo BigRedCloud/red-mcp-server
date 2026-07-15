@@ -19,7 +19,7 @@ import {
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
 import {
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
-  isFreshdeskPublicArticleUrl,
+  getSyncedFreshdeskArticlePublicUrl,
 } from "../freshdesk/freshdesk-article-url.js";
 import {
   fromFreshdeskResource,
@@ -240,10 +240,7 @@ export async function getHelpResourceDetails(
           title: normalized.title,
           summary: normalized.summary,
           instructions: normalized.bodyText,
-          publicUrl:
-            normalized.url && isFreshdeskPublicArticleUrl(normalized.url)
-              ? normalized.url
-              : null,
+          publicUrl: getSyncedFreshdeskArticlePublicUrl(article),
           category: normalized.category,
           topics: normalized.topics,
           imageCount: images.length,

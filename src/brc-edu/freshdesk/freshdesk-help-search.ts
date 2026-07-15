@@ -6,6 +6,7 @@ import {
 } from "./freshdesk-index-store.js";
 
 import type { SyncedFreshdeskArticle } from "./freshdesk-sync-service.js";
+import { getSyncedFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
 
 export type HelpResourceResult = {
   title: string;
@@ -260,7 +261,7 @@ export function toFreshdeskHelpResourceResult(
 ): HelpResourceResult {
   return {
     title: article.title,
-    url: article.publicUrl,
+    url: getSyncedFreshdeskArticlePublicUrl(article),
     helpRoutingCategory: article.folderName,
     description: createFreshdeskBodyExcerpt(article.bodyText),
     contentType: "support",

@@ -1,4 +1,5 @@
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "./freshdesk-index-store.js";
+import { getSyncedFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
 export const FRESHDESK_HELP_EXCERPT_MAX_LENGTH = 200;
 let freshdeskHelpIndexCache = null;
 export function resetFreshdeskHelpIndexCacheForTests() {
@@ -144,7 +145,7 @@ export function findFreshdeskHelpArticles(question, articles, options) {
 export function toFreshdeskHelpResourceResult(article) {
     return {
         title: article.title,
-        url: article.publicUrl,
+        url: getSyncedFreshdeskArticlePublicUrl(article),
         helpRoutingCategory: article.folderName,
         description: createFreshdeskBodyExcerpt(article.bodyText),
         contentType: "support",

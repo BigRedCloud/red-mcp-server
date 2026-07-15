@@ -33,9 +33,8 @@ function freshdeskArticle(): SyncedFreshdeskArticle {
     syncedImages: [{ sourceUrl: "https://cdn.freshdesk.com/a.png", blobName: "freshdesk/1001/a.png", sha256: "a", contentType: "image/png" }],
     updatedAt: "2026-07-01T00:00:00.000Z",
     enabled: true,
-    slug: "complete-a-bank-reconciliation",
-    publicUrl:
-      "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
+    slug: null,
+    publicUrl: null,
   };
 }
 
@@ -161,11 +160,12 @@ test("search results expose public URLs only and mark Freshdesk image availabili
   assert.match(doc?.publicUrl ?? "", /^https:\/\//);
 
   const fd = results.find((result) => result.source === "freshdesk");
-  assert.match(
-    fd?.publicUrl ?? "",
-    /^https:\/\/bigredcloud\.freshdesk\.com\/support\/solutions\/articles\//,
+  assert.equal(
+    fd?.publicUrl,
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
   );
   assert.equal(fd?.imageAvailable, true);
+  assert.notEqual(fd?.publicUrl, null);
 });
 
 test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance", () => {
@@ -183,7 +183,7 @@ test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance
   assert.match(response.responseGuidance.supportFooter, /bigredcloud.com\/contact/);
   assert.match(
     response.responseGuidance.format.join(" "),
-    /never invent Freshdesk links/i,
+    /bigredcloud\.freshdesk\.com/i,
   );
 });
 

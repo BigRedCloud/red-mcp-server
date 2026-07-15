@@ -164,6 +164,7 @@ function repairLoadedFreshdeskArticle(
 ): SyncedFreshdeskArticle {
   const repaired = repairStoredFreshdeskArticlePublicUrl({
     freshdeskArticleId: article.freshdeskArticleId,
+    title: typeof article.title === "string" ? article.title : null,
     publicUrl:
       typeof article.publicUrl === "string"
         ? article.publicUrl

@@ -86,10 +86,18 @@ test("normalizeFreshdeskArticle builds publicUrl from API slug when url is absen
     }), "Cash Book");
     assert.equal(normalized.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation");
 });
-test("normalizeFreshdeskArticle does not guess publicUrl from title", () => {
+test("normalizeFreshdeskArticle builds publicUrl from title when API fields are absent", () => {
     const normalized = normalizeFreshdeskArticle(createArticle({
         id: 1001,
+        title: "Complete a bank reconciliation",
+    }), "Cash Book");
+    assert.equal(normalized.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation");
+    assert.equal(normalized.slug, "complete-a-bank-reconciliation");
+});
+test("normalizeFreshdeskArticle builds bank reconciliation regression URL from title", () => {
+    const normalized = normalizeFreshdeskArticle(createArticle({
+        id: 157000368991,
         title: "How do I do the Bank Reconciliation (Bank Rec)?",
     }), "Cash Book");
-    assert.equal(normalized.publicUrl, null);
+    assert.equal(normalized.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368991-how-do-i-do-the-bank-reconciliation-bank-rec-");
 });

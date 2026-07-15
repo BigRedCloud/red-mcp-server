@@ -8,6 +8,7 @@ import {
 import type { SyncedFreshdeskArticle } from "../freshdesk/freshdesk-sync-service.js";
 import {
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
+  getSyncedFreshdeskArticlePublicUrl,
   isFreshdeskPublicArticleUrl,
 } from "../freshdesk/freshdesk-article-url.js";
 import type {
@@ -151,7 +152,7 @@ function fromFreshdeskResource(
     title: article.title,
     summary: article.bodyText.slice(0, 220),
     bodyText: article.bodyText,
-    url: article.publicUrl ?? "",
+    url: getSyncedFreshdeskArticlePublicUrl(article) ?? "",
     category: article.folderName,
     topics: [article.folderName],
     imageBlobNames: article.syncedImages.map((image) => image.blobName),
@@ -402,8 +403,8 @@ export function buildUnifiedFindHelpResourcesResponse(
         "Provide a concise synthesized direct answer first.",
         "Add clear steps where applicable.",
         "Include a Helpful resources section with 3–5 descriptive customer-facing links only.",
-        "Use only publicUrl values returned in resources. Never invent Freshdesk links from titles, slugs, or article IDs.",
-        "If a Freshdesk resource has no publicUrl, mention its title without a hyperlink.",
+        "Use only publicUrl values returned in resources for hyperlinks.",
+        "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
         FRESHDESK_LINK_RESPONSE_GUIDANCE,
         "Use brc_get_help_resource_details for Freshdesk images or full article text when useful.",
         "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata.",
