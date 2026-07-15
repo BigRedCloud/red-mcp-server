@@ -1,7 +1,8 @@
 import { loadCustomerDocsForHelpSearch } from "../customer-docs/customer-docs-index-store.js";
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "../freshdesk/freshdesk-index-store.js";
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
-import { buildFreshdeskImageLoadDiagnostics, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
+import { buildFreshdeskScreenshotUrls, } from "../freshdesk/freshdesk-public-image-url.js";
+import { buildFreshdeskImageLoadDiagnostics, getNormalizedFreshdeskSyncedImages, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
 import { createConfiguredFreshdeskImageContainer, isFreshdeskImageContainerConfigured, } from "../freshdesk/image-sync.js";
 import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming-webinar-index-store.js";
 import { loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
@@ -46,7 +47,7 @@ function buildDetailsGuidance() {
     return {
         supportFooter: SUPPORT_FOOTER_GUIDANCE,
         freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
-        images: "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps. Use returned MCP image content where relevant. Do not claim screenshots were supplied when imageCount is 0.",
+        images: "When screenshotUrls are returned, present them in the same order as the article steps. Include each screenshot using Markdown image syntax where the chat client supports it, for example ![Add Customer screen](PUBLIC_IMAGE_URL). Otherwise provide descriptive links labelled View screenshot. Do not rewrite or alter the supplied image URL. MCP image content blocks are a fallback only — do not claim screenshots are shown above unless the client visibly rendered them or you included Markdown images or links. Prefer wording such as Relevant screenshots: followed by Markdown images or links. Do not claim screenshots were supplied when imageCount is 0.",
         doNotExpose: [
             "resource IDs in customer-facing text",
             "Azure blob names",
@@ -85,6 +86,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                 maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
             });
             logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
+            const screenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, getNormalizedFreshdeskSyncedImages(article), imageResult.blocks);
             return {
                 ok: true,
                 payload: {
@@ -101,6 +103,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     requestedImageCount: imageResult.requestedImageCount,
                     skippedImageCount: imageResult.skippedImageCount,
                     imageWarning: imageResult.storageWarning,
+                    ...(screenshotUrls.length > 0 ? { screenshotUrls } : {}),
                     responseGuidance: buildDetailsGuidance(),
                 },
                 images: imageResult.blocks,

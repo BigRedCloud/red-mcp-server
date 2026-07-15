@@ -10,7 +10,12 @@ import {
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
 } from "../freshdesk/freshdesk-article-url.js";
 import {
+  buildFreshdeskScreenshotUrls,
+  type FreshdeskScreenshotUrl,
+} from "../freshdesk/freshdesk-public-image-url.js";
+import {
   buildFreshdeskImageLoadDiagnostics,
+  getNormalizedFreshdeskSyncedImages,
   FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD,
   freshdeskArticleImageAvailable,
   loadFreshdeskImageBlocks,
@@ -41,6 +46,7 @@ export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
 export const HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
 
 export type { HelpResourceImageBlock } from "../freshdesk/freshdesk-image-load.js";
+export type { FreshdeskScreenshotUrl } from "../freshdesk/freshdesk-public-image-url.js";
 
 export type HelpResourceDetailsPayload = {
   resourceId: string;
@@ -58,6 +64,7 @@ export type HelpResourceDetailsPayload = {
   requestedImageCount?: number;
   skippedImageCount?: number;
   imageWarning?: string;
+  screenshotUrls?: FreshdeskScreenshotUrl[];
   responseGuidance: {
     supportFooter: string;
     freshdeskLinks?: string;
@@ -121,7 +128,7 @@ function buildDetailsGuidance() {
     supportFooter: SUPPORT_FOOTER_GUIDANCE,
     freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
     images:
-      "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps. Use returned MCP image content where relevant. Do not claim screenshots were supplied when imageCount is 0.",
+      "When screenshotUrls are returned, present them in the same order as the article steps. Include each screenshot using Markdown image syntax where the chat client supports it, for example ![Add Customer screen](PUBLIC_IMAGE_URL). Otherwise provide descriptive links labelled View screenshot. Do not rewrite or alter the supplied image URL. MCP image content blocks are a fallback only — do not claim screenshots are shown above unless the client visibly rendered them or you included Markdown images or links. Prefer wording such as Relevant screenshots: followed by Markdown images or links. Do not claim screenshots were supplied when imageCount is 0.",
     doNotExpose: [
       "resource IDs in customer-facing text",
       "Azure blob names",
@@ -198,6 +205,12 @@ export async function getHelpResourceDetails(
         ),
       );
 
+      const screenshotUrls = buildFreshdeskScreenshotUrls(
+        article.freshdeskArticleId,
+        getNormalizedFreshdeskSyncedImages(article),
+        imageResult.blocks,
+      );
+
       return {
         ok: true,
         payload: {
@@ -214,6 +227,7 @@ export async function getHelpResourceDetails(
           requestedImageCount: imageResult.requestedImageCount,
           skippedImageCount: imageResult.skippedImageCount,
           imageWarning: imageResult.storageWarning,
+          ...(screenshotUrls.length > 0 ? { screenshotUrls } : {}),
           responseGuidance: buildDetailsGuidance(),
         },
         images: imageResult.blocks,

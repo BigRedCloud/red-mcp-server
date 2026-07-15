@@ -16,7 +16,7 @@ function freshdeskArticle() {
             {
                 sourceUrl: "https://cdn.freshdesk.com/a.png",
                 blobName: "freshdesk/1001/a.png",
-                sha256: "a",
+                sha256: "00000000000000000000000000000000000000000000000000000000000000ab",
                 contentType: "image/png",
                 altText: "Cash book screen",
                 order: 0,
@@ -29,6 +29,8 @@ function freshdeskArticle() {
     };
 }
 test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", async () => {
+    process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+    process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
     const png = Buffer.from("fake-image-bytes");
     const index = {
         generatedAt: "2026-07-15T10:00:00.000Z",
@@ -77,6 +79,11 @@ test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", a
     if (result.ok) {
         assert.equal(result.payload.imageAvailable, true);
         assert.equal(result.payload.imageCount, 1);
+        assert.equal(result.payload.screenshotUrls?.length, 1);
+        assert.equal(result.payload.screenshotUrls?.[0]?.caption, "Cash book screen");
+        assert.match(result.payload.screenshotUrls?.[0]?.url ?? "", /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//);
+        assert.match(result.payload.responseGuidance.images ?? "", /Markdown image syntax/i);
+        assert.match(result.payload.responseGuidance.images ?? "", /Do not claim screenshots are shown above/i);
         assert.equal(result.payload.publicUrl, "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation");
         assert.equal(JSON.stringify(result.payload).includes("freshdesk/1001"), false);
         assert.equal(JSON.stringify(result.payload).includes("AccountKey="), false);

@@ -28,7 +28,9 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
 
 export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Load full help-resource details for a resourceId returned by brc_find_help_resources.",
-  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, and may include ordered mirrored screenshots as MCP image content.",
+  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, ordered mirrored screenshots as MCP image content, and screenshotUrls with customer-safe public image links when available.",
+  "When screenshotUrls are returned, include each screenshot using Markdown image syntax where the chat client supports it, for example ![Add Customer screen](PUBLIC_IMAGE_URL). Otherwise provide descriptive links labelled View screenshot.",
+  "Do not rewrite or alter supplied screenshot URLs. Do not claim screenshots are shown above unless the client visibly rendered them or you included Markdown images or links.",
   "Use only the publicUrl returned by this tool for Freshdesk links.",
   "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
   "Customer documentation returns cleaned article text and the public docs URL.",
@@ -36,7 +38,7 @@ export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Upcoming webinars return title, weekday, description, topics, registration URL, and webinar-series page URL.",
   "Read-only. Does not require a connected company.",
   "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps.",
-  "Use returned MCP image content where relevant. Do not claim screenshots were supplied when imageCount is 0.",
+  "MCP image content blocks are a fallback only. Do not claim screenshots were supplied when imageCount is 0.",
   "Do not expose Azure blob names, storage URLs, private Freshdesk image URLs, or sync metadata in customer-facing text.",
 ].join(" ");
 

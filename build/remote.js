@@ -24,6 +24,7 @@ import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
 import { downloadWebinarWorkbookForAdmin, loadWebinarWorkbookForAdmin, saveWebinarWorkbookForAdmin, createConfiguredWorkbookBlobAccess, } from "./edu/brc_edu_workbook_store.js";
 import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY, BRC_EDU_UPLOAD_FIELD_NAME, BRC_EDU_UPLOAD_MAX_BYTES, createConfiguredBrcEduBlobUploader, handleBrcEduResourceUpload, validateBrcEduAdminUploadSecret, } from "./edu/brc_edu_upload_store.js";
 import { renderBrcEduUploadErrorPage, renderBrcEduUploadPage, renderBrcEduUploadPlainError, renderBrcEduUploadSuccessPage, WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH, } from "./edu/brc_edu_upload_page.js";
+import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -179,6 +180,7 @@ app.get("/favicon.ico", (_req, res) => {
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+registerFreshdeskPublicImageRoute(app);
 function isInitializeRequest(body) {
     if (Array.isArray(body)) {
         return body.some((msg) => msg?.method === "initialize");

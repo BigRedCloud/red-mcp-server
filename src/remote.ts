@@ -82,6 +82,7 @@ import {
   WORKBOOK_API_PATH,
   WORKBOOK_DOWNLOAD_PATH,
 } from "./edu/brc_edu_upload_page.js";
+import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -304,6 +305,8 @@ app.get("/favicon.ico", (_req, res) => {
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+registerFreshdeskPublicImageRoute(app);
 
 function isInitializeRequest(body: unknown): boolean {
   if (Array.isArray(body)) {
