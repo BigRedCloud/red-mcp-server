@@ -48,7 +48,7 @@ function setFreshdeskPublicImageSecurityHeaders(
   res.setHeader(
     "Content-Security-Policy",
     options.viewer
-      ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
       : "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'",
   );
   res.setHeader("Cache-Control", "public, max-age=3600");

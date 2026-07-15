@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFreshdeskPublicImageViewerHtml, prefersFreshdeskPublicImageViewer, } from "./freshdesk-public-image-viewer.js";
+import { buildFreshdeskPublicImageViewerHtml, buildFreshdeskPublicImageViewerResizeScript, computeFreshdeskPublicImageDisplaySize, FRESHDESK_PUBLIC_IMAGE_VIEWER_MAX_SCALE, prefersFreshdeskPublicImageViewer, } from "./freshdesk-public-image-viewer.js";
 import { createFreshdeskPublicImageToken, } from "./freshdesk-public-image-token.js";
 import { handleFreshdeskPublicImageRequest, } from "./freshdesk-public-image-route.js";
 const ARTICLE_ID = "1001";
@@ -17,17 +17,80 @@ test("prefersFreshdeskPublicImageViewer detects browser navigation", () => {
         headers: { accept: "*/*" },
     }), false);
 });
-test("buildFreshdeskPublicImageViewerHtml centres and scales the image", () => {
+test("computeFreshdeskPublicImageDisplaySize upscales small images up to 3x", () => {
+    const result = computeFreshdeskPublicImageDisplaySize({
+        naturalWidth: 200,
+        naturalHeight: 120,
+        viewportWidth: 1200,
+        viewportHeight: 800,
+    });
+    assert.equal(result.scale, FRESHDESK_PUBLIC_IMAGE_VIEWER_MAX_SCALE);
+    assert.equal(result.width, 600);
+});
+test("computeFreshdeskPublicImageDisplaySize respects viewport width constraints", () => {
+    const result = computeFreshdeskPublicImageDisplaySize({
+        naturalWidth: 400,
+        naturalHeight: 300,
+        viewportWidth: 600,
+        viewportHeight: 800,
+    });
+    assert.ok(result.scale < FRESHDESK_PUBLIC_IMAGE_VIEWER_MAX_SCALE);
+    assert.ok(result.width <= 600 * 0.96);
+    assert.equal(result.width, Math.round(400 * result.scale));
+});
+test("computeFreshdeskPublicImageDisplaySize respects viewport height constraints", () => {
+    const result = computeFreshdeskPublicImageDisplaySize({
+        naturalWidth: 300,
+        naturalHeight: 500,
+        viewportWidth: 1600,
+        viewportHeight: 700,
+    });
+    assert.ok(result.scale < FRESHDESK_PUBLIC_IMAGE_VIEWER_MAX_SCALE);
+    assert.ok(result.width <= Math.round(300 * result.scale));
+    assert.equal(result.width, Math.round(300 * result.scale));
+});
+test("computeFreshdeskPublicImageDisplaySize preserves aspect ratio via width and auto height", () => {
+    const naturalWidth = 180;
+    const naturalHeight = 90;
+    const result = computeFreshdeskPublicImageDisplaySize({
+        naturalWidth,
+        naturalHeight,
+        viewportWidth: 1400,
+        viewportHeight: 900,
+    });
+    const renderedHeight = naturalHeight * result.scale;
+    assert.equal(result.width / renderedHeight, naturalWidth / naturalHeight);
+});
+test("buildFreshdeskPublicImageViewerHtml keeps centred layout and visible caption", () => {
     const html = buildFreshdeskPublicImageViewerHtml({
         imageSrc: "/public/brc-edu/freshdesk-images/1001/token",
         caption: 'Add Customer <screen> & "steps"',
     });
-    assert.match(html, /display:\s*flex/);
+    assert.match(html, /class="viewer"/);
+    assert.match(html, /class="viewer-image"/);
+    assert.match(html, /class="viewer-caption"/);
     assert.match(html, /align-items:\s*center/);
     assert.match(html, /justify-content:\s*center/);
-    assert.match(html, /width:\s*min\(95vw,\s*1400px\)/);
+    assert.match(html, /max-width:\s*96vw/);
+    assert.match(html, /max-height:\s*90vh/);
     assert.match(html, /Add Customer &lt;screen&gt; &amp; &quot;steps&quot;/);
     assert.match(html, /src="\/public\/brc-edu\/freshdesk-images\/1001\/token"/);
+});
+test("buildFreshdeskPublicImageViewerResizeScript upscales on load and resize", () => {
+    const script = buildFreshdeskPublicImageViewerResizeScript();
+    assert.match(script, /querySelector\("\.viewer-image"\)/);
+    assert.match(script, /naturalWidth/);
+    assert.match(script, /naturalHeight/);
+    assert.match(script, /Math\.min\(/);
+    assert.match(script, /maxScale/);
+    assert.match(script, /window\.innerWidth \* maxWidthRatio \/ naturalWidth/);
+    assert.match(script, /window\.innerHeight \* maxHeightRatio \/ naturalHeight/);
+    assert.match(script, /image\.style\.width/);
+    assert.match(script, /image\.style\.height = "auto"/);
+    assert.match(script, /addEventListener\("load", resizeViewerImage/);
+    assert.match(script, /addEventListener\("resize", resizeViewerImage\)/);
+    assert.match(script, /maxWidth = "96vw"/);
+    assert.match(script, /maxHeight = "90vh"/);
 });
 test("browser navigation receives HTML viewer while image clients receive bytes", async () => {
     process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = SECRET;
@@ -126,8 +189,9 @@ test("browser navigation receives HTML viewer while image clients receive bytes"
     });
     assert.equal(viewerResponse.statusCode, 200);
     assert.equal(viewerResponse.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.match(String(viewerResponse.body ?? ""), /class="viewer-image"/);
     assert.match(String(viewerResponse.body ?? ""), /Add Customer screen/);
-    assert.match(String(viewerResponse.body ?? ""), /width:\s*min\(95vw,\s*1400px\)/);
+    assert.match(String(viewerResponse.body ?? ""), /addEventListener\("resize", resizeViewerImage\)/);
     const imageResponse = {
         headers: new Map(),
         statusCode: 200,
