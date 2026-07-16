@@ -1,5 +1,4 @@
 import { freshdeskArticleHasSyncedImages, isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, normalizeFreshdeskSyncedImages, } from "./freshdesk-image-metadata.js";
-import { getFreshdeskKbImageContainerName } from "./freshdesk-kb-storage.js";
 export const FRESHDESK_IMAGE_LOAD_MAX_IMAGES_DEFAULT = 5;
 export const FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD = 8;
 export const FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES = 512 * 1024;
@@ -10,11 +9,8 @@ const SECRET_PATTERNS = [
     /SharedAccessSignature/i,
     /\bsig=[A-Za-z0-9%+/=]+/i,
 ];
-export function getNormalizedFreshdeskSyncedImages(article) {
-    return normalizeFreshdeskSyncedImages(article.syncedImages, article.images ?? [], { allowedContainerName: getFreshdeskKbImageContainerName() });
-}
 export function freshdeskArticleImageAvailable(article) {
-    return freshdeskArticleHasSyncedImages(getNormalizedFreshdeskSyncedImages(article));
+    return freshdeskArticleHasSyncedImages(normalizeFreshdeskSyncedImages(article.syncedImages, article.images));
 }
 function incrementSkip(skippedByReason, reason) {
     skippedByReason[reason] = (skippedByReason[reason] ?? 0) + 1;
@@ -51,7 +47,7 @@ function buildScreenshotCaption(order, altText) {
 export function buildFreshdeskImageLoadDiagnostics(article, result, configuredContainerPresent) {
     return {
         freshdeskArticleId: article.freshdeskArticleId,
-        storedImageReferences: getNormalizedFreshdeskSyncedImages(article).length,
+        storedImageReferences: normalizeFreshdeskSyncedImages(article.syncedImages, article.images).length,
         successfulDownloads: result.imageCount,
         skippedDownloads: result.skippedImageCount,
         configuredContainerPresent,
@@ -61,7 +57,7 @@ export function logFreshdeskImageLoadDiagnostics(diagnostics) {
     console.info("Freshdesk help image diagnostics:", JSON.stringify(diagnostics));
 }
 export async function loadFreshdeskImageBlocks(article, container, options = {}) {
-    const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+    const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
     const imageAvailable = freshdeskArticleImageAvailable(article);
     const skippedByReason = {};
     const emptyResult = (overrides = {}) => ({

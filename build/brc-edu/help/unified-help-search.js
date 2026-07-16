@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { normaliseHelpSearchText, tokenizeHelpSearchQuestion, } from "../freshdesk/freshdesk-help-search.js";
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
-import { getNormalizedFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-load.js";
+import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 import { isPublicHttpsUrl } from "./help-resource-types.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = "https://bigredcloud.com/contact/";
@@ -147,7 +147,7 @@ function fromRecordedWebinarResource(resource, syncedAt) {
     };
 }
 function fromFreshdeskResource(article) {
-    const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+    const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
     return {
         resourceId: `freshdesk:${article.freshdeskArticleId}`,
         source: "freshdesk",

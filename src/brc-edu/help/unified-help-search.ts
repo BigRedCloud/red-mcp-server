@@ -11,7 +11,7 @@ import {
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
   isFreshdeskPublicArticleUrl,
 } from "../freshdesk/freshdesk-article-url.js";
-import { getNormalizedFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-load.js";
+import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 import type {
   HelpResourceSource,
   HelpResourceSourceFilter,
@@ -223,7 +223,7 @@ function fromRecordedWebinarResource(
 function fromFreshdeskResource(
   article: SyncedFreshdeskArticle,
 ): NormalizedHelpResource {
-  const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+  const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
 
   return {
     resourceId: `freshdesk:${article.freshdeskArticleId}`,

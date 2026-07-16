@@ -30,7 +30,6 @@ import {
 import { isRejectedFreshdeskCaption } from "../freshdesk/screenshot-caption.js";
 import {
   buildFreshdeskImageLoadDiagnostics,
-  getNormalizedFreshdeskSyncedImages,
   FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD,
   freshdeskArticleImageAvailable,
   loadFreshdeskImageBlocks,
@@ -55,6 +54,7 @@ import {
   fromRecordedWebinarResource,
   SUPPORT_FOOTER_GUIDANCE,
 } from "./unified-help-search.js";
+import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
@@ -334,7 +334,26 @@ export async function getHelpResourceDetails(
         ),
       );
 
-      const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+      const syncedImages = normalizeFreshdeskSyncedImages(
+        article.syncedImages,
+        article.images,
+      );
+      console.info(
+        "Freshdesk normalized screenshot diagnostic:",
+        JSON.stringify({
+          freshdeskArticleId: article.freshdeskArticleId,
+          rawSyncedImageCount: Array.isArray(article.syncedImages)
+            ? article.syncedImages.length
+            : 0,
+          normalizedSyncedImageCount: syncedImages.length,
+          normalizedImages: syncedImages.map((image) => ({
+            order: image.order,
+            mimeType: image.mimeType,
+            hasBlobName: Boolean(image.blobName),
+            hasSha256: Boolean(image.sha256),
+          })),
+        }),
+      );
 
       const rawScreenshotUrls = buildFreshdeskScreenshotUrls(
         article.freshdeskArticleId,

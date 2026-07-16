@@ -5,13 +5,14 @@ import { buildFreshdeskScreenshotUrls, toCustomerFacingScreenshotUrl, } from "..
 import { buildFreshdeskInstructionBlocks, enrichScreenshotUrlCaptions, } from "../freshdesk/instruction-blocks.js";
 import { buildCustomerFacingInstructionMarkdown, buildCustomerFacingScreenshotMarkdown, buildScreenshotLinksMarkdown, buildScreenshotMarkdownTextBlock, resolveHelpImagePresentation, } from "../freshdesk/screenshot-markdown.js";
 import { isRejectedFreshdeskCaption } from "../freshdesk/screenshot-caption.js";
-import { buildFreshdeskImageLoadDiagnostics, getNormalizedFreshdeskSyncedImages, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
+import { buildFreshdeskImageLoadDiagnostics, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
 import { createConfiguredFreshdeskImageContainer, isFreshdeskImageContainerConfigured, } from "../freshdesk/image-sync.js";
 import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming-webinar-index-store.js";
 import { loadEnrichedEduResources } from "../../edu/brc_edu_resources.js";
 import { parseHelpResourceId, } from "./help-resource-types.js";
 import { toSafeVersionedIndexStorageError } from "./versioned-index-store.js";
 import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUIDANCE, } from "./unified-help-search.js";
+import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
 export const HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -168,7 +169,20 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                 maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
             });
             logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
-            const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+            const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
+            console.info("Freshdesk normalized screenshot diagnostic:", JSON.stringify({
+                freshdeskArticleId: article.freshdeskArticleId,
+                rawSyncedImageCount: Array.isArray(article.syncedImages)
+                    ? article.syncedImages.length
+                    : 0,
+                normalizedSyncedImageCount: syncedImages.length,
+                normalizedImages: syncedImages.map((image) => ({
+                    order: image.order,
+                    mimeType: image.mimeType,
+                    hasBlobName: Boolean(image.blobName),
+                    hasSha256: Boolean(image.sha256),
+                })),
+            }));
             const rawScreenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, syncedImages);
             const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(rawScreenshotUrls, article.contentBlocks);
             const rawInstructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, enrichedScreenshotUrls, { question });

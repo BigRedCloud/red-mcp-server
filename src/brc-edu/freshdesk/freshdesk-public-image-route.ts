@@ -5,15 +5,17 @@ import {
   createConfiguredFreshdeskIndexContainer,
   loadFreshdeskArticlesIndex,
 } from "./freshdesk-index-store.js";
-import {
-  FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES,
-  getNormalizedFreshdeskSyncedImages,
-} from "./freshdesk-image-load.js";
+
 import {
   isSupportedFreshdeskImageMimeType,
   normalizeFreshdeskImageMimeType,
+  normalizeFreshdeskSyncedImages,
   type FreshdeskSyncedImage,
 } from "./freshdesk-image-metadata.js";
+import {
+  FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES,
+} from "./freshdesk-image-load.js";
+
 import {
   resolveFreshdeskImageKey,
   verifyFreshdeskPublicImageToken,
@@ -67,10 +69,15 @@ function findSyncedImageByKey(
   article: SyncedFreshdeskArticle,
   imageKey: string,
 ): FreshdeskSyncedImage | null {
-  const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+  const syncedImages = normalizeFreshdeskSyncedImages(
+    article.syncedImages,
+    article.images,
+  );
+
   return (
-    syncedImages.find((image) => resolveFreshdeskImageKey(image) === imageKey) ??
-    null
+    syncedImages.find(
+      (image) => resolveFreshdeskImageKey(image) === imageKey,
+    ) ?? null
   );
 }
 

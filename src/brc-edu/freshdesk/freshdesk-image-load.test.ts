@@ -78,30 +78,38 @@ test("normalizeFreshdeskImageMimeType normalizes image/jpg to image/jpeg", () =>
   assert.equal(normalizeFreshdeskImageMimeType("image/jpg"), "image/jpeg");
 });
 
-test("legacy syncedImages metadata is normalized from contentType and path aliases", () => {
-  const normalized = normalizeFreshdeskSyncedImages(
-    [
+test("legacy syncedImages receive mimeType and order", () => {
+  const article = {
+    images: [
       {
-        path: "freshdesk/1001/legacy.png",
-        contentType: "image/png",
-        order: 1,
+        sourceUrl: "https://example.com/a.jpg",
+        altText: "Changing a customer",
       },
       {
-        blobName: "freshdesk/1001/second.jpg",
-        mimeType: "image/jpg",
+        sourceUrl: "https://example.com/b.jpg",
+        altText: "Open O/Balance",
       },
     ],
-    [
-      { sourceUrl: "https://cdn.freshdesk.com/legacy", altText: "Legacy screen" },
-      { sourceUrl: "https://cdn.freshdesk.com/x", altText: "Second screen" },
+    syncedImages: [
+      {
+        blobName: "freshdesk/1001/a.jpg",
+        sha256: "a".repeat(64),
+        contentType: "image/jpeg",
+      },
+      {
+        blobName: "freshdesk/1001/b.jpg",
+        sha256: "b".repeat(64),
+        contentType: "image/jpeg",
+      },
     ],
-    { allowedContainerName: "brc-edu-images" },
-  );
+  };
 
-  assert.equal(normalized.length, 2);
-  assert.equal(normalized[0]?.blobName, "freshdesk/1001/legacy.png");
-  assert.equal(normalized[1]?.mimeType, "image/jpeg");
-  assert.equal(normalized[1]?.altText, "Second screen");
+  const result = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0]?.mimeType, "image/jpeg");
+  assert.equal(result[0]?.order, 0);
+  assert.equal(result[1]?.order, 1);
 });
 
 test("extractSafeBlobNameFromLegacyAzureUrl keeps only safe freshdesk blob paths", () => {

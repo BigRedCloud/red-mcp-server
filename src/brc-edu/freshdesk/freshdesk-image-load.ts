@@ -55,20 +55,17 @@ const SECRET_PATTERNS = [
   /\bsig=[A-Za-z0-9%+/=]+/i,
 ];
 
-export function getNormalizedFreshdeskSyncedImages(
-  article: SyncedFreshdeskArticle,
-): FreshdeskSyncedImage[] {
-  return normalizeFreshdeskSyncedImages(
-    article.syncedImages,
-    article.images ?? [],
-    { allowedContainerName: getFreshdeskKbImageContainerName() },
-  );
-}
+
 
 export function freshdeskArticleImageAvailable(
   article: SyncedFreshdeskArticle,
 ): boolean {
-  return freshdeskArticleHasSyncedImages(getNormalizedFreshdeskSyncedImages(article));
+  return freshdeskArticleHasSyncedImages(
+    normalizeFreshdeskSyncedImages(
+      article.syncedImages,
+      article.images,
+    ),
+  );
 }
 
 function incrementSkip(
@@ -123,7 +120,10 @@ export function buildFreshdeskImageLoadDiagnostics(
 ): FreshdeskImageLoadDiagnostics {
   return {
     freshdeskArticleId: article.freshdeskArticleId,
-    storedImageReferences: getNormalizedFreshdeskSyncedImages(article).length,
+    storedImageReferences: normalizeFreshdeskSyncedImages(
+      article.syncedImages,
+      article.images,
+    ).length,
     successfulDownloads: result.imageCount,
     skippedDownloads: result.skippedImageCount,
     configuredContainerPresent,
@@ -149,7 +149,10 @@ export async function loadFreshdeskImageBlocks(
     maxTotalBytes?: number;
   } = {},
 ): Promise<FreshdeskImageLoadResult> {
-  const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+  const syncedImages = normalizeFreshdeskSyncedImages(
+    article.syncedImages,
+    article.images,
+  );
   const imageAvailable = freshdeskArticleImageAvailable(article);
   const skippedByReason: Partial<Record<FreshdeskImageSkipReason, number>> = {};
 

@@ -1,6 +1,6 @@
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "./freshdesk-index-store.js";
-import { FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES, getNormalizedFreshdeskSyncedImages, } from "./freshdesk-image-load.js";
-import { isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, } from "./freshdesk-image-metadata.js";
+import { isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, normalizeFreshdeskSyncedImages, } from "./freshdesk-image-metadata.js";
+import { FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES, } from "./freshdesk-image-load.js";
 import { resolveFreshdeskImageKey, verifyFreshdeskPublicImageToken, } from "./freshdesk-public-image-token.js";
 import { buildFreshdeskPublicImageViewerHtml, prefersFreshdeskPublicImageViewer, } from "./freshdesk-public-image-viewer.js";
 import { createConfiguredFreshdeskImageContainer } from "./image-sync.js";
@@ -29,9 +29,8 @@ function isSafeArticleId(value) {
     return /^\d+$/.test(value.trim());
 }
 function findSyncedImageByKey(article, imageKey) {
-    const syncedImages = getNormalizedFreshdeskSyncedImages(article);
-    return (syncedImages.find((image) => resolveFreshdeskImageKey(image) === imageKey) ??
-        null);
+    const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
+    return (syncedImages.find((image) => resolveFreshdeskImageKey(image) === imageKey) ?? null);
 }
 async function findFreshdeskArticleById(articleId, indexContainer) {
     if (!indexContainer) {
