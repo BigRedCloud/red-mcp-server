@@ -1,4 +1,5 @@
 import { getCustomerFacingScreenshotBaseUrl } from "../../config/red_public_base_url.js";
+import { normalizeFreshdeskImageMimeType, isSupportedFreshdeskImageMimeType, } from "./freshdesk-image-metadata.js";
 import { createFreshdeskPublicImageToken, isFreshdeskPublicImageSigningConfigured, resolveFreshdeskImageKey, } from "./freshdesk-public-image-token.js";
 import { buildFreshdeskScreenshotCaption, FRESHDESK_SCREENSHOT_CAPTION_FALLBACK, } from "./screenshot-caption.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX = "/public/brc-edu/freshdesk-images";
@@ -15,15 +16,14 @@ export function buildFreshdeskPublicImageUrl(articleId, imageToken, baseUrl) {
     }
     return `${resolvedBaseUrl.replace(/\/$/, "")}${buildFreshdeskPublicImagePath(articleId, imageToken)}`;
 }
-export function buildFreshdeskScreenshotUrls(articleId, syncedImages, blocks, options = {}) {
-    if (!isFreshdeskPublicImageSigningConfigured() || blocks.length === 0) {
+export function buildFreshdeskScreenshotUrls(articleId, syncedImages, options = {}) {
+    if (!isFreshdeskPublicImageSigningConfigured()) {
         return [];
     }
-    const imagesByOrder = new Map(syncedImages.map((image) => [image.order, image]));
     const screenshotUrls = [];
-    for (const block of [...blocks].sort((left, right) => left.order - right.order)) {
-        const syncedImage = imagesByOrder.get(block.order);
-        if (!syncedImage) {
+    for (const syncedImage of [...syncedImages].sort((left, right) => left.order - right.order)) {
+        const mimeType = normalizeFreshdeskImageMimeType(syncedImage.mimeType);
+        if (!mimeType || !isSupportedFreshdeskImageMimeType(mimeType)) {
             continue;
         }
         const imageKey = resolveFreshdeskImageKey(syncedImage);
@@ -42,9 +42,9 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, blocks, op
         }
         screenshotUrls.push({
             caption: buildScreenshotCaption(syncedImage.altText),
-            mimeType: block.mimeType,
+            mimeType,
             url,
-            imageIndex: block.order,
+            imageIndex: syncedImage.order,
         });
     }
     return screenshotUrls;

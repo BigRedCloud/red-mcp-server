@@ -1,5 +1,8 @@
 import { getCustomerFacingScreenshotBaseUrl } from "../../config/red_public_base_url.js";
-import type { HelpResourceImageBlock } from "./freshdesk-image-load.js";
+import {
+  normalizeFreshdeskImageMimeType,
+  isSupportedFreshdeskImageMimeType,
+} from "./freshdesk-image-metadata.js";
 import {
   createFreshdeskPublicImageToken,
   isFreshdeskPublicImageSigningConfigured,
@@ -57,25 +60,23 @@ export function buildFreshdeskPublicImageUrl(
 export function buildFreshdeskScreenshotUrls(
   articleId: string | number,
   syncedImages: FreshdeskSyncedImage[],
-  blocks: HelpResourceImageBlock[],
   options: {
     baseUrl?: string | null;
     now?: number;
   } = {},
 ): FreshdeskScreenshotUrl[] {
-  if (!isFreshdeskPublicImageSigningConfigured() || blocks.length === 0) {
+  if (!isFreshdeskPublicImageSigningConfigured()) {
     return [];
   }
 
-  const imagesByOrder = new Map(
-    syncedImages.map((image) => [image.order, image] as const),
-  );
-
   const screenshotUrls: FreshdeskScreenshotUrl[] = [];
 
-  for (const block of [...blocks].sort((left, right) => left.order - right.order)) {
-    const syncedImage = imagesByOrder.get(block.order);
-    if (!syncedImage) {
+  for (const syncedImage of [...syncedImages].sort(
+    (left, right) => left.order - right.order,
+  )) {
+    const mimeType = normalizeFreshdeskImageMimeType(syncedImage.mimeType);
+
+    if (!mimeType || !isSupportedFreshdeskImageMimeType(mimeType)) {
       continue;
     }
 
@@ -84,28 +85,39 @@ export function buildFreshdeskScreenshotUrls(
       continue;
     }
 
-    const token = createFreshdeskPublicImageToken(String(articleId), imageKey, {
-      now: options.now,
-    });
+    const token = createFreshdeskPublicImageToken(
+      String(articleId),
+      imageKey,
+      {
+        now: options.now,
+      },
+    );
+
     if (!token) {
       continue;
     }
 
-    const url = buildFreshdeskPublicImageUrl(articleId, token, options.baseUrl);
+    const url = buildFreshdeskPublicImageUrl(
+      articleId,
+      token,
+      options.baseUrl,
+    );
+
     if (!url) {
       continue;
     }
 
     screenshotUrls.push({
       caption: buildScreenshotCaption(syncedImage.altText),
-      mimeType: block.mimeType,
+      mimeType,
       url,
-      imageIndex: block.order,
+      imageIndex: syncedImage.order,
     });
   }
 
   return screenshotUrls;
 }
+
 
 /** Strip internal fields before returning screenshot URLs to customers. */
 export function toCustomerFacingScreenshotUrl(

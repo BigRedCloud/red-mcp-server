@@ -315,8 +315,12 @@ export async function getHelpResourceDetails(
       const imageLoadLimit = article.contentBlocks?.length
         ? FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD
         : maxImages;
+        const shouldLoadBinaryImages =
+        includeImages &&
+        (imagePresentation === "inline" || imagePresentation === "both");
+      
       const imageResult = await loadFreshdeskImageBlocks(article, imageContainer, {
-        includeImages,
+        includeImages: shouldLoadBinaryImages,
         maxImages: imageLoadLimit,
         maxImageBytes: HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES,
         maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
@@ -330,10 +334,11 @@ export async function getHelpResourceDetails(
         ),
       );
 
+      const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+
       const rawScreenshotUrls = buildFreshdeskScreenshotUrls(
         article.freshdeskArticleId,
-        getNormalizedFreshdeskSyncedImages(article),
-        imageResult.blocks,
+        syncedImages,
       );
       const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(
         rawScreenshotUrls,
@@ -382,12 +387,23 @@ export async function getHelpResourceDetails(
       const includeBinaryImages =
         includeImages &&
         (imagePresentation === "inline" || imagePresentation === "both");
-      const inlineImages = includeBinaryImages
-        ? imageResult.blocks
-            .slice()
-            .sort((left, right) => left.order - right.order)
-            .slice(0, Math.min(maxImages, selectedImageCount || maxImages))
-        : [];
+
+        const selectedImageOrders = new Set(
+          screenshotUrls
+            .map((screenshot) => screenshot.imageIndex)
+            .filter((value): value is number => typeof value === "number"),
+        );
+        
+        const inlineImages = includeBinaryImages
+          ? imageResult.blocks
+              .filter(
+                (block) =>
+                  selectedImageOrders.size === 0 ||
+                  selectedImageOrders.has(block.order),
+              )
+              .sort((left, right) => left.order - right.order)
+              .slice(0, maxImages)
+          : [];
 
       return {
         ok: true,

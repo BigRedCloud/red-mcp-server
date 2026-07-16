@@ -159,14 +159,17 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
             const imageLoadLimit = article.contentBlocks?.length
                 ? FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD
                 : maxImages;
+            const shouldLoadBinaryImages = includeImages &&
+                (imagePresentation === "inline" || imagePresentation === "both");
             const imageResult = await loadFreshdeskImageBlocks(article, imageContainer, {
-                includeImages,
+                includeImages: shouldLoadBinaryImages,
                 maxImages: imageLoadLimit,
                 maxImageBytes: HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES,
                 maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
             });
             logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
-            const rawScreenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, getNormalizedFreshdeskSyncedImages(article), imageResult.blocks);
+            const syncedImages = getNormalizedFreshdeskSyncedImages(article);
+            const rawScreenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, syncedImages);
             const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(rawScreenshotUrls, article.contentBlocks);
             const rawInstructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, enrichedScreenshotUrls, { question });
             const instructionBlocks = sanitizeInstructionBlocks(rawInstructionBlocks);
@@ -191,11 +194,15 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
             // Binary MCP image blocks only when presentation asks for them.
             const includeBinaryImages = includeImages &&
                 (imagePresentation === "inline" || imagePresentation === "both");
+            const selectedImageOrders = new Set(screenshotUrls
+                .map((screenshot) => screenshot.imageIndex)
+                .filter((value) => typeof value === "number"));
             const inlineImages = includeBinaryImages
                 ? imageResult.blocks
-                    .slice()
+                    .filter((block) => selectedImageOrders.size === 0 ||
+                    selectedImageOrders.has(block.order))
                     .sort((left, right) => left.order - right.order)
-                    .slice(0, Math.min(maxImages, selectedImageCount || maxImages))
+                    .slice(0, maxImages)
                 : [];
             return {
                 ok: true,

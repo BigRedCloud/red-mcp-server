@@ -598,3 +598,54 @@ test("customer docs do not attempt Azure image loading", async () => {
   const result = await getHelpResourceDetails("customer_docs:missing");
   assert.equal(result.ok, false);
 });
+
+test("links mode returns signed screenshot links without downloading blobs", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const index = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 1,
+    failureCount: 0,
+    articles: [freshdeskArticle()],
+    failures: [],
+  };
+
+  const indexContainer = {
+    getBlockBlobClient() {
+      return {
+        async exists() {
+          return true;
+        },
+        async download() {
+          return {
+            readableStreamBody: (async function* () {
+              yield Buffer.from(JSON.stringify(index), "utf8");
+            })(),
+          };
+        },
+      };
+    },
+  };
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: indexContainer as never,
+    freshdeskImageContainer: null,
+    includeImages: true,
+    imagePresentation: "links",
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.payload.imagePresentation, "links");
+    assert.equal(result.payload.imageAvailable, true);
+    assert.equal(result.payload.imageCount, 1);
+    assert.equal(result.payload.screenshotUrls?.length, 1);
+    assert.match(
+      result.payload.screenshotUrls?.[0]?.url ?? "",
+      /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\//,
+    );
+    assert.equal(result.images.length, 0);
+    assert.ok(result.payload.customerFacingScreenshotMarkdown);
+  }
+});

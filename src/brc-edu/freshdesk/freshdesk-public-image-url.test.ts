@@ -37,7 +37,6 @@ test("buildFreshdeskPublicImageUrl uses RED_PUBLIC_BASE_URL", () => {
 test("buildFreshdeskScreenshotUrls returns ordered customer-safe screenshot URLs", () => {
   process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "secret";
   process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
-
   const screenshotUrls = buildFreshdeskScreenshotUrls(
     ARTICLE_ID,
     [
@@ -49,14 +48,6 @@ test("buildFreshdeskScreenshotUrls returns ordered customer-safe screenshot URLs
         sha256: IMAGE_KEY,
       },
     ],
-    [
-      {
-        mimeType: "image/png",
-        data: Buffer.from("x").toString("base64"),
-        caption: "Screenshot 1: Add Customer screen",
-        order: 0,
-      },
-    ],
     { now: 1_700_000_000 },
   );
 
@@ -65,4 +56,30 @@ test("buildFreshdeskScreenshotUrls returns ordered customer-safe screenshot URLs
   assert.equal(screenshotUrls[0]?.mimeType, "image/png");
   assert.match(screenshotUrls[0]?.url ?? "", /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//);
   assert.equal(JSON.stringify(screenshotUrls).includes("freshdesk/1001"), false);
+});
+
+test("buildFreshdeskScreenshotUrls does not require downloaded image blocks", () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const screenshotUrls = buildFreshdeskScreenshotUrls(
+    ARTICLE_ID,
+    [
+      {
+        blobName: "freshdesk/1001/a.png",
+        mimeType: "image/png",
+        order: 0,
+        altText: "Changing a customer: Click Change",
+        sha256: IMAGE_KEY,
+      },
+    ],
+    { now: 1_700_000_000 },
+  );
+
+  assert.equal(screenshotUrls.length, 1);
+  assert.equal(
+    screenshotUrls[0]?.caption,
+    "Changing a customer: Click Change",
+  );
+  assert.equal(screenshotUrls[0]?.imageIndex, 0);
 });
