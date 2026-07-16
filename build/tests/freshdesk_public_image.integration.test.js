@@ -99,11 +99,13 @@ test("HEAD public Freshdesk image route is available without company credentials
     assert.equal(response.status, 404);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 });
-test("help resource details tool guidance prefers instructionBlocks and prohibits Show Image", () => {
+test("help resource details tool guidance prefers Markdown links and prohibits Show Image", () => {
     assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /instructionBlocks/i);
+    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /customerFacingScreenshotMarkdown/i);
+    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /imagePresentation='links'/i);
     assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /Never label screenshot links Show Image/i);
-    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /Place each screenshot link immediately after the step/i);
-    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /MCP image content blocks are a fallback/i);
+    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /exact signed Markdown links/i);
+    assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /Do not merely describe the screenshots/i);
     assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /bigredcloud\.freshdesk\.com/i);
     assert.doesNotMatch(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /View screenshot/i);
 });

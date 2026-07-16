@@ -3,6 +3,8 @@ import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } 
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
 import { buildFreshdeskScreenshotUrls, toCustomerFacingScreenshotUrl, } from "../freshdesk/freshdesk-public-image-url.js";
 import { buildFreshdeskInstructionBlocks, enrichScreenshotUrlCaptions, } from "../freshdesk/instruction-blocks.js";
+import { buildCustomerFacingInstructionMarkdown, buildCustomerFacingScreenshotMarkdown, buildScreenshotLinksMarkdown, buildScreenshotMarkdownTextBlock, resolveHelpImagePresentation, } from "../freshdesk/screenshot-markdown.js";
+import { isRejectedFreshdeskCaption } from "../freshdesk/screenshot-caption.js";
 import { buildFreshdeskImageLoadDiagnostics, getNormalizedFreshdeskSyncedImages, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
 import { createConfiguredFreshdeskImageContainer, isFreshdeskImageContainerConfigured, } from "../freshdesk/image-sync.js";
 import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming-webinar-index-store.js";
@@ -13,12 +15,24 @@ import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUID
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
 export const HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
+export const FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE = [
+    "Copy the exact Markdown links from customerFacingScreenshotMarkdown or customerFacingInstructionMarkdown into the final customer-facing answer.",
+    "Place each link after the related step.",
+    "Do not merely describe the screenshots.",
+    "Do not say Here are the screenshots without including the links.",
+    "Do not replace links with Screenshot 1, Tool result, Show Image, or generic text.",
+    "Do not depend on tool-result image previews being visible to the user.",
+    "The final answer must contain the exact signed Markdown links.",
+    "If no links are returned, clearly say that no matching screenshot was found.",
+    "Never omit valid returned screenshot links after telling the user screenshots are available.",
+].join(" ");
 export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
+    "When customerFacingInstructionMarkdown is returned, prefer copying that Markdown into the answer, preserving every screenshot link exactly.",
     "When instructionBlocks are returned, follow them in order.",
     "Place each screenshot link immediately after the step it illustrates.",
     "Use the exact supplied caption as the clickable Markdown link text, for example [Changing a customer: Click Change](EXACT_SIGNED_IMAGE_URL).",
     "Never replace the caption with Show Image, View Image, Screenshot, or any other generic label.",
-    "Do not group screenshots into a separate Relevant screenshots section.",
+    "Do not group screenshots into a separate Relevant screenshots section when step-and-link Markdown is available.",
     "Omit screenshots from unused workflow branches.",
     "Omit unclear screenshots rather than guessing.",
     "Do not repeat a screenshot.",
@@ -26,9 +40,10 @@ export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
     "Do not say screenshots are displayed inline unless the chat client actually rendered them.",
     "Keep the official Freshdesk article link in the Helpful resources section.",
     "Use the exact supplied signed public URL — do not rewrite, shorten, or replace it.",
+    FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE,
 ].join(" ");
 export const FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE = [
-    "When instructionBlocks are not available, use screenshotUrls with their descriptive captions.",
+    "When instructionBlocks are not available, use customerFacingScreenshotMarkdown or screenshotUrls with their descriptive captions.",
     "Place each screenshot after the most relevant paragraph where possible.",
     "Use the exact supplied caption as the clickable Markdown link text.",
     "Never label screenshot links Show Image.",
@@ -36,7 +51,8 @@ export const FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE = [
     "Omit unclear screenshots rather than guessing.",
     "Do not claim screenshots are shown inline unless the client actually rendered them.",
     "MCP image content blocks are a fallback only.",
-    "Do not claim screenshots were supplied when imageCount is 0.",
+    "Do not claim screenshots were supplied when imageCount is 0 or when no Markdown links are returned.",
+    FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE,
 ].join(" ");
 async function findFreshdeskArticleById(freshdeskArticleId, container) {
     if (!container) {
@@ -69,7 +85,7 @@ async function findRecordedWebinarById(resourceId) {
     }
     return null;
 }
-function buildDetailsGuidance(hasInstructionBlocks) {
+function buildDetailsGuidance(hasInstructionBlocks, hasScreenshotLinks) {
     return {
         supportFooter: SUPPORT_FOOTER_GUIDANCE,
         freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
@@ -78,6 +94,9 @@ function buildDetailsGuidance(hasInstructionBlocks) {
             : FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE,
         ...(hasInstructionBlocks
             ? { instructionBlocks: FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE }
+            : {}),
+        ...(hasScreenshotLinks
+            ? { screenshotMarkdown: FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE }
             : {}),
         doNotExpose: [
             "resource IDs in customer-facing text",
@@ -96,6 +115,23 @@ function buildDetailsGuidance(hasInstructionBlocks) {
         ],
     };
 }
+function sanitizeScreenshotUrls(screenshots) {
+    return screenshots
+        .map(toCustomerFacingScreenshotUrl)
+        .filter((screenshot) => Boolean(screenshot.url) &&
+        Boolean(screenshot.caption) &&
+        !isRejectedFreshdeskCaption(screenshot.caption));
+}
+function sanitizeInstructionBlocks(blocks) {
+    return blocks.filter((block) => {
+        if (block.type === "text") {
+            return Boolean(block.text.trim());
+        }
+        return (Boolean(block.url) &&
+            Boolean(block.caption) &&
+            !isRejectedFreshdeskCaption(block.caption));
+    });
+}
 export async function getHelpResourceDetails(resourceId, options = {}) {
     const parsed = parseHelpResourceId(resourceId);
     if (!parsed) {
@@ -110,6 +146,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
     const includeImages = options.includeImages ?? true;
     const maxImages = Math.min(options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD);
     const question = options.question?.trim() || null;
+    const imagePresentation = resolveHelpImagePresentation(options.imagePresentation);
     try {
         if (parsed.source === "freshdesk") {
             const article = await findFreshdeskArticleById(parsed.id, freshdeskIndexContainer);
@@ -131,25 +168,35 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
             logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
             const rawScreenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, getNormalizedFreshdeskSyncedImages(article), imageResult.blocks);
             const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(rawScreenshotUrls, article.contentBlocks);
-            const instructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, enrichedScreenshotUrls, { question });
+            const rawInstructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, enrichedScreenshotUrls, { question });
+            const instructionBlocks = sanitizeInstructionBlocks(rawInstructionBlocks);
             const hasInstructionBlocks = instructionBlocks.length > 0;
             // Prefer screenshots that support the selected answer path. Fall back to
             // the full enriched list for legacy articles without instruction blocks.
-            const screenshotUrls = hasInstructionBlocks
+            const screenshotUrls = sanitizeScreenshotUrls(hasInstructionBlocks
                 ? instructionBlocks
                     .filter((block) => block.type === "screenshot")
-                    .map((block) => toCustomerFacingScreenshotUrl({
+                    .map((block) => ({
                     caption: block.caption,
                     url: block.url,
                     mimeType: block.mimeType,
                 }))
-                : enrichedScreenshotUrls.map(toCustomerFacingScreenshotUrl);
-            // Cap MCP inline image blocks to the requested maxImages while keeping
-            // full signed URL candidates available for instructionBlocks.
-            const inlineImages = imageResult.blocks
-                .slice()
-                .sort((left, right) => left.order - right.order)
-                .slice(0, maxImages);
+                : enrichedScreenshotUrls);
+            const screenshotLinksMarkdown = buildScreenshotLinksMarkdown(screenshotUrls);
+            const customerFacingScreenshotMarkdown = buildCustomerFacingScreenshotMarkdown(screenshotUrls);
+            const customerFacingInstructionMarkdown = buildCustomerFacingInstructionMarkdown(hasInstructionBlocks ? instructionBlocks : undefined);
+            const hasScreenshotLinks = screenshotLinksMarkdown.length > 0;
+            // imageCount must match selected customer-facing screenshots, not raw loads.
+            const selectedImageCount = screenshotUrls.length;
+            // Binary MCP image blocks only when presentation asks for them.
+            const includeBinaryImages = includeImages &&
+                (imagePresentation === "inline" || imagePresentation === "both");
+            const inlineImages = includeBinaryImages
+                ? imageResult.blocks
+                    .slice()
+                    .sort((left, right) => left.order - right.order)
+                    .slice(0, Math.min(maxImages, selectedImageCount || maxImages))
+                : [];
             return {
                 ok: true,
                 payload: {
@@ -161,14 +208,26 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     publicUrl: getSyncedFreshdeskArticlePublicUrl(article),
                     category: normalized.category,
                     topics: normalized.topics,
-                    imageAvailable: freshdeskArticleImageAvailable(article),
-                    imageCount: inlineImages.length,
+                    imageAvailable: hasScreenshotLinks
+                        ? true
+                        : freshdeskArticleImageAvailable(article) && selectedImageCount > 0,
+                    imageCount: selectedImageCount,
                     requestedImageCount: imageResult.requestedImageCount,
                     skippedImageCount: imageResult.skippedImageCount,
                     imageWarning: imageResult.storageWarning,
+                    imagePresentation,
                     ...(hasInstructionBlocks ? { instructionBlocks } : {}),
                     ...(screenshotUrls.length > 0 ? { screenshotUrls } : {}),
-                    responseGuidance: buildDetailsGuidance(hasInstructionBlocks),
+                    ...(screenshotLinksMarkdown.length > 0
+                        ? { screenshotLinksMarkdown }
+                        : {}),
+                    ...(customerFacingScreenshotMarkdown
+                        ? { customerFacingScreenshotMarkdown }
+                        : {}),
+                    ...(customerFacingInstructionMarkdown
+                        ? { customerFacingInstructionMarkdown }
+                        : {}),
+                    responseGuidance: buildDetailsGuidance(hasInstructionBlocks, hasScreenshotLinks),
                 },
                 images: inlineImages,
             };
@@ -190,7 +249,8 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     category: resource.category,
                     topics: resource.topics,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(false),
+                    imagePresentation,
+                    responseGuidance: buildDetailsGuidance(false, false),
                 },
                 images: [],
             };
@@ -212,7 +272,8 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     category: resource.category,
                     topics: resource.topics,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(false),
+                    imagePresentation,
+                    responseGuidance: buildDetailsGuidance(false, false),
                 },
                 images: [],
             };
@@ -236,7 +297,8 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     topics: resource.topics,
                     eventDay: resource.eventDay,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(false),
+                    imagePresentation,
+                    responseGuidance: buildDetailsGuidance(false, false),
                 },
                 images: [],
             };
@@ -252,22 +314,33 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
 }
 export function helpResourceDetailResponse(payload, images) {
     const sortedImages = [...images].sort((left, right) => left.order - right.order);
-    return {
-        content: [
-            {
-                type: "text",
-                text: JSON.stringify(payload, null, 2),
-            },
-            ...sortedImages.flatMap((image) => [
-                ...(image.caption
-                    ? [{ type: "text", text: image.caption }]
-                    : []),
-                {
-                    type: "image",
-                    data: image.data,
-                    mimeType: image.mimeType,
-                },
-            ]),
-        ],
-    };
+    const markdownText = buildScreenshotMarkdownTextBlock({
+        instructionMarkdown: payload.customerFacingInstructionMarkdown,
+        screenshotMarkdown: payload.customerFacingScreenshotMarkdown,
+    });
+    const content = [
+        {
+            type: "text",
+            text: JSON.stringify(payload, null, 2),
+        },
+    ];
+    // Put ready-to-use Markdown before any binary image blocks so links are the
+    // primary customer-facing signal.
+    if (markdownText) {
+        content.push({
+            type: "text",
+            text: markdownText,
+        });
+    }
+    for (const image of sortedImages) {
+        if (image.caption) {
+            content.push({ type: "text", text: image.caption });
+        }
+        content.push({
+            type: "image",
+            data: image.data,
+            mimeType: image.mimeType,
+        });
+    }
+    return { content };
 }

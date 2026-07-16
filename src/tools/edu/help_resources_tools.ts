@@ -28,14 +28,22 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
 
 export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Load full help-resource details for a resourceId returned by brc_find_help_resources.",
-  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, preferred instructionBlocks (ordered text and screenshot steps), screenshotUrls for backward compatibility, and mirrored screenshots as MCP image content when available.",
+  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, preferred instructionBlocks, ready-to-use customerFacingScreenshotMarkdown / customerFacingInstructionMarkdown, screenshotUrls for backward compatibility, and optional MCP image content.",
+  "When includeImages is true, use imagePresentation='links' unless the user explicitly asks for inline image content.",
+  "Copy the exact Markdown links returned in customerFacingScreenshotMarkdown or customerFacingInstructionMarkdown into the final answer.",
+  "Place each link after its related step.",
+  "Never omit valid returned screenshot links after telling the user screenshots are available.",
+  "Do not merely describe the screenshots. Do not say Here are the screenshots without including the links.",
+  "Do not replace links with Screenshot 1, Tool result, Show Image, or generic text.",
+  "Do not depend on tool-result image previews being visible to the user — the final answer must contain the exact signed Markdown links.",
+  "If no links are returned, clearly say that no matching screenshot was found.",
   "Pass the customer question when available so Freshdesk screenshots are selected from the matching workflow branch (for example existing customer versus add customer).",
-  "Prefer instructionBlocks when present: follow them in order, place each screenshot link immediately after the step it illustrates, and use the exact supplied caption as the clickable Markdown link text, for example [Changing a customer: Open O/Balance](EXACT_SIGNED_IMAGE_URL).",
+  "Prefer instructionBlocks / customerFacingInstructionMarkdown when present: follow them in order and keep every screenshot Markdown link exact.",
   "Never label screenshot links Show Image. Do not invent captions.",
-  "Do not group screenshots under a Relevant screenshots section when instructionBlocks are available.",
+  "Do not group screenshots under a Relevant screenshots section when step-and-link Markdown is available.",
   "Omit screenshots from unused workflow branches. Omit unclear screenshots rather than guessing. Do not repeat a screenshot.",
-  "When instructionBlocks are absent, use screenshotUrls with their descriptive captions and place each after the most relevant paragraph where possible.",
-  "Do not rewrite or alter supplied screenshot URLs. Do not say screenshots are displayed inline unless the chat client actually rendered them.",
+  "When instructionBlocks are absent, use customerFacingScreenshotMarkdown or screenshotUrls with their descriptive captions and place each after the most relevant paragraph where possible.",
+  "Do not rewrite or alter supplied screenshot URLs.",
   "Use only the publicUrl returned by this tool for Freshdesk links.",
   "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
   "Customer documentation returns cleaned article text and the public docs URL.",
@@ -43,7 +51,7 @@ export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Upcoming webinars return title, weekday, description, topics, registration URL, and webinar-series page URL.",
   "Read-only. Does not require a connected company.",
   "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps.",
-  "MCP image content blocks are a fallback only. Do not claim screenshots were supplied when imageCount is 0.",
+  "MCP image content blocks are optional compatibility content when imagePresentation is inline or both. Do not claim screenshots were supplied when imageCount is 0 or when no Markdown links are returned.",
   "Do not expose Azure blob names, storage URLs, private Freshdesk image URLs, image hashes, or sync metadata in customer-facing text.",
 ].join(" ");
 
@@ -122,7 +130,7 @@ export function registerHelpResourcesTools(server: ServerType): void {
         .boolean()
         .optional()
         .describe(
-          "When true, Freshdesk articles may include mirrored screenshot image content. Defaults to true.",
+          "When true, Freshdesk articles may include screenshot presentation. Defaults to true.",
         ),
       maxImages: z
         .number()
@@ -140,12 +148,25 @@ export function registerHelpResourcesTools(server: ServerType): void {
         .describe(
           "Optional customer question used to select the matching Freshdesk workflow screenshots, for example an existing-customer opening balance question versus adding a new customer.",
         ),
+      imagePresentation: z
+        .enum(["links", "inline", "both"])
+        .optional()
+        .describe(
+          "How to present Freshdesk screenshots. Defaults to links (signed Markdown links only). Use inline for MCP image blocks, or both for Markdown plus image blocks.",
+        ),
     },
-    async ({ resourceId, includeImages, maxImages, question }) => {
+    async ({
+      resourceId,
+      includeImages,
+      maxImages,
+      question,
+      imagePresentation,
+    }) => {
       const result = await getHelpResourceDetails(resourceId, {
         includeImages: includeImages ?? true,
         maxImages,
         question,
+        imagePresentation,
       });
       if (!result.ok) {
         return jsonResponse({ error: result.error });

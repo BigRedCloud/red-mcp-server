@@ -35,7 +35,7 @@ function freshdeskArticle(): SyncedFreshdeskArticle {
   };
 }
 
-test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", async () => {
+test("getHelpResourceDetails defaults to links presentation without binary images", async () => {
   process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
   process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
 
@@ -89,6 +89,7 @@ test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", a
 
   assert.equal(result.ok, true);
   if (result.ok) {
+    assert.equal(result.payload.imagePresentation, "links");
     assert.equal(result.payload.imageAvailable, true);
     assert.equal(result.payload.imageCount, 1);
     assert.equal(result.payload.screenshotUrls?.length, 1);
@@ -97,13 +98,20 @@ test("getHelpResourceDetails returns Freshdesk image blocks when blobs exist", a
       result.payload.screenshotUrls?.[0]?.url ?? "",
       /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
     );
+    assert.equal(result.payload.screenshotLinksMarkdown?.length, 1);
+    assert.match(
+      result.payload.screenshotLinksMarkdown?.[0] ?? "",
+      /^\[Cash book screen\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
+    );
+    assert.ok(result.payload.customerFacingScreenshotMarkdown?.includes("Cash book screen"));
+    assert.equal(result.images.length, 0);
     assert.match(
       result.payload.responseGuidance.images ?? "",
       /Never label screenshot links Show Image/i,
     );
     assert.match(
       result.payload.responseGuidance.images ?? "",
-      /Place each screenshot after the most relevant paragraph/i,
+      /exact signed Markdown links/i,
     );
     assert.equal(result.payload.instructionBlocks, undefined);
     assert.equal(
@@ -203,13 +211,22 @@ test("getHelpResourceDetails returns ordered instructionBlocks with safe caption
       screenshot.url,
       /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
     );
+    assert.equal(result.payload.imagePresentation, "links");
+    assert.equal(result.images.length, 0);
+    assert.ok(result.payload.customerFacingInstructionMarkdown);
+    assert.match(
+      result.payload.customerFacingInstructionMarkdown ?? "",
+      /\[Adding a customer: Click Add\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
+    );
+    assert.equal(result.payload.screenshotLinksMarkdown?.length, 1);
+    assert.equal(result.payload.imageCount, 1);
     assert.match(
       result.payload.responseGuidance.images ?? "",
       /Never replace the caption with Show Image/i,
     );
     assert.match(
       result.payload.responseGuidance.images ?? "",
-      /Place each screenshot link immediately after the step/i,
+      /exact signed Markdown links/i,
     );
     assert.match(
       result.payload.responseGuidance.images ?? "",
@@ -382,6 +399,12 @@ test("getHelpResourceDetails selects existing-customer screenshots from question
       (block) => block.type === "screenshot",
     );
     assert.ok(screenshots && screenshots.length === 4);
+    assert.equal(result.payload.imageCount, 4);
+    assert.equal(result.payload.screenshotUrls?.length, 4);
+    assert.equal(result.payload.screenshotLinksMarkdown?.length, 4);
+    assert.equal(result.images.length, 0);
+    assert.ok(result.payload.customerFacingScreenshotMarkdown);
+    assert.ok(result.payload.customerFacingInstructionMarkdown);
     assert.equal(
       screenshots?.some((block) => /Click Add/i.test(block.caption)),
       false,
@@ -399,21 +422,36 @@ test("getHelpResourceDetails selects existing-customer screenshots from question
       screenshots?.some((block) => /Save changes/i.test(block.caption)),
     );
     assert.equal(
+      /Email Preferences/i.test(result.payload.customerFacingScreenshotMarkdown ?? ""),
+      false,
+    );
+    assert.equal(
       screenshots?.some(
         (block) =>
           block.type === "screenshot" && /show image/i.test(block.caption),
       ),
       false,
     );
+
+    const linkUrls = result.payload.screenshotLinksMarkdown?.map((link) => {
+      const match = link.match(/\((https:[^)]+)\)/);
+      return match?.[1];
+    });
+    const screenshotUrls = result.payload.screenshotUrls?.map((item) => item.url);
+    assert.deepEqual(linkUrls, screenshotUrls);
     assert.equal(
       JSON.stringify(result.payload.instructionBlocks).includes("sourceUrl"),
       false,
     );
     assert.equal(JSON.stringify(result.payload).includes("cdn.freshdesk.com"), false);
+    assert.equal(
+      result.payload.customerFacingInstructionMarkdown?.includes("blob.core.windows.net"),
+      false,
+    );
   }
 });
 
-test("helpResourceDetailResponse includes MCP image blocks and caption text", () => {
+test("helpResourceDetailResponse emits Markdown text before optional binary images", () => {
   const response = helpResourceDetailResponse(
     {
       resourceId: "freshdesk:1001",
@@ -425,6 +463,11 @@ test("helpResourceDetailResponse includes MCP image blocks and caption text", ()
       category: "Help",
       topics: ["Help"],
       imageCount: 1,
+      imagePresentation: "both",
+      customerFacingScreenshotMarkdown:
+        "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
+      customerFacingInstructionMarkdown:
+        "1. Click Change.\n\n   [Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
       responseGuidance: {
         supportFooter: "footer",
         doNotExpose: [],
@@ -434,16 +477,113 @@ test("helpResourceDetailResponse includes MCP image blocks and caption text", ()
       {
         mimeType: "image/png",
         data: Buffer.from("x").toString("base64"),
-        caption: "Screenshot 1: Cash book screen",
+        caption: "Changing a customer: Click Change",
         order: 0,
       },
     ],
   );
 
-  assert.equal(response.content.length, 3);
   assert.equal(response.content[0]?.type, "text");
   assert.equal(response.content[1]?.type, "text");
-  assert.equal(response.content[2]?.type, "image");
+  assert.match(
+    String((response.content[1] as { text?: string }).text),
+    /Include the following exact Markdown links/,
+  );
+  assert.match(
+    String((response.content[1] as { text?: string }).text),
+    /\[Changing a customer: Click Change\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\/token\)/,
+  );
+  assert.equal(response.content[2]?.type, "text");
+  assert.equal(response.content[3]?.type, "image");
+});
+
+test("helpResourceDetailResponse links mode has Markdown without binary images", () => {
+  const response = helpResourceDetailResponse(
+    {
+      resourceId: "freshdesk:1001",
+      source: "freshdesk",
+      title: "Test",
+      summary: "Summary",
+      instructions: "Instructions",
+      publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-test",
+      category: "Help",
+      topics: ["Help"],
+      imageCount: 1,
+      imagePresentation: "links",
+      customerFacingScreenshotMarkdown:
+        "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
+      responseGuidance: {
+        supportFooter: "footer",
+        doNotExpose: [],
+      },
+    },
+    [],
+  );
+
+  assert.equal(response.content.length, 2);
+  assert.equal(response.content.every((block) => block.type === "text"), true);
+  assert.equal(response.content.some((block) => block.type === "image"), false);
+});
+
+test("inline presentation returns binary image blocks", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const png = Buffer.from("fake-image-bytes");
+  const index = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 1,
+    failureCount: 0,
+    articles: [freshdeskArticle()],
+    failures: [],
+  };
+
+  const indexContainer = {
+    getBlockBlobClient() {
+      return {
+        async exists() {
+          return true;
+        },
+        async download() {
+          return {
+            readableStreamBody: (async function* () {
+              yield Buffer.from(JSON.stringify(index), "utf8");
+            })(),
+          };
+        },
+      };
+    },
+  };
+
+  const imageContainer = {
+    getBlockBlobClient(blobName: string) {
+      return {
+        async exists() {
+          return blobName === "freshdesk/1001/a.png";
+        },
+        async download() {
+          return {
+            readableStreamBody: (async function* () {
+              yield png;
+            })(),
+          };
+        },
+      };
+    },
+  };
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: indexContainer as never,
+    freshdeskImageContainer: imageContainer as never,
+    imagePresentation: "inline",
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.payload.imagePresentation, "inline");
+    assert.equal(result.images.length, 1);
+    assert.ok(result.payload.screenshotLinksMarkdown?.length);
+  }
 });
 
 test("getHelpResourceDetails rejects invalid resource IDs safely", async () => {

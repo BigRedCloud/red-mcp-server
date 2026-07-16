@@ -10,7 +10,10 @@ export const FRESHDESK_SCREENSHOT_CAPTION_FALLBACK =
   "Freshdesk instruction screenshot";
 
 const GENERIC_ALT_PATTERN =
-  /^(image|images|img|screenshot|screenshots|photo|picture|graphic|diagram|untitled|show image|view image|open image|a screenshot of a computer|screenshot\s*\d+|image\s*\d+|relevant article section|relevant screenshot|freshdesk screenshot)$/i;
+  /^(image|images|img|screenshot|screenshots|photo|picture|graphic|diagram|untitled|show image|view image|open image|a screenshot of a computer|a screenshot of an account|ai-generated content may be incorrect|screenshot\s*\d+|image\s*\d+|relevant article section|relevant screenshot|freshdesk screenshot|freshdesk instruction screenshot)$/i;
+
+const REJECTED_CAPTION_PATTERN =
+  /^(image|images|img|screenshot|screenshots|photo|picture|graphic|diagram|untitled|show image|view image|open image|a screenshot of a computer|a screenshot of an account|ai-generated content may be incorrect|screenshot\s*\d+|image\s*\d+|relevant article section|relevant screenshot|freshdesk screenshot|freshdesk instruction screenshot)$/i;
 
 const INSTRUCTION_PREFIX_PATTERN =
   /^(please\s+)?(then\s+)?(next[,:]?\s+)?(now[,:]?\s+)?/i;
@@ -34,6 +37,30 @@ export function isGenericFreshdeskAltText(
   }
 
   return GENERIC_ALT_PATTERN.test(cleaned);
+}
+
+/** Captions that must never appear in customer-facing Markdown links. */
+export function isRejectedFreshdeskCaption(
+  caption: string | null | undefined,
+): boolean {
+  const cleaned = stripHtmlEntitiesForCaption(caption ?? "");
+  if (!cleaned) {
+    return true;
+  }
+
+  if (REJECTED_CAPTION_PATTERN.test(cleaned)) {
+    return true;
+  }
+
+  if (/^screenshot\s*\d+$/i.test(cleaned)) {
+    return true;
+  }
+
+  if (/ai-generated content may be incorrect/i.test(cleaned)) {
+    return true;
+  }
+
+  return false;
 }
 
 function truncateCaption(value: string): string {
@@ -137,7 +164,15 @@ export function instructionTextToCaption(
     /\bemail\s+preferences\b/i.test(original) &&
     /\b(click|open)\b/i.test(original)
   ) {
-    return "Open Email Preferences";
+    // Only claim "Open Email Preferences" when the nearby text is specifically
+    // about opening that control — not when Change-screen context merely lists it.
+    if (
+      /\b(click|open)\s+email\s+preferences\b/i.test(original) ||
+      /\bemail\s+preferences\b.{0,40}\b(right-hand|button|link)\b/i.test(original)
+    ) {
+      return "Open Email Preferences";
+    }
+    return "Email Preferences button is shown";
   }
 
   if (
@@ -245,7 +280,11 @@ function actionFromNearbyActions(
         return "Open O/Balance";
       }
       if (label === "Email Preferences") {
-        return "Open Email Preferences";
+        // Prefer accurate wording: only "Open …" when preceding text is that action.
+        if (/\b(click|open)\s+email\s+preferences\b/i.test(preceding)) {
+          return "Open Email Preferences";
+        }
+        return "Email Preferences button is shown";
       }
       if (label === "Save") {
         return "Save changes";
@@ -262,7 +301,11 @@ function actionFromNearbyActions(
         return "Open O/Balance";
       }
       if (label === "Email Preferences") {
-        return "Open Email Preferences";
+        // Prefer accurate wording: only "Open …" when preceding text is that action.
+        if (/\b(click|open)\s+email\s+preferences\b/i.test(preceding)) {
+          return "Open Email Preferences";
+        }
+        return "Email Preferences button is shown";
       }
       if (label === "Save") {
         return "Save changes";
@@ -312,6 +355,9 @@ export function buildFreshdeskScreenshotCaption(
 
   // Prefer structured workflow:action captions over raw alt when we have a clear UI action.
   if (fromActions && workflowLabel) {
+    if (/email preferences button is shown/i.test(fromActions)) {
+      return formatWorkflowCaption("Customer settings", fromActions);
+    }
     return formatWorkflowCaption(workflowLabel, fromActions);
   }
 

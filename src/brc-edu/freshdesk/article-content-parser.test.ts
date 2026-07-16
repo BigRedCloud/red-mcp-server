@@ -560,6 +560,34 @@ test("extractNearbyActions finds O/Balance and ageing buckets", () => {
   assert.ok(actions.includes("1 Month"));
 });
 
+test("email preferences caption is accurate and O/Balance is not substituted", () => {
+  const openCaption = buildFreshdeskScreenshotCaption({
+    altText: "Show Image",
+    precedingText: "Click Email Preferences on the right-hand side.",
+    workflow: "email_preferences",
+    nearbyActions: ["Email Preferences"],
+  });
+  assert.match(openCaption, /Open Email Preferences/i);
+
+  const shownCaption = buildFreshdeskScreenshotCaption({
+    altText: "Change a Customer",
+    precedingText: "Open Customers and click Change.",
+    workflow: "existing_customer",
+    nearbyActions: ["Change", "Email Preferences"],
+  });
+  assert.match(shownCaption, /Email Preferences button is shown|Click Change/i);
+  assert.doesNotMatch(shownCaption, /^.*Open Email Preferences$/i);
+
+  const obalanceCaption = buildFreshdeskScreenshotCaption({
+    altText: "Show Image",
+    precedingText: "Click O/Balance.",
+    workflow: "existing_customer",
+    nearbyActions: ["O/Balance"],
+  });
+  assert.match(obalanceCaption, /Open O\/Balance/i);
+  assert.doesNotMatch(obalanceCaption, /Email Preferences/i);
+});
+
 test("legacy articles without contentBlocks still enrich captions safely", () => {
   const enriched = enrichScreenshotUrlCaptions(
     [
