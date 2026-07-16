@@ -156,3 +156,72 @@ test("bank reconciliation Freshdesk search returns exact canonical URL", () => {
     assert.equal(freshdesk?.publicUrl, BANK_RECON_CANONICAL_URL);
     assert.notEqual(freshdesk?.publicUrl, "https://bigredcloud.com/support/how-do-i-do-the-bank-reconciliation-bank-rec/");
 });
+test("add a customer ranks Add Customer ahead of Opening Balance", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2001",
+        freshdeskArticleId: 2001,
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+    };
+    const openingBalance = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2002",
+        freshdeskArticleId: 2002,
+        title: "How do I add a Customer Opening Balance?",
+        bodyText: "Enter the opening balance for an existing customer.",
+        syncedImages: [],
+    };
+    const results = searchUnifiedHelpResources("add a customer", {
+        freshdeskArticles: [openingBalance, addCustomer],
+    });
+    assert.equal(results[0]?.title, "How do I add a Customer?");
+    assert.ok((results.findIndex((result) => result.title.includes("Opening Balance")) ===
+        -1) ||
+        results[0]?.title === "How do I add a Customer?");
+});
+test("customer opening balance ranks Opening Balance article first", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2001",
+        freshdeskArticleId: 2001,
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+    };
+    const openingBalance = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2002",
+        freshdeskArticleId: 2002,
+        title: "How do I add a Customer Opening Balance?",
+        bodyText: "Enter the opening balance for an existing customer.",
+        syncedImages: [],
+    };
+    const results = searchUnifiedHelpResources("customer opening balance", {
+        freshdeskArticles: [addCustomer, openingBalance],
+    });
+    assert.equal(results[0]?.title, "How do I add a Customer Opening Balance?");
+});
+test("add my first customer still prefers Add Customer over Opening Balance", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2001",
+        freshdeskArticleId: 2001,
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+    };
+    const openingBalance = {
+        ...freshdeskArticle(),
+        id: "freshdesk-2002",
+        freshdeskArticleId: 2002,
+        title: "How do I add a Customer Opening Balance?",
+        bodyText: "Enter the opening balance for an existing customer.",
+        syncedImages: [],
+    };
+    const results = searchUnifiedHelpResources("How do I add my first customer?", {
+        freshdeskArticles: [openingBalance, addCustomer],
+    });
+    assert.equal(results[0]?.title, "How do I add a Customer?");
+});

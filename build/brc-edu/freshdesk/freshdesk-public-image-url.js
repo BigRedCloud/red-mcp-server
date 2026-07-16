@@ -1,8 +1,9 @@
 import { getCustomerFacingScreenshotBaseUrl } from "../../config/red_public_base_url.js";
 import { createFreshdeskPublicImageToken, isFreshdeskPublicImageSigningConfigured, resolveFreshdeskImageKey, } from "./freshdesk-public-image-token.js";
+import { buildFreshdeskScreenshotCaption, FRESHDESK_SCREENSHOT_CAPTION_FALLBACK, } from "./screenshot-caption.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX = "/public/brc-edu/freshdesk-images";
 function buildScreenshotCaption(altText) {
-    return altText?.trim() || "Freshdesk screenshot";
+    return buildFreshdeskScreenshotCaption({ altText }) || FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
 }
 export function buildFreshdeskPublicImagePath(articleId, imageToken) {
     return `${FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(String(articleId))}/${encodeURIComponent(imageToken)}`;

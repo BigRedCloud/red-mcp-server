@@ -1,5 +1,12 @@
 import { readFreshdeskArticleUrlFields, resolveFreshdeskArticlePublicUrl, resolveFreshdeskArticleSlug, } from "./freshdesk-article-url.js";
+import { parseFreshdeskArticleContent } from "./article-content-parser.js";
 import { extractFreshdeskImages } from "./image-extractor.js";
+function normalizeBodyText(value) {
+    return value
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
 export function normalizeFreshdeskArticle(article, folderName) {
     const title = article.title.trim();
     const { apiUrl, apiPath, apiSlug } = readFreshdeskArticleUrlFields(article);
@@ -14,6 +21,12 @@ export function normalizeFreshdeskArticle(article, folderName) {
         apiSlug,
         title,
     });
+    const parsed = parseFreshdeskArticleContent(article.description);
+    const bodyText = normalizeBodyText(article.description_text) || parsed.bodyTextFromHtml;
+    // Prefer ordered parser images; fall back to legacy extractor if HTML had none.
+    const images = parsed.images.length > 0
+        ? parsed.images
+        : extractFreshdeskImages(article.description);
     return {
         id: `freshdesk-${article.id}`,
         source: "freshdesk",
@@ -22,11 +35,9 @@ export function normalizeFreshdeskArticle(article, folderName) {
         folderId: article.folder_id,
         folderName,
         title,
-        bodyText: article.description_text
-            .replace(/\u00a0/g, " ")
-            .replace(/\s+/g, " ")
-            .trim(),
-        images: extractFreshdeskImages(article.description),
+        bodyText,
+        images,
+        contentBlocks: parsed.contentBlocks,
         updatedAt: article.updated_at,
         enabled: article.status === 2,
         slug,

@@ -54,6 +54,20 @@ test("normalizeFreshdeskArticle includes extracted image references", () => {
     assert.equal(normalized.images[0]?.sourceUrl, "https://cdn.freshdesk.com/a.png");
     assert.equal(normalized.images[0]?.altText, "Duplicate");
 });
+test("normalizeFreshdeskArticle preserves ordered content blocks", () => {
+    const normalized = normalizeFreshdeskArticle(createArticle({
+        description: "<p>Click Customers, then click Add.</p>" +
+            '<img src="https://cdn.freshdesk.com/a.png" alt="image" />' +
+            "<p>Enter the customer details.</p>",
+    }), "Help");
+    assert.ok(normalized.contentBlocks);
+    assert.equal(normalized.contentBlocks?.[0]?.type, "text");
+    assert.equal(normalized.contentBlocks?.[1]?.type, "image");
+    assert.equal(normalized.contentBlocks?.[2]?.type, "text");
+    if (normalized.contentBlocks?.[1]?.type === "image") {
+        assert.equal(normalized.contentBlocks[1].precedingText, "Click Customers, then click Add.");
+    }
+});
 test("normalizeFreshdeskArticle preserves category, folder, article ID, folder name and updatedAt", () => {
     const article = createArticle({
         id: 77,

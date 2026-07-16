@@ -76,6 +76,82 @@ function scoreTextMatch(
   return score;
 }
 
+const OPENING_BALANCE_QUERY_PATTERN =
+  /\b(opening\s+balance|outstanding\s+balance|existing\s+balance|amount\s+already\s+owed)\b/i;
+
+const OPENING_BALANCE_TITLE_PATTERN = /\bopening\s+balance\b/i;
+
+const PROCEDURAL_PREFIX_PATTERN =
+  /^(how\s+do\s+i|how\s+to|how\s+can\s+i|how\s+do\s+you|how\s+does\s+one)\s+/i;
+
+function stripProceduralTitleNoise(value: string): string {
+  return normaliseHelpSearchText(value)
+    .replace(PROCEDURAL_PREFIX_PATTERN, "")
+    .replace(/\?+$/g, "")
+    .replace(/\b(my|a|an|the|first)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Freshdesk-only ranking adjustments for direct procedural queries.
+ * Prefer near-exact title matches and avoid boosting opening-balance articles
+ * unless the query mentions opening/outstanding/existing balance.
+ *
+ * Bonuses stay small so this does not reorder non-Freshdesk sources.
+ */
+export function adjustFreshdeskHelpScore(
+  question: string,
+  title: string,
+  baseScore: number,
+): number {
+  if (baseScore <= 0) {
+    return 0;
+  }
+
+  let score = baseScore;
+  const queryMentionsOpeningBalance = OPENING_BALANCE_QUERY_PATTERN.test(question);
+  const titleIsOpeningBalance = OPENING_BALANCE_TITLE_PATTERN.test(title);
+
+  if (titleIsOpeningBalance) {
+    if (queryMentionsOpeningBalance) {
+      score += 80;
+    } else {
+      score -= 220;
+    }
+  }
+
+  const queryCore = stripProceduralTitleNoise(question);
+  const titleCore = stripProceduralTitleNoise(title);
+
+  if (queryCore && titleCore) {
+    if (titleCore.startsWith(`${queryCore} `)) {
+      // Title adds extra topic words beyond the query core (e.g. opening balance).
+      const extra = titleCore.slice(queryCore.length).trim();
+      if (extra && !queryMentionsOpeningBalance) {
+        score -= Math.min(80, 20 + extra.split(/\s+/).length * 25);
+      }
+    } else if (queryCore !== titleCore) {
+      const queryTokens = queryCore.split(" ").filter((token) => token.length >= 2);
+      const titleTokens = titleCore.split(" ").filter((token) => token.length >= 2);
+      if (queryTokens.length > 0) {
+        const covered = queryTokens.filter((token) => titleCore.includes(token)).length;
+        const coverage = covered / queryTokens.length;
+        if (coverage >= 0.75) {
+          const extraTitleTokens = titleTokens.filter(
+            (token) => !queryTokens.includes(token),
+          ).length;
+          if (extraTitleTokens > 0 && !queryMentionsOpeningBalance) {
+            score -= extraTitleTokens * 35;
+          }
+        }
+      }
+    }
+  }
+
+  return Math.max(0, score);
+}
+
 function sourceBoost(
   source: HelpResourceSource,
   question: string,
@@ -301,14 +377,18 @@ export function searchUnifiedHelpResources(
       }
 
       const normalized = fromFreshdeskResource(article);
-      const score = sourceBoost(
-        "freshdesk",
+      const score = adjustFreshdeskHelpScore(
         question,
-        scoreTextMatch(question, questionTokens, [
-          normalized.title,
-          normalized.category,
-          normalized.bodyText,
-        ]),
+        normalized.title,
+        sourceBoost(
+          "freshdesk",
+          question,
+          scoreTextMatch(question, questionTokens, [
+            normalized.title,
+            normalized.category,
+            normalized.bodyText,
+          ]),
+        ),
       );
 
       if (score > 0) {

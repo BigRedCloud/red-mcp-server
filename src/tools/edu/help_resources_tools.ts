@@ -28,9 +28,12 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
 
 export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Load full help-resource details for a resourceId returned by brc_find_help_resources.",
-  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, ordered mirrored screenshots as MCP image content, and screenshotUrls with customer-safe public image links when available.",
-  "When screenshotUrls are returned, include each screenshot using Markdown image syntax where the chat client supports it, for example ![Add Customer screen](PUBLIC_IMAGE_URL). Otherwise provide descriptive links labelled View screenshot.",
-  "Do not rewrite or alter supplied screenshot URLs. Do not claim screenshots are shown above unless the client visibly rendered them or you included Markdown images or links.",
+  "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, preferred instructionBlocks (ordered text and screenshot steps), screenshotUrls for backward compatibility, and mirrored screenshots as MCP image content when available.",
+  "Prefer instructionBlocks when present: follow them in order, place each screenshot link immediately after the step it illustrates, and use the exact supplied caption as the clickable Markdown link text, for example [Customers list — click Add](EXACT_SCREENSHOT_URL).",
+  "Do not group screenshots under a Relevant screenshots section when instructionBlocks are available.",
+  "Never label screenshot links Show Image. Do not invent captions.",
+  "When instructionBlocks are absent, use screenshotUrls with their descriptive captions and place each after the most relevant paragraph where possible.",
+  "Do not rewrite or alter supplied screenshot URLs. Do not say screenshots are displayed inline unless the chat client actually rendered them.",
   "Use only the publicUrl returned by this tool for Freshdesk links.",
   "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
   "Customer documentation returns cleaned article text and the public docs URL.",
@@ -39,7 +42,7 @@ export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Read-only. Does not require a connected company.",
   "Call this tool when the user asks for screenshots, visuals, or detailed Freshdesk steps.",
   "MCP image content blocks are a fallback only. Do not claim screenshots were supplied when imageCount is 0.",
-  "Do not expose Azure blob names, storage URLs, private Freshdesk image URLs, or sync metadata in customer-facing text.",
+  "Do not expose Azure blob names, storage URLs, private Freshdesk image URLs, image hashes, or sync metadata in customer-facing text.",
 ].join(" ");
 
 export function registerHelpResourcesTools(server: ServerType): void {

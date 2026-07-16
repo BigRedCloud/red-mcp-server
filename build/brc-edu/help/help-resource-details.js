@@ -2,6 +2,7 @@ import { loadCustomerDocsForHelpSearch } from "../customer-docs/customer-docs-in
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "../freshdesk/freshdesk-index-store.js";
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
 import { buildFreshdeskScreenshotUrls, } from "../freshdesk/freshdesk-public-image-url.js";
+import { buildFreshdeskInstructionBlocks, enrichScreenshotUrlCaptions, } from "../freshdesk/instruction-blocks.js";
 import { buildFreshdeskImageLoadDiagnostics, getNormalizedFreshdeskSyncedImages, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD, freshdeskArticleImageAvailable, loadFreshdeskImageBlocks, logFreshdeskImageLoadDiagnostics, } from "../freshdesk/freshdesk-image-load.js";
 import { createConfiguredFreshdeskImageContainer, isFreshdeskImageContainerConfigured, } from "../freshdesk/image-sync.js";
 import { loadUpcomingWebinarsForHelpSearch } from "../upcoming-webinars/upcoming-webinar-index-store.js";
@@ -12,6 +13,27 @@ import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUID
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
 export const HELP_RESOURCE_DETAILS_MAX_IMAGE_BYTES = 512 * 1024;
 export const HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES = 2 * 1024 * 1024;
+export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
+    "When instructionBlocks are returned, follow them in order.",
+    "Place each screenshot link immediately after the step or paragraph it illustrates.",
+    "Use the exact supplied caption as the clickable Markdown link text, for example [Customers list — click Add](EXACT_SCREENSHOT_URL).",
+    "Do not group all screenshots into one Relevant screenshots section when instructionBlocks are available.",
+    "Never label screenshot links Show Image.",
+    "Do not invent captions — use only the caption supplied on each screenshot block.",
+    "Do not say screenshots are displayed inline unless the chat client actually rendered them.",
+    "Keep the official Freshdesk article link in the Helpful resources section.",
+    "Use screenshot links only when they support the nearby instruction.",
+].join(" ");
+export const FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE = [
+    "When instructionBlocks are not available, use screenshotUrls with their descriptive captions.",
+    "Place each screenshot after the most relevant paragraph where possible.",
+    "Use the exact supplied caption as the clickable link text.",
+    "Never label screenshot links Show Image.",
+    "Do not invent captions.",
+    "Do not claim screenshots are shown inline unless the client actually rendered them.",
+    "MCP image content blocks are a fallback only.",
+    "Do not claim screenshots were supplied when imageCount is 0.",
+].join(" ");
 async function findFreshdeskArticleById(freshdeskArticleId, container) {
     if (!container) {
         return null;
@@ -43,11 +65,16 @@ async function findRecordedWebinarById(resourceId) {
     }
     return null;
 }
-function buildDetailsGuidance() {
+function buildDetailsGuidance(hasInstructionBlocks) {
     return {
         supportFooter: SUPPORT_FOOTER_GUIDANCE,
         freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
-        images: "When screenshotUrls are returned, present them in the same order as the article steps. Include each screenshot using Markdown image syntax where the chat client supports it, for example ![Add Customer screen](PUBLIC_IMAGE_URL). Otherwise provide descriptive links labelled View screenshot. Do not rewrite or alter the supplied image URL. MCP image content blocks are a fallback only — do not claim screenshots are shown above unless the client visibly rendered them or you included Markdown images or links. Prefer wording such as Relevant screenshots: followed by Markdown images or links. Do not claim screenshots were supplied when imageCount is 0.",
+        images: hasInstructionBlocks
+            ? FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE
+            : FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE,
+        ...(hasInstructionBlocks
+            ? { instructionBlocks: FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE }
+            : {}),
         doNotExpose: [
             "resource IDs in customer-facing text",
             "Azure blob names",
@@ -56,6 +83,9 @@ function buildDetailsGuidance() {
             "sync metadata",
             "invented Freshdesk article URLs",
             "internal image metadata",
+            "image hashes",
+            "relevance scores",
+            "internal content-block order keys",
         ],
     };
 }
@@ -86,7 +116,10 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                 maxTotalBytes: HELP_RESOURCE_DETAILS_MAX_TOTAL_IMAGE_BYTES,
             });
             logFreshdeskImageLoadDiagnostics(buildFreshdeskImageLoadDiagnostics(article, imageResult, isFreshdeskImageContainerConfigured()));
-            const screenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, getNormalizedFreshdeskSyncedImages(article), imageResult.blocks);
+            const rawScreenshotUrls = buildFreshdeskScreenshotUrls(article.freshdeskArticleId, getNormalizedFreshdeskSyncedImages(article), imageResult.blocks);
+            const screenshotUrls = enrichScreenshotUrlCaptions(rawScreenshotUrls, article.contentBlocks);
+            const instructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, screenshotUrls);
+            const hasInstructionBlocks = instructionBlocks.length > 0;
             return {
                 ok: true,
                 payload: {
@@ -103,8 +136,9 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     requestedImageCount: imageResult.requestedImageCount,
                     skippedImageCount: imageResult.skippedImageCount,
                     imageWarning: imageResult.storageWarning,
+                    ...(hasInstructionBlocks ? { instructionBlocks } : {}),
                     ...(screenshotUrls.length > 0 ? { screenshotUrls } : {}),
-                    responseGuidance: buildDetailsGuidance(),
+                    responseGuidance: buildDetailsGuidance(hasInstructionBlocks),
                 },
                 images: imageResult.blocks,
             };
@@ -126,7 +160,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     category: resource.category,
                     topics: resource.topics,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(),
+                    responseGuidance: buildDetailsGuidance(false),
                 },
                 images: [],
             };
@@ -148,7 +182,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     category: resource.category,
                     topics: resource.topics,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(),
+                    responseGuidance: buildDetailsGuidance(false),
                 },
                 images: [],
             };
@@ -172,7 +206,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                     topics: resource.topics,
                     eventDay: resource.eventDay,
                     imageCount: 0,
-                    responseGuidance: buildDetailsGuidance(),
+                    responseGuidance: buildDetailsGuidance(false),
                 },
                 images: [],
             };

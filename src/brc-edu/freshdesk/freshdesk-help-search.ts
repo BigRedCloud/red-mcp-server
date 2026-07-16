@@ -203,7 +203,7 @@ export function scoreFreshdeskHelpArticle(
     questionTokens.length > 0 &&
     questionTokens.every((token) => title.includes(token))
   ) {
-    return 600;
+    return adjustLegacyFreshdeskTitleScore(question, article.title, 600);
   }
 
   let score = 0;
@@ -222,7 +222,36 @@ export function scoreFreshdeskHelpArticle(
     }
   }
 
-  return score;
+  return adjustLegacyFreshdeskTitleScore(question, article.title, score);
+}
+
+const OPENING_BALANCE_QUERY_PATTERN =
+  /\b(opening\s+balance|outstanding\s+balance|existing\s+balance|amount\s+already\s+owed)\b/i;
+
+const OPENING_BALANCE_TITLE_PATTERN = /\bopening\s+balance\b/i;
+
+function adjustLegacyFreshdeskTitleScore(
+  question: string,
+  title: string,
+  baseScore: number,
+): number {
+  if (baseScore <= 0) {
+    return 0;
+  }
+
+  let score = baseScore;
+  const queryMentionsOpeningBalance = OPENING_BALANCE_QUERY_PATTERN.test(question);
+  const titleIsOpeningBalance = OPENING_BALANCE_TITLE_PATTERN.test(title);
+
+  if (titleIsOpeningBalance) {
+    if (queryMentionsOpeningBalance) {
+      score += 120;
+    } else {
+      score -= 220;
+    }
+  }
+
+  return Math.max(0, score);
 }
 
 export function findFreshdeskHelpArticles(

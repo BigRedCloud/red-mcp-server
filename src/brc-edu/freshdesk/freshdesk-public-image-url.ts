@@ -6,6 +6,10 @@ import {
   resolveFreshdeskImageKey,
 } from "./freshdesk-public-image-token.js";
 import type { FreshdeskSyncedImage } from "./freshdesk-image-metadata.js";
+import {
+  buildFreshdeskScreenshotCaption,
+  FRESHDESK_SCREENSHOT_CAPTION_FALLBACK,
+} from "./screenshot-caption.js";
 
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX =
   "/public/brc-edu/freshdesk-images";
@@ -17,7 +21,7 @@ export type FreshdeskScreenshotUrl = {
 };
 
 function buildScreenshotCaption(altText?: string): string {
-  return altText?.trim() || "Freshdesk screenshot";
+  return buildFreshdeskScreenshotCaption({ altText }) || FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
 }
 
 export function buildFreshdeskPublicImagePath(
