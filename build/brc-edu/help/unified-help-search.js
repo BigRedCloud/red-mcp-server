@@ -3,8 +3,11 @@ import { normaliseHelpSearchText, tokenizeHelpSearchQuestion, } from "../freshde
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 import { isPublicHttpsUrl } from "./help-resource-types.js";
+import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSourcesMarkdownTextBlock, helpSearchResultsToSourceInputs, } from "./help-answer-sources.js";
+import { SUPPORT_CONTACT_URL, SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMarkdownTextBlock, resolveSupportFallback, } from "./help-support-fallback.js";
+import { HELP_INTERACTION_CLARIFICATION_QUESTION, TUTORIAL_MODE_NO_DATA_CHANGE_GUIDANCE, UNSUPPORTED_RED_ACTION_GUIDANCE, } from "./help-interaction-mode.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
-export const SUPPORT_CONTACT_FOOTER_URL = "https://bigredcloud.com/contact/";
+export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
 export const SUPPORT_FOOTER_GUIDANCE = "For advice specific to your company, or for more specialised assistance, please contact the Big Red Cloud support team: https://bigredcloud.com/contact/";
 const TRAINING_QUERY_PATTERN = /\b(training|onboarding|webinar|live assistance|demonstration|demo|q\s*&\s*a|learn(?:ing)?|walkthrough|session)\b/i;
 export function isTrainingOrLiveHelpQuery(question) {
@@ -310,21 +313,44 @@ export function searchUnifiedHelpResources(question, sources, options) {
 }
 export function buildUnifiedFindHelpResourcesResponse(question, sources, options) {
     const resources = searchUnifiedHelpResources(question, sources, options);
+    const answerSources = buildHelpAnswerSources(helpSearchResultsToSourceInputs(resources));
+    const customerFacingSourcesMarkdown = buildCustomerFacingSourcesMarkdown(answerSources);
+    const supportFallback = resolveSupportFallback({
+        matchCount: resources.length,
+        strongestScore: resources[0]?.relevanceScore ?? null,
+        hasRelevantSourceOrScreenshot: answerSources.length > 0,
+    });
     return {
         question,
         category: options?.category ?? null,
         matchCount: resources.length,
         resources,
+        sources: answerSources,
+        ...(customerFacingSourcesMarkdown
+            ? { customerFacingSourcesMarkdown }
+            : {}),
+        supportFallbackRecommended: supportFallback.supportFallbackRecommended,
+        supportFallbackReason: supportFallback.supportFallbackReason,
+        supportUrl: supportFallback.supportUrl,
+        ...(supportFallback.customerFacingSupportMarkdown
+            ? {
+                customerFacingSupportMarkdown: supportFallback.customerFacingSupportMarkdown,
+            }
+            : {}),
         responseGuidance: {
             format: [
                 "Provide a concise synthesized direct answer first.",
                 "Add clear steps where applicable.",
-                "Include a Helpful resources section with 3–5 descriptive customer-facing links only.",
-                "Use only publicUrl values returned in resources for hyperlinks.",
+                "End with a Sources section using customerFacingSourcesMarkdown or the sources array — exact publicUrl / registrationUrl values only, most relevant first, max five, deduplicated.",
+                "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
+                "Use only publicUrl or registrationUrl values returned in resources for hyperlinks.",
                 "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
                 FRESHDESK_LINK_RESPONSE_GUIDANCE,
                 "Use brc_get_help_resource_details for Freshdesk images or full article text when useful.",
                 "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata.",
+                TUTORIAL_MODE_NO_DATA_CHANGE_GUIDANCE,
+                UNSUPPORTED_RED_ACTION_GUIDANCE,
+                `For ambiguous how-to versus Red-action questions, ask once: ${HELP_INTERACTION_CLARIFICATION_QUESTION}`,
             ],
             preferredResourceOrder: [
                 "customer_docs",
@@ -333,9 +359,40 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
                 "freshdesk",
             ],
             supportFooter: SUPPORT_FOOTER_GUIDANCE,
-            supportFooterWhen: "Include for substantive support or how-to answers, not greetings or tool errors.",
+            supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
+            sources: [
+                "Copy customerFacingSourcesMarkdown into the final answer under the heading Sources.",
+                "Use exact URLs from the sources array — never invent or rewrite URLs.",
+                "Include only sources used to form the answer. Deduplicate. Cap at five unless the user asks for more.",
+                "Do not expose resource IDs, Azure URLs, storage paths, blob names, or internal metadata.",
+            ],
         },
-        supportFallbackUrl: resources.length === 0 ? "https://bigredcloud.com/support/" : null,
+        // Backward-compatible alias — prefer supportUrl / supportFallbackRecommended.
+        supportFallbackUrl: supportFallback.supportFallbackRecommended
+            ? supportFallback.supportUrl
+            : null,
     };
+}
+/**
+ * MCP content for find-help: JSON payload plus ready-to-use Sources / support Markdown.
+ */
+export function unifiedFindHelpResourcesMcpContent(payload) {
+    const content = [
+        {
+            type: "text",
+            text: JSON.stringify(payload, null, 2),
+        },
+    ];
+    const sourcesText = buildSourcesMarkdownTextBlock(payload.customerFacingSourcesMarkdown);
+    if (sourcesText) {
+        content.push({ type: "text", text: sourcesText });
+    }
+    if (payload.supportFallbackRecommended) {
+        const supportText = buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown);
+        if (supportText) {
+            content.push({ type: "text", text: supportText });
+        }
+    }
+    return { content };
 }
 export { fromCustomerDocsResource, fromFreshdeskResource, fromRecordedWebinarResource, fromUpcomingWebinarResource, };

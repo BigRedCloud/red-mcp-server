@@ -54,6 +54,18 @@ import {
   fromRecordedWebinarResource,
   SUPPORT_FOOTER_GUIDANCE,
 } from "./unified-help-search.js";
+import {
+  buildCustomerFacingSourcesMarkdown,
+  buildHelpAnswerSources,
+  buildSourcesMarkdownTextBlock,
+  type HelpAnswerSource,
+} from "./help-answer-sources.js";
+import {
+  SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
+  buildSupportMarkdownTextBlock,
+  resolveSupportFallback,
+} from "./help-support-fallback.js";
+import { TUTORIAL_MODE_NO_DATA_CHANGE_GUIDANCE } from "./help-interaction-mode.js";
 import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
@@ -89,7 +101,7 @@ export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
   "Do not repeat a screenshot.",
   "Do not invent captions — use only the caption supplied on each screenshot block.",
   "Do not say screenshots are displayed inline unless the chat client actually rendered them.",
-  "Keep the official Freshdesk article link in the Helpful resources section.",
+  "Keep the official Freshdesk article link in the Sources section.",
   "Use the exact supplied signed public URL — do not rewrite, shorten, or replace it.",
   FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE,
 ].join(" ");
@@ -134,12 +146,22 @@ export type HelpResourceDetailsPayload = {
   customerFacingScreenshotMarkdown?: string;
   /** Fully assembled step-and-link Markdown from instructionBlocks. */
   customerFacingInstructionMarkdown?: string;
+  /** Exact public sources used for this detail payload (usually one). */
+  sources?: HelpAnswerSource[];
+  /** Ready-to-paste Sources Markdown for the customer-facing answer. */
+  customerFacingSourcesMarkdown?: string;
+  supportFallbackRecommended?: boolean;
+  supportFallbackReason?: string | null;
+  supportUrl?: string;
+  customerFacingSupportMarkdown?: string;
   responseGuidance: {
     supportFooter: string;
+    supportFooterWhen?: string;
     freshdeskLinks?: string;
     images?: string;
     instructionBlocks?: string;
     screenshotMarkdown?: string;
+    sources?: string;
     doNotExpose: string[];
   };
 };
@@ -197,6 +219,7 @@ async function findRecordedWebinarById(
 function buildDetailsGuidance(hasInstructionBlocks: boolean, hasScreenshotLinks: boolean) {
   return {
     supportFooter: SUPPORT_FOOTER_GUIDANCE,
+    supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
     freshdeskLinks: FRESHDESK_LINK_RESPONSE_GUIDANCE,
     images: hasInstructionBlocks
       ? FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE
@@ -207,6 +230,12 @@ function buildDetailsGuidance(hasInstructionBlocks: boolean, hasScreenshotLinks:
     ...(hasScreenshotLinks
       ? { screenshotMarkdown: FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE }
       : {}),
+    sources: [
+      "Copy customerFacingSourcesMarkdown into the final answer under Sources.",
+      "Use the exact publicUrl or registrationUrl returned by this tool — never invent or rewrite URLs.",
+      "Keep screenshot links beside their steps — do not move them into Sources.",
+      TUTORIAL_MODE_NO_DATA_CHANGE_GUIDANCE,
+    ].join(" "),
     doNotExpose: [
       "resource IDs in customer-facing text",
       "Azure blob names",
@@ -222,6 +251,54 @@ function buildDetailsGuidance(hasInstructionBlocks: boolean, hasScreenshotLinks:
       "nearbyActions",
       "sourceUrl",
     ],
+  };
+}
+
+function buildDetailSourceFields(resource: {
+  title: string;
+  source: HelpResourceSource;
+  publicUrl?: string | null;
+  registrationUrl?: string | null;
+  imageCount?: number;
+}): {
+  sources: HelpAnswerSource[];
+  customerFacingSourcesMarkdown?: string;
+  supportFallbackRecommended: boolean;
+  supportFallbackReason: string | null;
+  supportUrl: string;
+  customerFacingSupportMarkdown?: string;
+} {
+  const sources = buildHelpAnswerSources([
+    {
+      title: resource.title,
+      source: resource.source,
+      publicUrl: resource.publicUrl,
+      registrationUrl: resource.registrationUrl,
+    },
+  ]);
+  const customerFacingSourcesMarkdown =
+    buildCustomerFacingSourcesMarkdown(sources);
+  const supportFallback = resolveSupportFallback({
+    matchCount: sources.length > 0 ? 1 : 0,
+    strongestScore: sources.length > 0 ? 1000 : 0,
+    hasRelevantSourceOrScreenshot:
+      sources.length > 0 || (resource.imageCount ?? 0) > 0,
+  });
+
+  return {
+    sources,
+    ...(customerFacingSourcesMarkdown
+      ? { customerFacingSourcesMarkdown }
+      : {}),
+    supportFallbackRecommended: supportFallback.supportFallbackRecommended,
+    supportFallbackReason: supportFallback.supportFallbackReason,
+    supportUrl: supportFallback.supportUrl,
+    ...(supportFallback.customerFacingSupportMarkdown
+      ? {
+          customerFacingSupportMarkdown:
+            supportFallback.customerFacingSupportMarkdown,
+        }
+      : {}),
   };
 }
 
@@ -424,6 +501,14 @@ export async function getHelpResourceDetails(
               .slice(0, maxImages)
           : [];
 
+      const publicUrl = getSyncedFreshdeskArticlePublicUrl(article);
+      const sourceFields = buildDetailSourceFields({
+        title: normalized.title,
+        source: normalized.source,
+        publicUrl,
+        imageCount: selectedImageCount,
+      });
+
       return {
         ok: true,
         payload: {
@@ -432,7 +517,7 @@ export async function getHelpResourceDetails(
           title: normalized.title,
           summary: normalized.summary,
           instructions: normalized.bodyText,
-          publicUrl: getSyncedFreshdeskArticlePublicUrl(article),
+          publicUrl,
           category: normalized.category,
           topics: normalized.topics,
           imageAvailable: hasScreenshotLinks
@@ -454,6 +539,7 @@ export async function getHelpResourceDetails(
           ...(customerFacingInstructionMarkdown
             ? { customerFacingInstructionMarkdown }
             : {}),
+          ...sourceFields,
           responseGuidance: buildDetailsGuidance(
             hasInstructionBlocks,
             hasScreenshotLinks,
@@ -469,6 +555,13 @@ export async function getHelpResourceDetails(
         return { ok: false, error: "Help resource was not found." };
       }
 
+      const sourceFields = buildDetailSourceFields({
+        title: resource.title,
+        source: resource.source,
+        publicUrl: resource.url,
+        imageCount: 0,
+      });
+
       return {
         ok: true,
         payload: {
@@ -482,6 +575,7 @@ export async function getHelpResourceDetails(
           topics: resource.topics,
           imageCount: 0,
           imagePresentation,
+          ...sourceFields,
           responseGuidance: buildDetailsGuidance(false, false),
         },
         images: [],
@@ -494,6 +588,13 @@ export async function getHelpResourceDetails(
         return { ok: false, error: "Help resource was not found." };
       }
 
+      const sourceFields = buildDetailSourceFields({
+        title: resource.title,
+        source: resource.source,
+        publicUrl: resource.url,
+        imageCount: 0,
+      });
+
       return {
         ok: true,
         payload: {
@@ -507,6 +608,7 @@ export async function getHelpResourceDetails(
           topics: resource.topics,
           imageCount: 0,
           imagePresentation,
+          ...sourceFields,
           responseGuidance: buildDetailsGuidance(false, false),
         },
         images: [],
@@ -518,6 +620,14 @@ export async function getHelpResourceDetails(
       if (!resource) {
         return { ok: false, error: "Help resource was not found." };
       }
+
+      const sourceFields = buildDetailSourceFields({
+        title: resource.title,
+        source: resource.source,
+        publicUrl: resource.url,
+        registrationUrl: resource.registrationUrl,
+        imageCount: 0,
+      });
 
       return {
         ok: true,
@@ -534,6 +644,7 @@ export async function getHelpResourceDetails(
           eventDay: resource.eventDay,
           imageCount: 0,
           imagePresentation,
+          ...sourceFields,
           responseGuidance: buildDetailsGuidance(false, false),
         },
         images: [],
@@ -558,6 +669,12 @@ export function helpResourceDetailResponse(
     instructionMarkdown: payload.customerFacingInstructionMarkdown,
     screenshotMarkdown: payload.customerFacingScreenshotMarkdown,
   });
+  const sourcesText = buildSourcesMarkdownTextBlock(
+    payload.customerFacingSourcesMarkdown,
+  );
+  const supportText = payload.supportFallbackRecommended
+    ? buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown)
+    : undefined;
 
   const content: Array<
     | { type: "text"; text: string }
@@ -575,6 +692,20 @@ export function helpResourceDetailResponse(
     content.push({
       type: "text",
       text: markdownText,
+    });
+  }
+
+  if (sourcesText) {
+    content.push({
+      type: "text",
+      text: sourcesText,
+    });
+  }
+
+  if (supportText) {
+    content.push({
+      type: "text",
+      text: supportText,
     });
   }
 
