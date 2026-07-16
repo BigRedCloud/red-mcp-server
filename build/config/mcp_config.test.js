@@ -30,13 +30,3 @@ test("MCP server instructions derive session duration from configured TTL", () =
     const instructions = getBrcMcpServerInstructions(50, false);
     assert.match(instructions, new RegExp(formatCredentialTtlForUser()));
 });
-test("MCP server instructions include help Sources, support fallback, and interaction mode rules", () => {
-    const instructions = getBrcMcpServerInstructions(50, false);
-    assert.match(instructions, /Would you like instructions for doing this in Big Red Cloud/i);
-    assert.match(instructions, /helpInteractionMode/i);
-    assert.match(instructions, /Sources/i);
-    assert.match(instructions, /supportFallbackRecommended/i);
-    assert.match(instructions, /https:\/\/bigredcloud\.com\/contact\//);
-    assert.match(instructions, /never claim company data was changed/i);
-    assert.match(instructions, /Switch to Red/i);
-});

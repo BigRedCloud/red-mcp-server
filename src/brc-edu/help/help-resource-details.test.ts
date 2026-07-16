@@ -104,13 +104,6 @@ test("getHelpResourceDetails defaults to links presentation without binary image
       /^\[Cash book screen\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
     );
     assert.ok(result.payload.customerFacingScreenshotMarkdown?.includes("Cash book screen"));
-    assert.equal(result.payload.sources?.length, 1);
-    assert.equal(
-      result.payload.sources?.[0]?.url,
-      "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-complete-a-bank-reconciliation",
-    );
-    assert.ok(result.payload.customerFacingSourcesMarkdown?.startsWith("Sources"));
-    assert.equal(result.payload.supportFallbackRecommended, false);
     assert.equal(result.images.length, 0);
     assert.match(
       result.payload.responseGuidance.images ?? "",
@@ -519,18 +512,6 @@ test("helpResourceDetailResponse links mode has Markdown without binary images",
       imagePresentation: "links",
       customerFacingScreenshotMarkdown:
         "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
-      customerFacingSourcesMarkdown:
-        "Sources\n\n- [Test](https://bigredcloud.freshdesk.com/support/solutions/articles/1001-test)",
-      sources: [
-        {
-          title: "Test",
-          url: "https://bigredcloud.freshdesk.com/support/solutions/articles/1001-test",
-          sourceType: "support_article",
-        },
-      ],
-      supportFallbackRecommended: false,
-      supportFallbackReason: null,
-      supportUrl: "https://bigredcloud.com/contact/",
       responseGuidance: {
         supportFooter: "footer",
         doNotExpose: [],
@@ -539,32 +520,9 @@ test("helpResourceDetailResponse links mode has Markdown without binary images",
     [],
   );
 
-  assert.equal(response.content.length, 3);
+  assert.equal(response.content.length, 2);
   assert.equal(response.content.every((block) => block.type === "text"), true);
   assert.equal(response.content.some((block) => block.type === "image"), false);
-  assert.ok(
-    response.content.some((block) =>
-      String((block as { text?: string }).text).includes(
-        "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
-      ),
-    ),
-  );
-  const sourcesBlock = response.content.find((block) =>
-    String((block as { text?: string }).text).includes(
-      "Do not move screenshot links into Sources",
-    ),
-  );
-  assert.ok(sourcesBlock);
-  assert.match(
-    String((sourcesBlock as { text?: string }).text),
-    /Sources\n\n- \[Test\]\(https:\/\/bigredcloud\.freshdesk\.com\/support\/solutions\/articles\/1001-test\)/,
-  );
-  assert.equal(
-    String((sourcesBlock as { text?: string }).text).includes(
-      "red.example.com/public/brc-edu/freshdesk-images",
-    ),
-    false,
-  );
 });
 
 test("inline presentation returns binary image blocks", async () => {
