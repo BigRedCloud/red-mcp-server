@@ -96,16 +96,25 @@ test("getHelpResourceDetails returns ordered instructionBlocks with safe caption
     process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
     const article = freshdeskArticle();
     article.contentBlocks = [
-        { type: "text", text: "Click Customers, then click Add." },
+        {
+            type: "text",
+            text: "Click Customers, then click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Customers", "Add"],
+            sectionHeading: "Add Customer",
+        },
         {
             type: "image",
             imageIndex: 0,
             sourceUrl: "https://cdn.freshdesk.com/a.png",
             altText: "image",
-            nearbyHeading: undefined,
+            nearbyHeading: "Add Customer",
+            sectionHeading: "Add Customer",
             precedingText: "Click Customers, then click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Customers", "Add"],
         },
-        { type: "text", text: "Enter the customer details." },
+        { type: "text", text: "Enter the customer details.", workflow: "add_customer" },
     ];
     const png = Buffer.from("fake-image-bytes");
     const index = {
@@ -158,15 +167,166 @@ test("getHelpResourceDetails returns ordered instructionBlocks with safe caption
         assert.equal(result.payload.instructionBlocks?.[1]?.type, "screenshot");
         const screenshot = result.payload.instructionBlocks?.[1];
         assert.ok(screenshot && screenshot.type === "screenshot");
-        assert.equal(screenshot.caption, "Customers — click Add");
+        assert.equal(screenshot.caption, "Adding a customer: Click Add");
         assert.match(screenshot.url, /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//);
-        assert.match(result.payload.responseGuidance.images ?? "", /Never label screenshot links Show Image/i);
+        assert.match(result.payload.responseGuidance.images ?? "", /Never replace the caption with Show Image/i);
         assert.match(result.payload.responseGuidance.images ?? "", /Place each screenshot link immediately after the step/i);
-        assert.match(result.payload.responseGuidance.images ?? "", /Do not group all screenshots into one Relevant screenshots section/i);
+        assert.match(result.payload.responseGuidance.images ?? "", /Do not group screenshots into a separate Relevant screenshots section/i);
         const payloadJson = JSON.stringify(result.payload);
         assert.equal(payloadJson.includes("cdn.freshdesk.com"), false);
-        assert.equal(payloadJson.includes("sourceUrl"), false);
+        assert.equal(JSON.stringify(result.payload.instructionBlocks).includes("sourceUrl"), false);
         assert.equal(result.payload.instructionBlocks?.some((block) => block.type === "screenshot" && /show image/i.test(block.caption)), false);
+    }
+});
+test("getHelpResourceDetails selects existing-customer screenshots from question", async () => {
+    process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+    process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+    const png = Buffer.from("fake-image-bytes");
+    const article = freshdeskArticle();
+    article.title = "Customer Opening Balance";
+    article.images = [
+        { sourceUrl: "https://cdn.freshdesk.com/change.png", altText: null },
+        { sourceUrl: "https://cdn.freshdesk.com/add.png", altText: null },
+        { sourceUrl: "https://cdn.freshdesk.com/ageing.png", altText: null },
+        { sourceUrl: "https://cdn.freshdesk.com/obalance.png", altText: null },
+        { sourceUrl: "https://cdn.freshdesk.com/save.png", altText: null },
+    ];
+    article.syncedImages = article.images.map((image, order) => ({
+        sourceUrl: image.sourceUrl,
+        blobName: `freshdesk/1001/${order}.png`,
+        sha256: `00000000000000000000000000000000000000000000000000000000000000${order}${order}`,
+        contentType: "image/png",
+        altText: "Show Image",
+        order,
+    }));
+    article.contentBlocks = [
+        {
+            type: "text",
+            text: "Open Customers, select the customer and click Change.",
+            workflow: "existing_customer",
+            nearbyActions: ["Customers", "Change"],
+        },
+        {
+            type: "image",
+            imageIndex: 0,
+            precedingText: "Open Customers, select the customer and click Change.",
+            workflow: "existing_customer",
+            nearbyActions: ["Customers", "Change"],
+            altText: "Show Image",
+        },
+        {
+            type: "text",
+            text: "To add a brand-new customer, click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Add"],
+        },
+        {
+            type: "image",
+            imageIndex: 1,
+            precedingText: "To add a brand-new customer, click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Add"],
+            altText: "Show Image",
+        },
+        {
+            type: "text",
+            text: "Click O/Balance.",
+            workflow: "existing_customer",
+            nearbyActions: ["O/Balance"],
+        },
+        {
+            type: "image",
+            imageIndex: 3,
+            precedingText: "Click O/Balance.",
+            workflow: "existing_customer",
+            nearbyActions: ["O/Balance"],
+            altText: "Show Image",
+        },
+        {
+            type: "text",
+            text: "Enter the opening balance into Current, 1 Month, 2 Months and 3 Months Plus.",
+            workflow: "customer_opening_balance",
+            nearbyActions: ["Current", "1 Month", "2 Months", "3 Months Plus"],
+        },
+        {
+            type: "image",
+            imageIndex: 2,
+            precedingText: "Enter the opening balance into Current, 1 Month, 2 Months and 3 Months Plus.",
+            workflow: "customer_opening_balance",
+            nearbyActions: ["Current", "1 Month", "2 Months", "3 Months Plus"],
+            altText: "Show Image",
+        },
+        {
+            type: "text",
+            text: "Click Save on the main customer screen.",
+            workflow: "final_save",
+            nearbyActions: ["Save"],
+        },
+        {
+            type: "image",
+            imageIndex: 4,
+            precedingText: "Click Save on the main customer screen.",
+            workflow: "final_save",
+            nearbyActions: ["Save"],
+            altText: "Show Image",
+        },
+    ];
+    const index = {
+        generatedAt: "2026-07-15T10:00:00.000Z",
+        articleCount: 1,
+        failureCount: 0,
+        articles: [article],
+        failures: [],
+    };
+    const indexContainer = {
+        getBlockBlobClient() {
+            return {
+                async exists() {
+                    return true;
+                },
+                async download() {
+                    return {
+                        readableStreamBody: (async function* () {
+                            yield Buffer.from(JSON.stringify(index), "utf8");
+                        })(),
+                    };
+                },
+            };
+        },
+    };
+    const imageContainer = {
+        getBlockBlobClient(blobName) {
+            return {
+                async exists() {
+                    return /^freshdesk\/1001\/\d+\.png$/.test(blobName);
+                },
+                async download() {
+                    return {
+                        readableStreamBody: (async function* () {
+                            yield png;
+                        })(),
+                    };
+                },
+            };
+        },
+    };
+    const result = await getHelpResourceDetails("freshdesk:1001", {
+        freshdeskIndexContainer: indexContainer,
+        freshdeskImageContainer: imageContainer,
+        question: "I've added a customer who already owes us money. How do I enter their opening balance?",
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+        const screenshots = result.payload.instructionBlocks?.filter((block) => block.type === "screenshot");
+        assert.ok(screenshots && screenshots.length === 4);
+        assert.equal(screenshots?.some((block) => /Click Add/i.test(block.caption)), false);
+        assert.ok(screenshots?.some((block) => /Click Change/i.test(block.caption)));
+        assert.ok(screenshots?.some((block) => /Open O\/Balance/i.test(block.caption)));
+        assert.ok(screenshots?.some((block) => /Enter aged balances/i.test(block.caption)));
+        assert.ok(screenshots?.some((block) => /Save changes/i.test(block.caption)));
+        assert.equal(screenshots?.some((block) => block.type === "screenshot" && /show image/i.test(block.caption)), false);
+        assert.equal(JSON.stringify(result.payload.instructionBlocks).includes("sourceUrl"), false);
+        assert.equal(JSON.stringify(result.payload).includes("cdn.freshdesk.com"), false);
     }
 });
 test("helpResourceDetailResponse includes MCP image blocks and caption text", () => {

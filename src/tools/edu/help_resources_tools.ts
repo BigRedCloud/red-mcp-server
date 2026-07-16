@@ -29,9 +29,11 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
 export const GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION = [
   "Load full help-resource details for a resourceId returned by brc_find_help_resources.",
   "Freshdesk resources return cleaned article text, the canonical Freshdesk publicUrl when available, preferred instructionBlocks (ordered text and screenshot steps), screenshotUrls for backward compatibility, and mirrored screenshots as MCP image content when available.",
-  "Prefer instructionBlocks when present: follow them in order, place each screenshot link immediately after the step it illustrates, and use the exact supplied caption as the clickable Markdown link text, for example [Customers list — click Add](EXACT_SCREENSHOT_URL).",
-  "Do not group screenshots under a Relevant screenshots section when instructionBlocks are available.",
+  "Pass the customer question when available so Freshdesk screenshots are selected from the matching workflow branch (for example existing customer versus add customer).",
+  "Prefer instructionBlocks when present: follow them in order, place each screenshot link immediately after the step it illustrates, and use the exact supplied caption as the clickable Markdown link text, for example [Changing a customer: Open O/Balance](EXACT_SIGNED_IMAGE_URL).",
   "Never label screenshot links Show Image. Do not invent captions.",
+  "Do not group screenshots under a Relevant screenshots section when instructionBlocks are available.",
+  "Omit screenshots from unused workflow branches. Omit unclear screenshots rather than guessing. Do not repeat a screenshot.",
   "When instructionBlocks are absent, use screenshotUrls with their descriptive captions and place each after the most relevant paragraph where possible.",
   "Do not rewrite or alter supplied screenshot URLs. Do not say screenshots are displayed inline unless the chat client actually rendered them.",
   "Use only the publicUrl returned by this tool for Freshdesk links.",
@@ -131,11 +133,19 @@ export function registerHelpResourcesTools(server: ServerType): void {
         .describe(
           "Maximum Freshdesk screenshots to return. Defaults to 5. Hard maximum 8.",
         ),
+      question: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Optional customer question used to select the matching Freshdesk workflow screenshots, for example an existing-customer opening balance question versus adding a new customer.",
+        ),
     },
-    async ({ resourceId, includeImages, maxImages }) => {
+    async ({ resourceId, includeImages, maxImages, question }) => {
       const result = await getHelpResourceDetails(resourceId, {
         includeImages: includeImages ?? true,
         maxImages,
+        question,
       });
       if (!result.ok) {
         return jsonResponse({ error: result.error });

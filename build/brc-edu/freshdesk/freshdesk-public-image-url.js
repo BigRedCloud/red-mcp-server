@@ -44,7 +44,16 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, blocks, op
             caption: buildScreenshotCaption(syncedImage.altText),
             mimeType: block.mimeType,
             url,
+            imageIndex: block.order,
         });
     }
     return screenshotUrls;
+}
+/** Strip internal fields before returning screenshot URLs to customers. */
+export function toCustomerFacingScreenshotUrl(screenshot) {
+    return {
+        caption: screenshot.caption,
+        mimeType: screenshot.mimeType,
+        url: screenshot.url,
+    };
 }

@@ -18,6 +18,11 @@ export type FreshdeskScreenshotUrl = {
   caption: string;
   mimeType: string;
   url: string;
+  /**
+   * Internal synced-image order / content-block imageIndex.
+   * Never expose in customer-facing JSON.
+   */
+  imageIndex?: number;
 };
 
 function buildScreenshotCaption(altText?: string): string {
@@ -95,8 +100,20 @@ export function buildFreshdeskScreenshotUrls(
       caption: buildScreenshotCaption(syncedImage.altText),
       mimeType: block.mimeType,
       url,
+      imageIndex: block.order,
     });
   }
 
   return screenshotUrls;
+}
+
+/** Strip internal fields before returning screenshot URLs to customers. */
+export function toCustomerFacingScreenshotUrl(
+  screenshot: FreshdeskScreenshotUrl,
+): FreshdeskScreenshotUrl {
+  return {
+    caption: screenshot.caption,
+    mimeType: screenshot.mimeType,
+    url: screenshot.url,
+  };
 }

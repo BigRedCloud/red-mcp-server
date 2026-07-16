@@ -1,11 +1,16 @@
 import { stripHtmlEntitiesForCaption } from "./article-content-parser.js";
+import {
+  primaryWorkflow,
+  workflowDisplayLabel,
+  type FreshdeskWorkflowTag,
+} from "./workflow-context.js";
 
 export const FRESHDESK_SCREENSHOT_CAPTION_MAX_LENGTH = 80;
 export const FRESHDESK_SCREENSHOT_CAPTION_FALLBACK =
   "Freshdesk instruction screenshot";
 
 const GENERIC_ALT_PATTERN =
-  /^(image|images|img|screenshot|screenshots|photo|picture|graphic|diagram|untitled|show image|a screenshot of a computer|screenshot\s*\d+|image\s*\d+|relevant article section|freshdesk screenshot)$/i;
+  /^(image|images|img|screenshot|screenshots|photo|picture|graphic|diagram|untitled|show image|view image|open image|a screenshot of a computer|screenshot\s*\d+|image\s*\d+|relevant article section|relevant screenshot|freshdesk screenshot)$/i;
 
 const INSTRUCTION_PREFIX_PATTERN =
   /^(please\s+)?(then\s+)?(next[,:]?\s+)?(now[,:]?\s+)?/i;
@@ -13,8 +18,11 @@ const INSTRUCTION_PREFIX_PATTERN =
 export type ScreenshotCaptionContext = {
   altText?: string | null;
   nearbyHeading?: string | null;
+  sectionHeading?: string | null;
   precedingText?: string | null;
   followingText?: string | null;
+  workflow?: string | null;
+  nearbyActions?: string[] | null;
 };
 
 export function isGenericFreshdeskAltText(
@@ -59,8 +67,41 @@ function titleCaseWords(value: string): string {
     .join(" ");
 }
 
+function resolveWorkflowLabel(context: ScreenshotCaptionContext): string | null {
+  if (context.workflow && context.workflow !== "generic") {
+    return workflowDisplayLabel(context.workflow as FreshdeskWorkflowTag);
+  }
+
+  const heading = stripHtmlEntitiesForCaption(
+    context.sectionHeading ?? context.nearbyHeading ?? "",
+  );
+  if (heading) {
+    if (/screen$/i.test(heading)) {
+      return heading;
+    }
+    if (/\bcustomer\b/i.test(heading) && /\badd\b/i.test(heading)) {
+      return "Adding a customer";
+    }
+    if (/\bcustomer\b/i.test(heading) && /\bchange\b/i.test(heading)) {
+      return "Changing a customer";
+    }
+    if (/\bopening\s+balance\b/i.test(heading)) {
+      return "Customer opening balance";
+    }
+    if (/\bemail\b/i.test(heading)) {
+      return "Customer email settings";
+    }
+    if (/\bbank\b/i.test(heading) || /\breconcile\b/i.test(heading)) {
+      return "Bank reconciliation";
+    }
+    return heading;
+  }
+
+  return null;
+}
+
 /**
- * Turn nearby instruction text into a concise customer-facing label.
+ * Turn nearby instruction text into a concise action/purpose phrase.
  * Deterministic only — no AI, no guessed UI actions beyond nearby text.
  */
 export function instructionTextToCaption(
@@ -74,16 +115,36 @@ export function instructionTextToCaption(
     /\ba\/c\s*code\b/i.test(original) &&
     /\b(fill|enter|mandatory|required|details)\b/i.test(original)
   ) {
-    const heading = stripHtmlEntitiesForCaption(nearbyHeading ?? "");
-    const screen = heading
-      ? /screen$/i.test(heading)
-        ? heading
-        : `${heading} screen`
-      : null;
-    if (screen) {
-      return truncateCaption(`${screen} — enter the required A/C Code`);
-    }
-    return truncateCaption("enter the required A/C Code");
+    return "Enter the required A/C Code";
+  }
+
+  if (
+    /\b(current|1\s+month|2\s+months?|3\s+months?\s+plus)\b/i.test(original) &&
+    /\b(enter|fill|age|balance)\b/i.test(original)
+  ) {
+    return "Enter aged balances";
+  }
+
+  if (/\bo\/\s*balance\b/i.test(original) && /\bclick\b/i.test(original)) {
+    return "Open O/Balance";
+  }
+
+  if (/\bsave\b/i.test(original) && /\bclick\b/i.test(original)) {
+    return "Save changes";
+  }
+
+  if (
+    /\bemail\s+preferences\b/i.test(original) &&
+    /\b(click|open)\b/i.test(original)
+  ) {
+    return "Open Email Preferences";
+  }
+
+  if (
+    /\bstatement\s+balance\b/i.test(original) &&
+    /\b(enter|fill)\b/i.test(original)
+  ) {
+    return "Enter statement balance";
   }
 
   const sentenceMatch = cleaned.match(/^(.+?[.!?])(?:\s|$)/);
@@ -95,9 +156,7 @@ export function instructionTextToCaption(
     /^click\s+(.+?)[,.]?\s+then\s+click\s+(.+)$/i,
   );
   if (clickThenClick) {
-    return truncateCaption(
-      `${titleCaseWords(clickThenClick[1] ?? "")} — click ${clickThenClick[2]}`,
-    );
+    return `Click ${titleCaseWords(clickThenClick[2] ?? "")}`;
   }
 
   const clickTarget = cleaned.match(
@@ -106,79 +165,222 @@ export function instructionTextToCaption(
   if (clickTarget?.[1] && clickTarget[1].length <= 60) {
     const target = clickTarget[1].replace(/[.]+$/, "").trim();
     if (!/^here$/i.test(target)) {
-      const labelled = titleCaseWords(target);
-      const heading = stripHtmlEntitiesForCaption(nearbyHeading ?? "");
-      if (
-        heading &&
-        /\bcustomer\b/i.test(heading) &&
-        /\bemail\s+preferences\b/i.test(labelled)
-      ) {
-        return truncateCaption(`Customer ${labelled}`);
-      }
-      return truncateCaption(labelled);
+      return `Click ${titleCaseWords(target)}`;
     }
   }
 
-  if (/^(fill in|enter|complete|go to)\b/i.test(cleaned)) {
-    return truncateCaption(cleaned);
+  if (/^(fill in|enter|complete|go to|open)\b/i.test(cleaned)) {
+    return titleCaseWords(cleaned.charAt(0).toLowerCase() + cleaned.slice(1))
+      .replace(/^Fill In\b/, "Fill in")
+      .replace(/^Enter\b/, "Enter")
+      .replace(/^Complete\b/, "Complete")
+      .replace(/^Go To\b/, "Go to")
+      .replace(/^Open\b/, "Open");
+  }
+
+  // Prefer a short action from nearby heading context when the sentence is long.
+  if (cleaned.length > 50 && nearbyHeading) {
+    const heading = stripHtmlEntitiesForCaption(nearbyHeading);
+    if (heading) {
+      return truncateCaption(heading);
+    }
   }
 
   return truncateCaption(cleaned);
 }
 
-function headingToCaption(heading: string): string {
-  return truncateCaption(stripHtmlEntitiesForCaption(heading));
+function formatWorkflowCaption(
+  workflowLabel: string | null,
+  action: string,
+): string {
+  const cleanedAction = stripHtmlEntitiesForCaption(action);
+  if (!cleanedAction) {
+    return workflowLabel
+      ? truncateCaption(workflowLabel)
+      : FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
+  }
+
+  if (!workflowLabel) {
+    return truncateCaption(cleanedAction);
+  }
+
+  // Avoid "Changing a customer: Changing a customer".
+  if (cleanedAction.toLowerCase() === workflowLabel.toLowerCase()) {
+    return truncateCaption(workflowLabel);
+  }
+
+  return truncateCaption(`${workflowLabel}: ${cleanedAction}`);
+}
+
+function actionFromNearbyActions(
+  nearbyActions: string[] | null | undefined,
+  context: ScreenshotCaptionContext,
+): string | null {
+  if (!nearbyActions || nearbyActions.length === 0) {
+    return null;
+  }
+
+  const preceding = stripHtmlEntitiesForCaption(context.precedingText ?? "");
+  const alt = stripHtmlEntitiesForCaption(context.altText ?? "");
+  const corpus = `${preceding} ${alt}`.toLowerCase();
+
+  const preferred = [
+    "O/Balance",
+    "Email Preferences",
+    "Save",
+    "Add",
+    "Change",
+  ];
+
+  // Prefer actions that are explicitly mentioned in the preceding instruction.
+  for (const label of preferred) {
+    const present = nearbyActions.some(
+      (action) => action.toLowerCase() === label.toLowerCase(),
+    );
+    if (!present) {
+      continue;
+    }
+    if (corpus.includes(label.toLowerCase()) || /click\s+save\b/i.test(preceding)) {
+      if (label === "O/Balance") {
+        return "Open O/Balance";
+      }
+      if (label === "Email Preferences") {
+        return "Open Email Preferences";
+      }
+      if (label === "Save") {
+        return "Save changes";
+      }
+      return `Click ${label}`;
+    }
+  }
+
+  for (const label of preferred) {
+    if (
+      nearbyActions.some((action) => action.toLowerCase() === label.toLowerCase())
+    ) {
+      if (label === "O/Balance") {
+        return "Open O/Balance";
+      }
+      if (label === "Email Preferences") {
+        return "Open Email Preferences";
+      }
+      if (label === "Save") {
+        return "Save changes";
+      }
+      return `Click ${label}`;
+    }
+  }
+
+  if (
+    nearbyActions.some((action) =>
+      /^(Current|1 Month|2 Months|3 Months Plus)$/i.test(action),
+    )
+  ) {
+    return "Enter aged balances";
+  }
+
+  if (
+    nearbyActions.some((action) => /statement balance/i.test(action)) ||
+    (context.workflow === "bank_reconciliation" &&
+      nearbyActions.some((action) => /balance/i.test(action)))
+  ) {
+    return "Enter statement balance";
+  }
+
+  return null;
 }
 
 /**
  * Build a deterministic screenshot caption using nearby article text only.
  *
- * Priority:
- * 1. meaningful Freshdesk image alt text
- * 2. nearest preceding actionable instruction (click/go/fill/enter)
- * 3. nearest preceding heading
- * 4. nearest preceding other instruction sentence
- * 5. nearest following instruction sentence
- * 6. safe fallback
+ * Preferred format: `{workflow or screen}: {action or purpose}`
  *
- * When a heading and a fill/enter instruction are both available, combine them
- * so captions stay descriptive (e.g. "Add Customer screen — enter the required A/C Code").
+ * Priority:
+ * 1. meaningful Freshdesk image alt text (combined with workflow when useful)
+ * 2. exact nearby UI action
+ * 3. actionable preceding instruction
+ * 4. nearest heading
+ * 5. other nearby explanatory text
+ * 6. safe fallback
  */
 export function buildFreshdeskScreenshotCaption(
   context: ScreenshotCaptionContext,
 ): string {
+  const workflowLabel = resolveWorkflowLabel(context);
   const alt = stripHtmlEntitiesForCaption(context.altText ?? "");
-  if (alt && !isGenericFreshdeskAltText(alt)) {
-    return truncateCaption(alt);
+  const fromActions = actionFromNearbyActions(context.nearbyActions, context);
+
+  // Prefer structured workflow:action captions over raw alt when we have a clear UI action.
+  if (fromActions && workflowLabel) {
+    return formatWorkflowCaption(workflowLabel, fromActions);
   }
 
-  const heading = stripHtmlEntitiesForCaption(context.nearbyHeading ?? "");
+  if (alt && !isGenericFreshdeskAltText(alt)) {
+    // Meaningful alt that already looks like a full caption.
+    if (/:/.test(alt) || alt.length > 40) {
+      return truncateCaption(alt);
+    }
+    if (fromActions) {
+      return formatWorkflowCaption(workflowLabel, fromActions);
+    }
+    return formatWorkflowCaption(workflowLabel, alt);
+  }
+
+  const heading = stripHtmlEntitiesForCaption(
+    context.sectionHeading ?? context.nearbyHeading ?? "",
+  );
   const preceding = stripHtmlEntitiesForCaption(context.precedingText ?? "");
   const following = stripHtmlEntitiesForCaption(context.followingText ?? "");
+
+  if (
+    preceding &&
+    /\b(click|go to|fill|enter|complete|open|select)\b/i.test(preceding)
+  ) {
+    return formatWorkflowCaption(
+      workflowLabel,
+      instructionTextToCaption(preceding, heading || null),
+    );
+  }
 
   if (
     heading &&
     preceding &&
     /\b(fill|enter|complete)\b/i.test(preceding)
   ) {
-    return instructionTextToCaption(preceding, heading);
+    return formatWorkflowCaption(
+      workflowLabel,
+      instructionTextToCaption(preceding, heading),
+    );
   }
 
-  if (preceding && /^(click|go to|fill|enter|complete)\b/i.test(preceding)) {
-    return instructionTextToCaption(preceding, heading || null);
+  if (heading && workflowLabel && heading.toLowerCase() !== workflowLabel.toLowerCase()) {
+    return formatWorkflowCaption(workflowLabel, heading);
   }
 
   if (heading) {
-    return headingToCaption(heading);
+    return truncateCaption(heading);
   }
 
   if (preceding) {
-    return instructionTextToCaption(preceding, heading || null);
+    return formatWorkflowCaption(
+      workflowLabel,
+      instructionTextToCaption(preceding, heading || null),
+    );
   }
 
   if (following) {
-    return instructionTextToCaption(following, heading || null);
+    return formatWorkflowCaption(
+      workflowLabel,
+      instructionTextToCaption(following, heading || null),
+    );
+  }
+
+  if (workflowLabel) {
+    return truncateCaption(workflowLabel);
   }
 
   return FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
 }
+
+/** Re-export for callers that need workflow primary helper alongside captions. */
+export { primaryWorkflow };

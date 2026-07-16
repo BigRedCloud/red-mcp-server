@@ -4,6 +4,11 @@ import type {
   FreshdeskArticleContentBlock,
   FreshdeskImageReference,
 } from "./types.js";
+import {
+  classifyFreshdeskWorkflows,
+  extractNearbyActions,
+  primaryWorkflow,
+} from "./workflow-context.js";
 
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 const TEXT_BLOCK_TAGS = new Set([
@@ -261,10 +266,15 @@ export function parseFreshdeskArticleContent(
         text: node.text,
       });
       bodyParts.push(node.text);
+      const headingActions = extractNearbyActions(node.text);
+      const headingWorkflows = classifyFreshdeskWorkflows(node.text);
       contentBlocks.push({
         type: "text",
         text: node.text,
         heading: node.text,
+        sectionHeading: node.text,
+        workflow: primaryWorkflow(headingWorkflows, headingActions),
+        ...(headingActions.length > 0 ? { nearbyActions: headingActions } : {}),
       });
       continue;
     }
@@ -272,10 +282,16 @@ export function parseFreshdeskArticleContent(
     if (node.kind === "text") {
       textSequence.push(node.text);
       bodyParts.push(node.text);
+      const nearbyActions = extractNearbyActions(node.text, currentHeading);
+      const workflows = classifyFreshdeskWorkflows(node.text, currentHeading);
       contentBlocks.push({
         type: "text",
         text: node.text,
-        ...(currentHeading ? { heading: currentHeading } : {}),
+        ...(currentHeading
+          ? { heading: currentHeading, sectionHeading: currentHeading }
+          : {}),
+        workflow: primaryWorkflow(workflows, nearbyActions),
+        ...(nearbyActions.length > 0 ? { nearbyActions } : {}),
       });
       continue;
     }
@@ -301,13 +317,27 @@ export function parseFreshdeskArticleContent(
       };
     }
 
+    const nearbyActions = extractNearbyActions(
+      node.altText,
+      nearbyHeading,
+      precedingText,
+    );
+    const workflows = classifyFreshdeskWorkflows(
+      node.altText,
+      nearbyHeading,
+      precedingText,
+    );
+
     contentBlocks.push({
       type: "image",
       imageIndex,
       sourceUrl: node.sourceUrl,
       altText: node.altText ?? undefined,
       nearbyHeading,
+      sectionHeading: nearbyHeading,
       precedingText,
+      workflow: primaryWorkflow(workflows, nearbyActions),
+      ...(nearbyActions.length > 0 ? { nearbyActions } : {}),
     });
   }
 
@@ -325,6 +355,8 @@ export function parseFreshdeskArticleContent(
 
     const nextText = textOnly.find((entry) => entry.index > blockIndex);
     if (nextText) {
+      // Keep followingText for captions, but do not mix it into nearbyActions /
+      // workflow — that would blur separate workflow branches.
       contentBlocks[blockIndex] = {
         ...block,
         followingText: nextText.text,

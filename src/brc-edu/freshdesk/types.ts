@@ -34,13 +34,20 @@ export type FreshdeskFolder = {
 
   /**
    * Ordered article content preserved from Freshdesk HTML DOM order.
-   * `sourceUrl` on image blocks is internal-only for sync matching — never expose publicly.
+   * Internal matching fields (workflow, nearbyActions, sourceUrl) must never
+   * be returned to customers.
    */
   export type FreshdeskArticleContentBlock =
     | {
         type: "text";
         text: string;
+        /** @deprecated Prefer sectionHeading — retained for legacy indexes. */
         heading?: string;
+        sectionHeading?: string;
+        /** Internal workflow classification — never expose publicly. */
+        workflow?: string;
+        /** Internal UI action labels for matching — never expose publicly. */
+        nearbyActions?: string[];
       }
     | {
         type: "image";
@@ -48,9 +55,15 @@ export type FreshdeskFolder = {
         /** Internal only — used to match syncedImages; never return to clients. */
         sourceUrl?: string;
         altText?: string;
+        /** @deprecated Prefer sectionHeading — retained for legacy indexes. */
         nearbyHeading?: string;
+        sectionHeading?: string;
+        /** Internal workflow classification — never expose publicly. */
+        workflow?: string;
         precedingText?: string;
         followingText?: string;
+        /** Internal UI action labels for matching — never expose publicly. */
+        nearbyActions?: string[];
       };
 
   export type NormalizedFreshdeskArticle = {
