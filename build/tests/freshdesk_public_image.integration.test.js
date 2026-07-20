@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION } from "../tools/edu/help_resources_tools.js";
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 60_000;
+const SERVER_START_TIMEOUT_MS = 30_000;
 async function getFreePort() {
     return await new Promise((resolve, reject) => {
         const server = net.createServer();
