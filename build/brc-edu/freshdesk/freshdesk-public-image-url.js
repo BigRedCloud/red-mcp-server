@@ -3,6 +3,8 @@ import { normalizeFreshdeskImageMimeType, isSupportedFreshdeskImageMimeType, } f
 import { createFreshdeskPublicImageToken, isFreshdeskPublicImageSigningConfigured, resolveFreshdeskImageKey, } from "./freshdesk-public-image-token.js";
 import { buildFreshdeskScreenshotCaption, isGenericFreshdeskAltText, isRejectedFreshdeskCaption, } from "./screenshot-caption.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX = "/public/brc-edu/freshdesk-images";
+/** Neutral Markdown link text — never use the descriptive caption as link text. */
+export const FRESHDESK_SCREENSHOT_LINK_LABEL = "View image";
 /** Customer-facing caption when alt text / article context is missing. */
 export function buildOrderedArticleImageCaption(imageNumber) {
     return `Article image ${imageNumber}`;
@@ -57,6 +59,7 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, options = 
         }
         screenshotUrls.push({
             caption: buildScreenshotCaption(syncedImage.altText, index + 1),
+            linkLabel: FRESHDESK_SCREENSHOT_LINK_LABEL,
             mimeType,
             url,
             imageIndex: syncedImage.order,
@@ -68,6 +71,7 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, options = 
 export function toCustomerFacingScreenshotUrl(screenshot) {
     return {
         caption: screenshot.caption,
+        linkLabel: screenshot.linkLabel?.trim() || FRESHDESK_SCREENSHOT_LINK_LABEL,
         mimeType: screenshot.mimeType,
         url: screenshot.url,
     };

@@ -53,6 +53,7 @@ test("buildFreshdeskScreenshotUrls returns ordered customer-safe screenshot URLs
 
   assert.equal(screenshotUrls.length, 1);
   assert.equal(screenshotUrls[0]?.caption, "Add Customer screen");
+  assert.equal(screenshotUrls[0]?.linkLabel, "View image");
   assert.equal(screenshotUrls[0]?.mimeType, "image/png");
   assert.match(screenshotUrls[0]?.url ?? "", /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//);
   assert.equal(JSON.stringify(screenshotUrls).includes("freshdesk/1001"), false);

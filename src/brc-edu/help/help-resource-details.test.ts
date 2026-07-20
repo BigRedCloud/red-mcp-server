@@ -94,6 +94,7 @@ test("getHelpResourceDetails defaults to links presentation without binary image
     assert.equal(result.payload.imageCount, 1);
     assert.equal(result.payload.screenshotUrls?.length, 1);
     assert.equal(result.payload.screenshotUrls?.[0]?.caption, "Cash book screen");
+    assert.equal(result.payload.screenshotUrls?.[0]?.linkLabel, "View image");
     assert.match(
       result.payload.screenshotUrls?.[0]?.url ?? "",
       /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
@@ -101,9 +102,13 @@ test("getHelpResourceDetails defaults to links presentation without binary image
     assert.equal(result.payload.screenshotLinksMarkdown?.length, 1);
     assert.match(
       result.payload.screenshotLinksMarkdown?.[0] ?? "",
-      /^\[Cash book screen\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
+      /^\[View image\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
     );
-    assert.ok(result.payload.customerFacingScreenshotMarkdown?.includes("Cash book screen"));
+    assert.ok(result.payload.customerFacingScreenshotMarkdown?.includes("[View image]("));
+    assert.equal(
+      result.payload.customerFacingScreenshotMarkdown?.includes("Cash book screen"),
+      false,
+    );
     assert.equal(result.images.length, 0);
     assert.match(
       result.payload.responseGuidance.images ?? "",
@@ -207,6 +212,7 @@ test("getHelpResourceDetails returns ordered instructionBlocks with safe caption
     const screenshot = result.payload.instructionBlocks?.[1];
     assert.ok(screenshot && screenshot.type === "screenshot");
     assert.equal(screenshot.caption, "Adding a customer: Click Add");
+    assert.equal(screenshot.linkLabel, "View image");
     assert.match(
       screenshot.url,
       /^https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
@@ -216,13 +222,19 @@ test("getHelpResourceDetails returns ordered instructionBlocks with safe caption
     assert.ok(result.payload.customerFacingInstructionMarkdown);
     assert.match(
       result.payload.customerFacingInstructionMarkdown ?? "",
-      /\[Adding a customer: Click Add\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
+      /\[View image\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\//,
+    );
+    assert.equal(
+      result.payload.customerFacingInstructionMarkdown?.includes(
+        "Adding a customer: Click Add",
+      ),
+      false,
     );
     assert.equal(result.payload.screenshotLinksMarkdown?.length, 1);
     assert.equal(result.payload.imageCount, 1);
     assert.match(
       result.payload.responseGuidance.images ?? "",
-      /Never replace the caption with Show Image/i,
+      /View image/i,
     );
     assert.match(
       result.payload.responseGuidance.images ?? "",
@@ -465,9 +477,9 @@ test("helpResourceDetailResponse emits Markdown text before optional binary imag
       imageCount: 1,
       imagePresentation: "both",
       customerFacingScreenshotMarkdown:
-        "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
+        "[View image](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
       customerFacingInstructionMarkdown:
-        "1. Click Change.\n\n   [Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
+        "1. Click Change.\n\n   [View image](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
       responseGuidance: {
         supportFooter: "footer",
         doNotExpose: [],
@@ -491,7 +503,13 @@ test("helpResourceDetailResponse emits Markdown text before optional binary imag
   );
   assert.match(
     String((response.content[1] as { text?: string }).text),
-    /\[Changing a customer: Click Change\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\/token\)/,
+    /\[View image\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/1001\/token\)/,
+  );
+  assert.equal(
+    String((response.content[1] as { text?: string }).text).includes(
+      "Changing a customer: Click Change",
+    ),
+    false,
   );
   assert.equal(response.content[2]?.type, "text");
   assert.equal(response.content[3]?.type, "image");
@@ -511,7 +529,7 @@ test("helpResourceDetailResponse links mode has Markdown without binary images",
       imageCount: 1,
       imagePresentation: "links",
       customerFacingScreenshotMarkdown:
-        "[Changing a customer: Click Change](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
+        "[View image](https://red.example.com/public/brc-edu/freshdesk-images/1001/token)",
       responseGuidance: {
         supportFooter: "footer",
         doNotExpose: [],
@@ -883,6 +901,8 @@ test("text-only contentBlocks semantically match syncedImages to steps", async (
     assert.match(captions, /Lookup|Add|Save|customer details/i);
 
     const markdown = result.payload.customerFacingInstructionMarkdown ?? "";
+    assert.match(markdown, /\[View image\]\(https:\/\//);
+    assert.equal(/Adding a customer:|Article image \d/i.test(markdown), false);
     const lookupStepPos = markdown.indexOf("Click Lookup or Setup");
     const addStepPos = markdown.indexOf("Click Customers, then click Add");
     const lookupShotPos = markdown.indexOf("](https://", lookupStepPos);
@@ -985,7 +1005,11 @@ test("explicit image contentBlocks still preserve step placement", async () => {
     assert.equal(result.payload.instructionBlocks?.[1]?.type, "screenshot");
     assert.match(
       result.payload.customerFacingInstructionMarkdown ?? "",
-      /Click Customers, then click Add[\s\S]*\(https:\/\/red\.example\.com/,
+      /Click Customers, then click Add[\s\S]*\[View image\]\(https:\/\/red\.example\.com/,
+    );
+    assert.equal(
+      result.payload.customerFacingInstructionMarkdown?.includes("Add customer"),
+      false,
     );
     assert.ok(result.payload.customerFacingSourcesMarkdown);
   }

@@ -12,6 +12,7 @@ import {
 import {
   buildFreshdeskScreenshotUrls,
   buildOrderedArticleImageCaption,
+  FRESHDESK_SCREENSHOT_LINK_LABEL,
   toCustomerFacingScreenshotUrl,
   type FreshdeskScreenshotUrl,
 } from "../freshdesk/freshdesk-public-image-url.js";
@@ -91,9 +92,11 @@ export type { HelpImagePresentation } from "../freshdesk/screenshot-markdown.js"
 export const FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE = [
   "Copy the exact Markdown links from customerFacingScreenshotMarkdown or customerFacingInstructionMarkdown into the final customer-facing answer.",
   "Place each link after the related step.",
+  "Use the short link text View image (or View image N when one step has multiple images).",
+  "Do not paste the descriptive screenshot caption as a second instruction sentence.",
   "Do not merely describe the screenshots.",
   "Do not say Here are the screenshots without including the links.",
-  "Do not replace links with Screenshot 1, Tool result, Show Image, or generic text.",
+  "Do not replace links with Screenshot 1, Tool result, Show Image, or invent different URLs.",
   "Do not depend on tool-result image previews being visible to the user.",
   "The final answer must contain the exact signed Markdown links.",
   "If no links are returned, clearly say that no matching screenshot was found.",
@@ -104,13 +107,13 @@ export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
   "When customerFacingInstructionMarkdown is returned, prefer copying that Markdown into the answer, preserving every screenshot link exactly.",
   "When instructionBlocks are returned, follow them in order.",
   "Place each screenshot link immediately after the step it illustrates.",
-  "Use the exact supplied caption as the clickable Markdown link text, for example [Changing a customer: Click Change](EXACT_SIGNED_IMAGE_URL).",
-  "Never replace the caption with Show Image, View Image, Screenshot, or any other generic label.",
+  "Use the short link text View image (or View image N for multiple images on the same step), for example [View image](EXACT_SIGNED_IMAGE_URL).",
+  "Keep descriptive captions on instructionBlocks / screenshotUrls for accessibility and the image viewer — do not repeat them as plain instruction text.",
   "Do not group screenshots into a separate Relevant screenshots section when step-and-link Markdown is available.",
   "Omit screenshots from unused workflow branches.",
   "Omit unclear screenshots rather than guessing.",
   "Do not repeat a screenshot.",
-  "Do not invent captions — use only the caption supplied on each screenshot block.",
+  "Do not invent captions or URLs.",
   "Do not say screenshots are displayed inline unless the chat client actually rendered them.",
   "Keep the official Freshdesk article link in the Sources section.",
   "Use the exact supplied signed public URL — do not rewrite, shorten, or replace it.",
@@ -118,11 +121,11 @@ export const FRESHDESK_INSTRUCTION_BLOCKS_GUIDANCE = [
 ].join(" ");
 
 export const FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE = [
-  "When instructionBlocks are not available, use customerFacingScreenshotMarkdown or screenshotUrls with their descriptive captions.",
-  "Place each screenshot after the most relevant paragraph where possible.",
-  "Use the exact supplied caption as the clickable Markdown link text.",
+  "When instructionBlocks are not available, use customerFacingScreenshotMarkdown or screenshotUrls.",
+  "Place each [View image](URL) link after the most relevant paragraph where possible.",
+  "Use the short View image link text — do not use the descriptive caption as link text or as a second instruction sentence.",
   "Never label screenshot links Show Image.",
-  "Do not invent captions.",
+  "Do not invent captions or URLs.",
   "Omit unclear screenshots rather than guessing.",
   "Do not claim screenshots are shown inline unless the client actually rendered them.",
   "MCP image content blocks are a fallback only.",
@@ -359,52 +362,71 @@ function buildDetailSourceFields(resource: {
 function sanitizeScreenshotUrls(
   screenshots: FreshdeskScreenshotUrl[],
 ): FreshdeskScreenshotUrl[] {
-  return screenshots
-    .map((screenshot, index) => {
-      const facing = toCustomerFacingScreenshotUrl(screenshot);
-      if (!facing.url) {
-        return null;
-      }
+  const sanitized: FreshdeskScreenshotUrl[] = [];
 
-      // Keep synced images even when altText/order/context is missing — use a
-      // stable non-rejected caption instead of dropping the screenshot.
-      if (!facing.caption || isRejectedFreshdeskCaption(facing.caption)) {
-        return {
-          ...facing,
-          caption: buildOrderedArticleImageCaption(index + 1),
-        };
-      }
+  for (let index = 0; index < screenshots.length; index += 1) {
+    const screenshot = screenshots[index];
+    if (!screenshot) {
+      continue;
+    }
 
-      return facing;
-    })
-    .filter((screenshot): screenshot is FreshdeskScreenshotUrl =>
-      Boolean(screenshot),
-    );
+    const facing = toCustomerFacingScreenshotUrl(screenshot);
+    if (!facing.url) {
+      continue;
+    }
+
+    // Keep synced images even when altText/order/context is missing — use a
+    // stable non-rejected caption instead of dropping the screenshot.
+    const caption =
+      !facing.caption || isRejectedFreshdeskCaption(facing.caption)
+        ? buildOrderedArticleImageCaption(index + 1)
+        : facing.caption;
+
+    sanitized.push({
+      ...facing,
+      caption,
+      linkLabel: facing.linkLabel || FRESHDESK_SCREENSHOT_LINK_LABEL,
+    });
+  }
+
+  return sanitized;
 }
 
 function sanitizeInstructionBlocks(
   blocks: HelpInstructionBlock[],
 ): HelpInstructionBlock[] {
-  return blocks
-    .map((block, index) => {
-      if (block.type === "text") {
-        return Boolean(block.text.trim()) ? block : null;
-      }
+  const sanitized: HelpInstructionBlock[] = [];
 
-      if (!block.url) {
-        return null;
-      }
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (!block) {
+      continue;
+    }
 
-      if (!block.caption || isRejectedFreshdeskCaption(block.caption)) {
-        return {
-          ...block,
-          caption: buildOrderedArticleImageCaption(index + 1),
-        };
+    if (block.type === "text") {
+      if (block.text.trim()) {
+        sanitized.push(block);
       }
+      continue;
+    }
 
-      return block;
-    })
-    .filter((block): block is HelpInstructionBlock => Boolean(block));
+    if (!block.url) {
+      continue;
+    }
+
+    const caption =
+      !block.caption || isRejectedFreshdeskCaption(block.caption)
+        ? buildOrderedArticleImageCaption(index + 1)
+        : block.caption;
+
+    sanitized.push({
+      ...block,
+      caption,
+      linkLabel: block.linkLabel || FRESHDESK_SCREENSHOT_LINK_LABEL,
+    });
+  }
+
+  return sanitized;
 }
 
 export async function getHelpResourceDetails(
@@ -546,6 +568,7 @@ export async function getHelpResourceDetails(
         useMatchedStepPlacement
           ? instructionScreenshots.map((block) => ({
               caption: block.caption,
+              linkLabel: block.linkLabel,
               url: block.url,
               mimeType: block.mimeType,
             }))

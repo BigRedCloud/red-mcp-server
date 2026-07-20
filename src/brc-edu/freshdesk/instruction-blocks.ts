@@ -1,4 +1,5 @@
 import type { FreshdeskScreenshotUrl } from "./freshdesk-public-image-url.js";
+import { FRESHDESK_SCREENSHOT_LINK_LABEL } from "./freshdesk-public-image-url.js";
 import { buildFreshdeskScreenshotCaption } from "./screenshot-caption.js";
 import type { FreshdeskArticleContentBlock } from "./types.js";
 import {
@@ -20,7 +21,10 @@ export type HelpInstructionTextBlock = {
 
 export type HelpInstructionScreenshotBlock = {
   type: "screenshot";
+  /** Descriptive caption for matching / accessibility — not Markdown link text. */
   caption: string;
+  /** Short customer-facing Markdown link label (defaults to "View image"). */
+  linkLabel?: string;
   url: string;
   mimeType: string;
 };
@@ -585,6 +589,7 @@ export function buildFreshdeskInstructionBlocks(
     blocks.push({
       type: "screenshot",
       caption: captionForImage(best.image),
+      linkLabel: FRESHDESK_SCREENSHOT_LINK_LABEL,
       url: screenshot.url,
       mimeType: screenshot.mimeType,
     });
@@ -599,6 +604,7 @@ export function buildFreshdeskInstructionBlocks(
       blocks.push({
         type: "screenshot",
         caption: screenshot.caption,
+        linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
         url: screenshot.url,
         mimeType: screenshot.mimeType,
       });
@@ -626,6 +632,7 @@ export function enrichScreenshotUrlCaptions(
       .filter((screenshot) => isValidScreenshotUrl(screenshot.url))
       .map((screenshot) => ({
         ...screenshot,
+        linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
         caption: buildFreshdeskScreenshotCaption({
           altText: screenshot.caption,
         }),
@@ -658,6 +665,7 @@ export function enrichScreenshotUrlCaptions(
       url: screenshot.url,
       mimeType: screenshot.mimeType,
       imageIndex,
+      linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
       caption: buildFreshdeskScreenshotCaption({
         altText: context?.altText ?? screenshot.caption,
         nearbyHeading: context?.nearbyHeading,

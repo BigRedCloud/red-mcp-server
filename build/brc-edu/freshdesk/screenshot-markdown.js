@@ -1,30 +1,49 @@
-import { isGenericFreshdeskAltText, isRejectedFreshdeskCaption, } from "./screenshot-caption.js";
+import { FRESHDESK_SCREENSHOT_LINK_LABEL } from "./freshdesk-public-image-url.js";
 export const DEFAULT_HELP_IMAGE_PRESENTATION = "links";
-export const SCREENSHOT_MARKDOWN_COPY_INSTRUCTION = "Include the following exact Markdown links in the customer-facing answer, placed after the related steps. Do not replace the link text or URL.";
-export function toScreenshotMarkdownLink(caption, url) {
-    const cleanedCaption = caption.trim();
+export const SCREENSHOT_MARKDOWN_COPY_INSTRUCTION = "Include the following exact Markdown links in the customer-facing answer, placed after the related steps. Keep the short View image link text and exact signed URL — do not replace them with the descriptive caption.";
+export function isValidHttpsScreenshotUrl(url) {
     const cleanedUrl = url.trim();
-    if (!cleanedCaption || !cleanedUrl) {
-        return null;
-    }
-    if (isRejectedFreshdeskCaption(cleanedCaption) || isGenericFreshdeskAltText(cleanedCaption)) {
-        return null;
+    if (!cleanedUrl) {
+        return false;
     }
     try {
         const parsed = new URL(cleanedUrl);
-        if (parsed.protocol !== "https:") {
-            return null;
-        }
+        return parsed.protocol === "https:";
     }
     catch {
+        return false;
+    }
+}
+export function buildScreenshotLinkLabel(indexWithinStep = 0, countWithinStep = 1) {
+    return countWithinStep > 1
+        ? `View image ${indexWithinStep + 1}`
+        : FRESHDESK_SCREENSHOT_LINK_LABEL;
+}
+/**
+ * Customer-facing Markdown link. Uses a short neutral label; never the
+ * descriptive caption (which is retained separately for matching/viewer).
+ */
+export function buildScreenshotLinkMarkdown(screenshot, indexWithinStep = 0, countWithinStep = 1) {
+    const cleanedUrl = screenshot.url.trim();
+    if (!isValidHttpsScreenshotUrl(cleanedUrl)) {
         return null;
     }
-    return `[${cleanedCaption}](${cleanedUrl})`;
+    const label = countWithinStep > 1
+        ? buildScreenshotLinkLabel(indexWithinStep, countWithinStep)
+        : screenshot.linkLabel?.trim() || buildScreenshotLinkLabel();
+    return `[${label}](${cleanedUrl})`;
+}
+/**
+ * @deprecated Prefer buildScreenshotLinkMarkdown. Kept for callers that still
+ * pass a caption; the caption is ignored as link text and replaced with View image.
+ */
+export function toScreenshotMarkdownLink(_caption, url) {
+    return buildScreenshotLinkMarkdown({ url });
 }
 export function buildScreenshotLinksMarkdown(screenshots) {
     const links = [];
     for (const screenshot of screenshots) {
-        const link = toScreenshotMarkdownLink(screenshot.caption, screenshot.url);
+        const link = buildScreenshotLinkMarkdown(screenshot);
         if (link) {
             links.push(link);
         }
@@ -38,10 +57,21 @@ export function buildCustomerFacingScreenshotMarkdown(screenshots) {
     }
     return links.join("\n\n");
 }
+function collectFollowingScreenshots(instructionBlocks, startIndex) {
+    const screenshots = [];
+    for (let index = startIndex; index < instructionBlocks.length; index += 1) {
+        const block = instructionBlocks[index];
+        if (block?.type !== "screenshot") {
+            break;
+        }
+        screenshots.push(block);
+    }
+    return screenshots;
+}
 /**
  * Deterministic customer-facing Markdown from ordered instructionBlocks.
- * Numbers only instructional text steps that are followed by a screenshot or
- * stand alone as procedure steps.
+ * Numbers instructional text steps; places short View image links after each
+ * matched step. Descriptive captions are never emitted as link text or plain text.
  */
 export function buildCustomerFacingInstructionMarkdown(instructionBlocks) {
     if (!instructionBlocks || instructionBlocks.length === 0) {
@@ -49,43 +79,49 @@ export function buildCustomerFacingInstructionMarkdown(instructionBlocks) {
     }
     const parts = [];
     let stepNumber = 0;
-    for (let index = 0; index < instructionBlocks.length; index += 1) {
+    let index = 0;
+    while (index < instructionBlocks.length) {
         const block = instructionBlocks[index];
         if (!block) {
+            index += 1;
             continue;
         }
         if (block.type === "text") {
             const text = block.text.trim();
             if (!text) {
+                index += 1;
                 continue;
             }
-            const next = instructionBlocks[index + 1];
-            const hasScreenshot = next?.type === "screenshot" &&
-                Boolean(toScreenshotMarkdownLink(next.caption, next.url));
+            const followingScreenshots = collectFollowingScreenshots(instructionBlocks, index + 1).filter((screenshot) => isValidHttpsScreenshotUrl(screenshot.url));
             // Skip short section headings unless they have an attached screenshot.
-            if (!hasScreenshot &&
+            if (followingScreenshots.length === 0 &&
                 text.length < 40 &&
                 !/\b(click|go to|open|enter|fill|select|save|add|change)\b/i.test(text)) {
+                index += 1;
                 continue;
             }
             stepNumber += 1;
             parts.push(`${stepNumber}. ${text}`);
-            if (hasScreenshot && next?.type === "screenshot") {
-                const link = toScreenshotMarkdownLink(next.caption, next.url);
+            const count = followingScreenshots.length;
+            for (let shotIndex = 0; shotIndex < count; shotIndex += 1) {
+                const screenshot = followingScreenshots[shotIndex];
+                if (!screenshot) {
+                    continue;
+                }
+                const link = buildScreenshotLinkMarkdown(screenshot, shotIndex, count);
                 if (link) {
                     parts.push(`   ${link}`);
                 }
             }
+            index += 1 + followingScreenshots.length;
             continue;
         }
-        // Orphan screenshot without a preceding text step in this pass — still emit.
-        if (index === 0 ||
-            instructionBlocks[index - 1]?.type !== "text") {
-            const link = toScreenshotMarkdownLink(block.caption, block.url);
-            if (link) {
-                parts.push(link);
-            }
+        // Orphan screenshot without a preceding text step — still emit View image.
+        const link = buildScreenshotLinkMarkdown(block);
+        if (link) {
+            parts.push(link);
         }
+        index += 1;
     }
     if (parts.length === 0) {
         return undefined;

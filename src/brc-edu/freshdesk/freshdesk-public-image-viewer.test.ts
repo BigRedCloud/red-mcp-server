@@ -107,6 +107,8 @@ test("buildFreshdeskPublicImageViewerHtml keeps centred layout and visible capti
   assert.match(html, /max-width:\s*96vw/);
   assert.match(html, /max-height:\s*90vh/);
   assert.match(html, /Add Customer &lt;screen&gt; &amp; &quot;steps&quot;/);
+  // Viewer caption stays descriptive — not the Markdown "View image" link label.
+  assert.equal(html.includes(">View image<"), false);
   assert.match(
     html,
     /src="\/public\/brc-edu\/freshdesk-images\/1001\/token"/,

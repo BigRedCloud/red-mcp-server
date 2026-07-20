@@ -1,3 +1,4 @@
+import { FRESHDESK_SCREENSHOT_LINK_LABEL } from "./freshdesk-public-image-url.js";
 import { buildFreshdeskScreenshotCaption } from "./screenshot-caption.js";
 import { actionsOverlapScore, blockMatchesSelectedWorkflows, classifyFreshdeskWorkflows, extractNearbyActions, resolveMutuallyExclusiveConflicts, selectWorkflowsFromQuestion, textTokenOverlap, } from "./workflow-context.js";
 /** Minimum score required to attach a screenshot to an instruction step. */
@@ -350,6 +351,7 @@ export function buildFreshdeskInstructionBlocks(contentBlocks, screenshotUrls, o
         blocks.push({
             type: "screenshot",
             caption: captionForImage(best.image),
+            linkLabel: FRESHDESK_SCREENSHOT_LINK_LABEL,
             url: screenshot.url,
             mimeType: screenshot.mimeType,
         });
@@ -363,6 +365,7 @@ export function buildFreshdeskInstructionBlocks(contentBlocks, screenshotUrls, o
             blocks.push({
                 type: "screenshot",
                 caption: screenshot.caption,
+                linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
                 url: screenshot.url,
                 mimeType: screenshot.mimeType,
             });
@@ -380,6 +383,7 @@ export function enrichScreenshotUrlCaptions(screenshotUrls, contentBlocks, optio
             .filter((screenshot) => isValidScreenshotUrl(screenshot.url))
             .map((screenshot) => ({
             ...screenshot,
+            linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
             caption: buildFreshdeskScreenshotCaption({
                 altText: screenshot.caption,
             }),
@@ -404,6 +408,7 @@ export function enrichScreenshotUrlCaptions(screenshotUrls, contentBlocks, optio
             url: screenshot.url,
             mimeType: screenshot.mimeType,
             imageIndex,
+            linkLabel: screenshot.linkLabel ?? FRESHDESK_SCREENSHOT_LINK_LABEL,
             caption: buildFreshdeskScreenshotCaption({
                 altText: context?.altText ?? screenshot.caption,
                 nearbyHeading: context?.nearbyHeading,

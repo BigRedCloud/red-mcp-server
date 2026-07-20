@@ -18,8 +18,14 @@ import {
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX =
   "/public/brc-edu/freshdesk-images";
 
+/** Neutral Markdown link text — never use the descriptive caption as link text. */
+export const FRESHDESK_SCREENSHOT_LINK_LABEL = "View image";
+
 export type FreshdeskScreenshotUrl = {
+  /** Descriptive caption for matching, viewer, and accessibility — not Markdown link text. */
   caption: string;
+  /** Short customer-facing Markdown link label (e.g. "View image"). */
+  linkLabel?: string;
   mimeType: string;
   url: string;
   /**
@@ -132,6 +138,7 @@ export function buildFreshdeskScreenshotUrls(
 
     screenshotUrls.push({
       caption: buildScreenshotCaption(syncedImage.altText, index + 1),
+      linkLabel: FRESHDESK_SCREENSHOT_LINK_LABEL,
       mimeType,
       url,
       imageIndex: syncedImage.order,
@@ -148,6 +155,7 @@ export function toCustomerFacingScreenshotUrl(
 ): FreshdeskScreenshotUrl {
   return {
     caption: screenshot.caption,
+    linkLabel: screenshot.linkLabel?.trim() || FRESHDESK_SCREENSHOT_LINK_LABEL,
     mimeType: screenshot.mimeType,
     url: screenshot.url,
   };
