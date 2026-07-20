@@ -133,11 +133,64 @@ export function helpSearchResultsToSourceInputs(
   source: HelpResourceSource;
   publicUrl?: string | null;
   registrationUrl?: string | null;
+  resourceId?: string;
 }> {
   return results.map((result) => ({
     title: result.title,
     source: result.source,
     publicUrl: result.publicUrl,
     registrationUrl: result.registrationUrl,
+    resourceId: result.resourceId,
   }));
+}
+
+/**
+ * Choose the resources that should appear under Sources for a tutorial answer.
+ * Prefer the strongest Freshdesk procedural article; otherwise the top result only.
+ * Never dump the full search list into Sources.
+ */
+export function selectUsedHelpResources(
+  results: HelpSearchResult[],
+  options?: {
+    intentIsProcedural?: boolean;
+    maxUsed?: number;
+  },
+): HelpSearchResult[] {
+  if (results.length === 0) {
+    return [];
+  }
+
+  const maxUsed = options?.maxUsed ?? 1;
+  const strongFreshdesk = results.find(
+    (result) =>
+      result.source === "freshdesk" &&
+      result.relevanceScore >= 500 &&
+      Boolean(result.publicUrl),
+  );
+
+  if (strongFreshdesk) {
+    return [strongFreshdesk];
+  }
+
+  if (options?.intentIsProcedural) {
+    const anyFreshdesk = results.find(
+      (result) => result.source === "freshdesk" && Boolean(result.publicUrl),
+    );
+    if (anyFreshdesk) {
+      return [anyFreshdesk];
+    }
+  }
+
+  return results.slice(0, maxUsed);
+}
+
+export function filterHelpResultsByUsedIds(
+  results: HelpSearchResult[],
+  usedResourceIds: string[],
+): HelpSearchResult[] {
+  if (usedResourceIds.length === 0) {
+    return [];
+  }
+  const allowed = new Set(usedResourceIds);
+  return results.filter((result) => allowed.has(result.resourceId));
 }

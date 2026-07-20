@@ -154,7 +154,8 @@ test("used Freshdesk article appears under Sources with exact publicUrl", () => 
     freshdeskArticles: [freshdeskArticle()],
   });
 
-  assert.ok(response.sources.length >= 1);
+  assert.deepEqual(response.usedResourceIds, ["freshdesk:1001"]);
+  assert.equal(response.sources.length, 1);
   assert.ok(response.customerFacingSourcesMarkdown?.startsWith("Sources"));
   const freshdeskSource = response.sources.find(
     (source) => source.sourceType === "support_article",
@@ -166,6 +167,10 @@ test("used Freshdesk article appears under Sources with exact publicUrl", () => 
   );
   assert.equal(
     response.customerFacingSourcesMarkdown?.includes("bigredcloud.com/support/how"),
+    false,
+  );
+  assert.equal(
+    response.customerFacingSourcesMarkdown?.includes("Getting Started"),
     false,
   );
 });
@@ -213,7 +218,7 @@ test("Do this through Red appears for customer creation when tool is enabled", (
   );
   assert.match(
     capability.customerFacingRedActionMarkdown ?? "",
-    /preview before anything is saved/i,
+    /I'll collect the required details and show you a preview before anything is saved/i,
   );
   assert.equal(
     /already (created|saved|posted|changed)/i.test(

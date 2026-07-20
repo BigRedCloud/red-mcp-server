@@ -69,13 +69,19 @@ test("searchUnifiedHelpResources searches all four sources", () => {
     assert.ok(sources.has("freshdesk"));
     assert.ok(sources.has("recorded_webinar"));
 });
-test("procedural query prefers customer documentation", () => {
+test("procedural bank reconciliation query prefers Freshdesk article", () => {
+    const bankRec = {
+        ...freshdeskArticle(),
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        publicUrl: BANK_RECON_CANONICAL_URL,
+    };
     const results = searchUnifiedHelpResources("how do I complete a bank reconciliation", {
         customerDocs: [customerDoc()],
-        freshdeskArticles: [freshdeskArticle()],
+        freshdeskArticles: [bankRec],
         recordedWebinars: parseEnrichedEduCsv(WEBINAR_CSV),
     });
-    assert.equal(results[0]?.source, "customer_docs");
+    assert.equal(results[0]?.source, "freshdesk");
+    assert.match(results[0]?.title ?? "", /Bank Reconciliation/i);
 });
 test("video query includes recorded webinar", () => {
     const results = searchUnifiedHelpResources("bank reconciliation video walkthrough", {
@@ -131,7 +137,7 @@ test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance
     assert.match(response.responseGuidance.format.join(" "), /concise synthesized direct answer/i);
     assert.match(response.responseGuidance.supportFooter, /bigredcloud.com\/contact/);
     assert.match(response.responseGuidance.format.join(" "), /bigredcloud\.freshdesk\.com/i);
-    assert.match(response.responseGuidance.format.join(" "), /Sources section/i);
+    assert.match(response.responseGuidance.format.join(" "), /Sources/i);
     assert.match(response.responseGuidance.autoScreenshots ?? "", /includeImages=true/i);
 });
 test("bank reconciliation Freshdesk search returns exact canonical URL", () => {
@@ -226,4 +232,110 @@ test("add my first customer still prefers Add Customer over Opening Balance", ()
         freshdeskArticles: [openingBalance, addCustomer],
     });
     assert.equal(results[0]?.title, "How do I add a Customer?");
+});
+test("How do I add a customer in Big Red Cloud ranks freshdesk:157000368447 first", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-157000368447",
+        freshdeskArticleId: 157000368447,
+        folderName: "Customers",
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer",
+    };
+    const login = {
+        ...freshdeskArticle(),
+        id: "freshdesk-login",
+        freshdeskArticleId: 9001,
+        title: "How do I log in to Big Red Cloud?",
+        bodyText: "Enter your username, password and API key.",
+        syncedImages: [],
+    };
+    const users = {
+        ...freshdeskArticle(),
+        id: "freshdesk-users",
+        freshdeskArticleId: 9002,
+        title: "How do I add a User?",
+        bodyText: "Open Users and add a new user.",
+        syncedImages: [],
+    };
+    const results = searchUnifiedHelpResources("How do I add a customer in Big Red Cloud?", {
+        freshdeskArticles: [login, users, addCustomer],
+        recordedWebinars: parseEnrichedEduCsv(WEBINAR_CSV),
+        upcomingWebinars: [upcomingWebinar()],
+    });
+    assert.equal(results[0]?.resourceId, "freshdesk:157000368447");
+    assert.equal(results[0]?.title, "How do I add a Customer?");
+});
+test("reconcile my bank finds Bank Reconciliation on the first request", () => {
+    const bankRec = {
+        ...freshdeskArticle(),
+        id: "freshdesk-157000368991",
+        freshdeskArticleId: 157000368991,
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        bodyText: "Open the cash book and complete the bank reconciliation.",
+        syncedImages: [],
+        publicUrl: BANK_RECON_CANONICAL_URL,
+    };
+    const login = {
+        ...freshdeskArticle(),
+        id: "freshdesk-login",
+        freshdeskArticleId: 9001,
+        title: "How do I log in to Big Red Cloud?",
+        bodyText: "Enter your username and password for Big Red Cloud.",
+        syncedImages: [],
+    };
+    const fullQuestion = searchUnifiedHelpResources("How do I reconcile my bank in Big Red Cloud?", { freshdeskArticles: [login, bankRec] });
+    const bankRecQuery = searchUnifiedHelpResources("bank rec", {
+        freshdeskArticles: [login, bankRec],
+    });
+    const reconcileQuery = searchUnifiedHelpResources("reconcile my bank", {
+        freshdeskArticles: [login, bankRec],
+    });
+    assert.equal(fullQuestion[0]?.resourceId, "freshdesk:157000368991");
+    assert.equal(bankRecQuery[0]?.resourceId, "freshdesk:157000368991");
+    assert.equal(reconcileQuery[0]?.resourceId, "freshdesk:157000368991");
+});
+test("Sources include only used resources, not login or webinar hits", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-157000368447",
+        freshdeskArticleId: 157000368447,
+        folderName: "Customers",
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer",
+    };
+    const login = {
+        ...freshdeskArticle(),
+        id: "freshdesk-login",
+        freshdeskArticleId: 9001,
+        title: "How do I log in to Big Red Cloud?",
+        bodyText: "API key and login for Big Red Cloud users.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/9001-login",
+    };
+    const response = buildUnifiedFindHelpResourcesResponse("How do I add a customer in Big Red Cloud?", {
+        freshdeskArticles: [login, addCustomer],
+        recordedWebinars: parseEnrichedEduCsv(WEBINAR_CSV),
+        upcomingWebinars: [upcomingWebinar()],
+        customerDocs: [customerDoc()],
+    });
+    assert.deepEqual(response.usedResourceIds, ["freshdesk:157000368447"]);
+    assert.equal(response.sources.length, 1);
+    assert.equal(response.sources[0]?.title, "How do I add a Customer?");
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("log in"), false);
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("Webinar"), false);
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("API"), false);
+    assert.match(response.responseGuidance.format.join(" "), /never claim no dedicated help article exists/i);
+    assert.ok(response.customerFacingAnswerSectionsMarkdown?.startsWith("Sources"));
+    const sections = response.customerFacingAnswerSectionsMarkdown ?? "";
+    const sourcesPos = sections.indexOf("Sources");
+    const redPos = sections.indexOf("Do this through Red");
+    assert.ok(sourcesPos >= 0);
+    if (response.redActionAvailable) {
+        assert.ok(redPos > sourcesPos);
+    }
 });

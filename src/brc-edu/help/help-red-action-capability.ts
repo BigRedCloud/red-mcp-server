@@ -35,7 +35,7 @@ const RED_ACTION_DEFINITIONS: RedActionDefinition[] = [
     markdown: [
       "Do this through Red",
       "",
-      "You can also create the customer directly here through Red. I'll collect the required customer details and show you a preview before anything is saved.",
+      "You can also create the customer directly here through Red. I'll collect the required details and show you a preview before anything is saved.",
     ].join("\n"),
   },
   {

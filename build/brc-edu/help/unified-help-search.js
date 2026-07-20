@@ -3,10 +3,11 @@ import { normaliseHelpSearchText, tokenizeHelpSearchQuestion, } from "../freshde
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, isFreshdeskPublicArticleUrl, } from "../freshdesk/freshdesk-article-url.js";
 import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 import { isPublicHttpsUrl } from "./help-resource-types.js";
-import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSourcesMarkdownTextBlock, helpSearchResultsToSourceInputs, } from "./help-answer-sources.js";
+import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSourcesMarkdownTextBlock, helpSearchResultsToSourceInputs, selectUsedHelpResources, } from "./help-answer-sources.js";
 import { SUPPORT_CONTACT_URL, SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMarkdownTextBlock, resolveSupportFallback, } from "./help-support-fallback.js";
-import { AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, } from "./help-answer-layout.js";
+import { AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, buildHelpAnswerSectionsMarkdown, } from "./help-answer-layout.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
+import { detectHelpProceduralIntent, expandHelpSearchQueries, scoreProceduralTitleMatch, } from "./help-query-expansion.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
 export const SUPPORT_FOOTER_GUIDANCE = "For advice specific to your company, or for more specialised assistance, please contact the Big Red Cloud support team: https://bigredcloud.com/contact/";
@@ -58,18 +59,29 @@ function stripProceduralTitleNoise(value) {
  * Prefer near-exact title matches and avoid boosting opening-balance articles
  * unless the query mentions opening/outstanding/existing balance.
  *
- * Bonuses stay small so this does not reorder non-Freshdesk sources.
+ * Also applies strong entity+action title boosts from query expansion.
  */
 export function adjustFreshdeskHelpScore(question, title, baseScore) {
-    if (baseScore <= 0) {
+    const proceduralBoost = scoreProceduralTitleMatch(question, title);
+    if (proceduralBoost < 0) {
+        return Math.max(0, baseScore + proceduralBoost);
+    }
+    let score = Math.max(baseScore, 0);
+    if (proceduralBoost > 0) {
+        score = Math.max(score, proceduralBoost);
+    }
+    if (score <= 0) {
         return 0;
     }
-    let score = baseScore;
     const queryMentionsOpeningBalance = OPENING_BALANCE_QUERY_PATTERN.test(question);
     const titleIsOpeningBalance = OPENING_BALANCE_TITLE_PATTERN.test(title);
+    const intent = detectHelpProceduralIntent(question);
     if (titleIsOpeningBalance) {
-        if (queryMentionsOpeningBalance) {
+        if (queryMentionsOpeningBalance || intent === "opening_balance") {
             score += 80;
+        }
+        else if (intent === "add_customer" || intent === "add_supplier") {
+            score -= 500;
         }
         else {
             score -= 220;
@@ -77,9 +89,8 @@ export function adjustFreshdeskHelpScore(question, title, baseScore) {
     }
     const queryCore = stripProceduralTitleNoise(question);
     const titleCore = stripProceduralTitleNoise(title);
-    if (queryCore && titleCore) {
+    if (queryCore && titleCore && proceduralBoost === 0) {
         if (titleCore.startsWith(`${queryCore} `)) {
-            // Title adds extra topic words beyond the query core (e.g. opening balance).
             const extra = titleCore.slice(queryCore.length).trim();
             if (extra && !queryMentionsOpeningBalance) {
                 score -= Math.min(80, 20 + extra.split(/\s+/).length * 25);
@@ -222,115 +233,133 @@ function dedupeSearchResults(entries) {
         .map((entry) => entry.result);
 }
 export function searchUnifiedHelpResources(question, sources, options) {
-    const questionTokens = tokenizeHelpSearchQuestion(question);
     const maxResults = options?.maxResults ?? DEFAULT_HELP_SEARCH_MAX_RESULTS;
     const sourceFilter = options?.sourceFilter ?? "all";
     const syncedAt = new Date().toISOString();
-    const entries = [];
+    const expandedQueries = expandHelpSearchQueries(question);
+    const intent = detectHelpProceduralIntent(question);
+    const bestByKey = new Map();
     const includeSource = (source) => sourceFilter === "all" || sourceFilter === source;
-    if (includeSource("customer_docs")) {
-        for (const resource of sources.customerDocs ?? []) {
-            if (!resource.enabled) {
-                continue;
+    const consider = (dedupeKey, score, result) => {
+        if (score <= 0) {
+            return;
+        }
+        const existing = bestByKey.get(dedupeKey);
+        if (!existing || score > existing.score) {
+            bestByKey.set(dedupeKey, {
+                score,
+                result: { ...result, relevanceScore: score },
+                dedupeKey,
+            });
+        }
+    };
+    for (const query of expandedQueries) {
+        const questionTokens = tokenizeHelpSearchQuestion(query);
+        if (includeSource("customer_docs")) {
+            for (const resource of sources.customerDocs ?? []) {
+                if (!resource.enabled) {
+                    continue;
+                }
+                let score = sourceBoost("customer_docs", query, scoreTextMatch(query, questionTokens, [
+                    resource.title,
+                    resource.category,
+                    resource.bodyText,
+                    resource.topics.join(" "),
+                ]));
+                // Prefer official Freshdesk procedural articles for how-to intents.
+                if (intent && intent !== "opening_balance") {
+                    score = Math.max(0, score - 40);
+                }
+                consider(`customer_docs:${resource.url}`, score, toHelpSearchResult(resource, score));
             }
-            const score = sourceBoost("customer_docs", question, scoreTextMatch(question, questionTokens, [
-                resource.title,
-                resource.category,
-                resource.bodyText,
-                resource.topics.join(" "),
-            ]));
-            if (score > 0) {
-                entries.push({
-                    score,
-                    result: toHelpSearchResult(resource, score),
-                    dedupeKey: `customer_docs:${resource.url}`,
-                });
+        }
+        if (includeSource("freshdesk")) {
+            for (const article of sources.freshdeskArticles ?? []) {
+                if (!article.enabled) {
+                    continue;
+                }
+                const normalized = fromFreshdeskResource(article);
+                const score = adjustFreshdeskHelpScore(question, normalized.title, sourceBoost("freshdesk", query, scoreTextMatch(query, questionTokens, [
+                    normalized.title,
+                    normalized.category,
+                    normalized.bodyText,
+                ])));
+                consider(`freshdesk:${article.freshdeskArticleId}`, score, toHelpSearchResult(normalized, score));
+            }
+        }
+        if (includeSource("recorded_webinar")) {
+            for (const resource of sources.recordedWebinars ?? []) {
+                if (!resource.isActive) {
+                    continue;
+                }
+                const normalized = fromRecordedWebinarResource(resource, syncedAt);
+                let score = sourceBoost("recorded_webinar", query, scoreTextMatch(query, questionTokens, [
+                    normalized.title,
+                    normalized.category,
+                    normalized.bodyText,
+                    normalized.topics.join(" "),
+                ]));
+                if (intent && !/\b(video|webinar|recording|watch)\b/i.test(question)) {
+                    score = Math.max(0, score - 60);
+                }
+                consider(`recorded_webinar:${normalized.url}`, score, toHelpSearchResult(normalized, score));
+            }
+        }
+        if (includeSource("upcoming_webinar")) {
+            for (const resource of sources.upcomingWebinars ?? []) {
+                if (!resource.enabled) {
+                    continue;
+                }
+                const normalized = fromUpcomingWebinarResource(resource);
+                let score = sourceBoost("upcoming_webinar", query, scoreTextMatch(query, questionTokens, [
+                    normalized.title,
+                    normalized.eventDay ?? "",
+                    normalized.bodyText,
+                    normalized.topics.join(" "),
+                ]));
+                if (intent && !isTrainingOrLiveHelpQuery(question)) {
+                    score = Math.max(0, score - 80);
+                }
+                consider(`upcoming_webinar:${normalized.resourceId}`, score, toHelpSearchResult(normalized, score));
             }
         }
     }
-    if (includeSource("freshdesk")) {
-        for (const article of sources.freshdeskArticles ?? []) {
-            if (!article.enabled) {
-                continue;
-            }
-            const normalized = fromFreshdeskResource(article);
-            const score = adjustFreshdeskHelpScore(question, normalized.title, sourceBoost("freshdesk", question, scoreTextMatch(question, questionTokens, [
-                normalized.title,
-                normalized.category,
-                normalized.bodyText,
-            ])));
-            if (score > 0) {
-                entries.push({
-                    score,
-                    result: toHelpSearchResult(normalized, score),
-                    dedupeKey: `freshdesk:${article.freshdeskArticleId}`,
-                });
-            }
-        }
-    }
-    if (includeSource("recorded_webinar")) {
-        for (const resource of sources.recordedWebinars ?? []) {
-            if (!resource.isActive) {
-                continue;
-            }
-            const normalized = fromRecordedWebinarResource(resource, syncedAt);
-            const score = sourceBoost("recorded_webinar", question, scoreTextMatch(question, questionTokens, [
-                normalized.title,
-                normalized.category,
-                normalized.bodyText,
-                normalized.topics.join(" "),
-            ]));
-            if (score > 0) {
-                entries.push({
-                    score,
-                    result: toHelpSearchResult(normalized, score),
-                    dedupeKey: `recorded_webinar:${normalized.url}`,
-                });
-            }
-        }
-    }
-    if (includeSource("upcoming_webinar")) {
-        for (const resource of sources.upcomingWebinars ?? []) {
-            if (!resource.enabled) {
-                continue;
-            }
-            const normalized = fromUpcomingWebinarResource(resource);
-            const score = sourceBoost("upcoming_webinar", question, scoreTextMatch(question, questionTokens, [
-                normalized.title,
-                normalized.eventDay ?? "",
-                normalized.bodyText,
-                normalized.topics.join(" "),
-            ]));
-            if (score > 0) {
-                entries.push({
-                    score,
-                    result: toHelpSearchResult(normalized, score),
-                    dedupeKey: `upcoming_webinar:${normalized.resourceId}`,
-                });
-            }
-        }
-    }
-    return dedupeSearchResults(entries).slice(0, maxResults);
+    return dedupeSearchResults([...bestByKey.values()]).slice(0, maxResults);
 }
 export function buildUnifiedFindHelpResourcesResponse(question, sources, options) {
     const resources = searchUnifiedHelpResources(question, sources, options);
-    const answerSources = buildHelpAnswerSources(helpSearchResultsToSourceInputs(resources));
+    const intent = detectHelpProceduralIntent(question);
+    const usedResources = selectUsedHelpResources(resources, {
+        intentIsProcedural: intent !== null,
+    });
+    const usedResourceIds = usedResources.map((resource) => resource.resourceId);
+    const answerSources = buildHelpAnswerSources(helpSearchResultsToSourceInputs(usedResources));
     const customerFacingSourcesMarkdown = buildCustomerFacingSourcesMarkdown(answerSources);
     const supportFallback = resolveSupportFallback({
-        matchCount: resources.length,
-        strongestScore: resources[0]?.relevanceScore ?? null,
+        matchCount: usedResources.length > 0 ? usedResources.length : resources.length,
+        strongestScore: usedResources[0]?.relevanceScore ?? resources[0]?.relevanceScore ?? null,
         hasRelevantSourceOrScreenshot: answerSources.length > 0,
     });
     const redAction = resolveHelpRedActionCapability(question);
-    const hasFreshdeskMatch = resources.some((resource) => resource.source === "freshdesk");
+    const hasFreshdeskMatch = usedResources.some((resource) => resource.source === "freshdesk");
+    const customerFacingAnswerSectionsMarkdown = buildHelpAnswerSectionsMarkdown({
+        sourcesMarkdown: customerFacingSourcesMarkdown,
+        redActionMarkdown: redAction.customerFacingRedActionMarkdown,
+        supportMarkdown: supportFallback.customerFacingSupportMarkdown,
+        includeSupport: supportFallback.supportFallbackRecommended,
+    });
     return {
         question,
         category: options?.category ?? null,
         matchCount: resources.length,
         resources,
+        usedResourceIds,
         sources: answerSources,
         ...(customerFacingSourcesMarkdown
             ? { customerFacingSourcesMarkdown }
+            : {}),
+        ...(customerFacingAnswerSectionsMarkdown
+            ? { customerFacingAnswerSectionsMarkdown }
             : {}),
         supportFallbackRecommended: supportFallback.supportFallbackRecommended,
         supportFallbackReason: supportFallback.supportFallbackReason,
@@ -351,16 +380,17 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         responseGuidance: {
             format: [
                 "Provide a concise synthesized direct answer first.",
-                "Add clear steps where applicable, based only on returned help resources.",
-                "End with a Sources section using customerFacingSourcesMarkdown or the sources array — exact publicUrl / registrationUrl values only, most relevant first, max five, deduplicated.",
+                "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
+                "End with customerFacingAnswerSectionsMarkdown (or Sources, then optional Do this through Red, then optional support) in that exact order.",
+                "Never emit Do this through Red before Sources.",
                 "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
-                "Use only publicUrl or registrationUrl values returned in resources for hyperlinks.",
+                "Use only publicUrl or registrationUrl values returned in sources for hyperlinks.",
                 "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
                 FRESHDESK_LINK_RESPONSE_GUIDANCE,
                 AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE,
                 hasFreshdeskMatch
-                    ? "A matching Freshdesk article was returned — never claim no dedicated help article exists; call brc_get_help_resource_details for the highest-ranked Freshdesk resource."
-                    : "Use brc_get_help_resource_details for Freshdesk images or full article text when a Freshdesk resource is returned.",
+                    ? "A matching Freshdesk article was returned in usedResourceIds — never claim no dedicated help article exists; call brc_get_help_resource_details for that resourceId with includeImages=true and imagePresentation=links."
+                    : "Do not claim no article exists until expanded procedural search returned no Freshdesk match. Use brc_get_help_resource_details when a Freshdesk resource is returned.",
                 HELP_ANSWER_LAYOUT_GUIDANCE,
                 TUTORIAL_NO_DATA_CHANGE_GUIDANCE,
                 "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata.",
@@ -375,8 +405,9 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
             sources: [
                 "Copy customerFacingSourcesMarkdown into the final answer under the heading Sources.",
+                "Sources must list only usedResourceIds — never login, API-key, user, or webinar hits that were not used.",
                 "Use exact URLs from the sources array — never invent or rewrite URLs.",
-                "Include only sources used to form the answer. Deduplicate. Cap at five unless the user asks for more.",
+                "Deduplicate. Cap at five. Most relevant first.",
                 "Do not expose resource IDs, Azure URLs, storage paths, blob names, or internal metadata.",
             ].join(" "),
             layout: HELP_ANSWER_LAYOUT_GUIDANCE,
@@ -413,6 +444,16 @@ export function unifiedFindHelpResourcesMcpContent(payload) {
         if (supportText) {
             content.push({ type: "text", text: supportText });
         }
+    }
+    if (payload.customerFacingAnswerSectionsMarkdown) {
+        content.push({
+            type: "text",
+            text: [
+                "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources, then optional Do this through Red, then optional support):",
+                "",
+                payload.customerFacingAnswerSectionsMarkdown,
+            ].join("\n"),
+        });
     }
     return { content };
 }
