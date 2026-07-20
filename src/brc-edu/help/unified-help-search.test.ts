@@ -185,6 +185,14 @@ test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance
     response.responseGuidance.format.join(" "),
     /bigredcloud\.freshdesk\.com/i,
   );
+  assert.match(
+    response.responseGuidance.format.join(" "),
+    /Sources section/i,
+  );
+  assert.match(
+    response.responseGuidance.autoScreenshots ?? "",
+    /includeImages=true/i,
+  );
 });
 
 test("bank reconciliation Freshdesk search returns exact canonical URL", () => {

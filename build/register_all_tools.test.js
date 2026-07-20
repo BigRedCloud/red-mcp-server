@@ -65,7 +65,9 @@ test("brc_find_help_resources description requests concise synthesized answers",
     assert.ok(tool);
     assert.match(tool.description, /concise synthesized answer/i);
     assert.match(tool.description, /customer documentation/i);
-    assert.match(tool.description, /support contact footer/i);
+    assert.match(tool.description, /includeImages=true/i);
+    assert.match(tool.description, /Sources section/i);
+    assert.match(tool.description, /supportFallbackRecommended/i);
 });
 test("brc_find_help_resources does not require company credentials", () => {
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_find_help_resources"));

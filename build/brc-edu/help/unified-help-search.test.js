@@ -131,6 +131,8 @@ test("buildUnifiedFindHelpResourcesResponse includes synthesized answer guidance
     assert.match(response.responseGuidance.format.join(" "), /concise synthesized direct answer/i);
     assert.match(response.responseGuidance.supportFooter, /bigredcloud.com\/contact/);
     assert.match(response.responseGuidance.format.join(" "), /bigredcloud\.freshdesk\.com/i);
+    assert.match(response.responseGuidance.format.join(" "), /Sources section/i);
+    assert.match(response.responseGuidance.autoScreenshots ?? "", /includeImages=true/i);
 });
 test("bank reconciliation Freshdesk search returns exact canonical URL", () => {
     const article = {

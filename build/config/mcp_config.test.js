@@ -30,3 +30,13 @@ test("MCP server instructions derive session duration from configured TTL", () =
     const instructions = getBrcMcpServerInstructions(50, false);
     assert.match(instructions, new RegExp(formatCredentialTtlForUser()));
 });
+test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () => {
+    const instructions = getBrcMcpServerInstructions(50, false);
+    assert.match(instructions, /includeImages=true/i);
+    assert.match(instructions, /imagePresentation=links/i);
+    assert.match(instructions, /even when the user did not explicitly ask for images/i);
+    assert.match(instructions, /Sources/i);
+    assert.match(instructions, /Do this through Red/i);
+    assert.match(instructions, /https:\/\/bigredcloud\.com\/contact\//);
+    assert.equal(/helpInteractionMode/i.test(instructions), false);
+});
