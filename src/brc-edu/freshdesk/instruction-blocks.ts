@@ -234,6 +234,246 @@ function isValidScreenshotUrl(url: string | undefined): boolean {
   }
 }
 
+function contentBlocksHaveImageReferences(
+  contentBlocks: FreshdeskArticleContentBlock[] | undefined,
+): boolean {
+  return (contentBlocks ?? []).some((block) => block.type === "image");
+}
+
+function splitBodyTextIntoInstructionBlocks(
+  bodyText: string | null | undefined,
+): TextBlock[] {
+  const cleaned = (bodyText ?? "").replace(/\r\n/g, "\n").trim();
+  if (!cleaned) {
+    return [];
+  }
+
+  const paragraphs = cleaned
+    .split(/\n{2,}/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const parts =
+    paragraphs.length > 1
+      ? paragraphs
+      : cleaned
+          .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+          .map((part) => part.trim())
+          .filter((part) => part.length >= 8);
+
+  return parts.map((text) => {
+    const actions = extractNearbyActions(text);
+    const workflows = classifyFreshdeskWorkflows(text);
+    return {
+      type: "text" as const,
+      text,
+      ...(workflows[0] ? { workflow: workflows[0] } : {}),
+      ...(actions.length > 0 ? { nearbyActions: actions } : {}),
+    };
+  });
+}
+
+/**
+ * Prefer the instructional step that best matches alt/caption context.
+ * Falls back to synced image index only when no semantic signal exists.
+ */
+function pickNearbyInstructionText(
+  instructionalTexts: string[],
+  preferredIndex: number,
+  context?: string | null,
+): string | undefined {
+  if (instructionalTexts.length === 0) {
+    return undefined;
+  }
+
+  const fallback =
+    instructionalTexts[
+      Math.min(preferredIndex, Math.max(0, instructionalTexts.length - 1))
+    ];
+  const contextText = context?.trim();
+  if (!contextText) {
+    return fallback;
+  }
+
+  let best: { text: string; score: number } | undefined;
+  for (const text of instructionalTexts) {
+    const score =
+      textTokenOverlap(contextText, text) +
+      actionsOverlapScore(
+        extractNearbyActions(contextText),
+        extractNearbyActions(text),
+      );
+    if (!best || score > best.score) {
+      best = { text, score };
+    }
+  }
+
+  return best && best.score > 0 ? best.text : fallback;
+}
+
+/**
+ * When Freshdesk contentBlocks lack image refs but syncedImages exist, synthesize
+ * image blocks from synced image order + nearby instructional text so the
+ * existing semantic matcher can place screenshots beside steps.
+ */
+export function synthesizeFreshdeskImageBlocksForMatching(options: {
+  syncedImageCount: number;
+  articleImages?: Array<{ sourceUrl?: string; altText?: string | null }>;
+  syncedImages?: Array<{
+    sourceUrl?: string;
+    altText?: string | null;
+    order?: number;
+  }>;
+  textBlocks: TextBlock[];
+}): ImageBlock[] {
+  const { syncedImageCount, articleImages = [], syncedImages = [], textBlocks } =
+    options;
+  if (syncedImageCount <= 0) {
+    return [];
+  }
+
+  const instructionalTexts = textBlocks
+    .map((block) => block.text.trim())
+    .filter((text) => isInstructionalText(text));
+
+  const usedPreceding = new Set<string>();
+  const imageBlocks: ImageBlock[] = [];
+  for (let index = 0; index < syncedImageCount; index += 1) {
+    const synced = syncedImages[index];
+    const articleImage = articleImages[index];
+    const altText =
+      synced?.altText?.trim() ||
+      articleImage?.altText?.trim() ||
+      undefined;
+
+    let precedingText = pickNearbyInstructionText(
+      instructionalTexts,
+      index,
+      altText,
+    );
+    // Prefer unused steps when several images compete for the same text.
+    if (
+      precedingText &&
+      usedPreceding.has(precedingText) &&
+      instructionalTexts.length > 1
+    ) {
+      const unused = instructionalTexts.find((text) => !usedPreceding.has(text));
+      if (unused) {
+        const unusedScore =
+          textTokenOverlap(altText ?? "", unused) +
+          actionsOverlapScore(
+            extractNearbyActions(altText),
+            extractNearbyActions(unused),
+          );
+        if (unusedScore > 0) {
+          precedingText = unused;
+        }
+      }
+    }
+    if (precedingText) {
+      usedPreceding.add(precedingText);
+    }
+
+    const precedingIndex = precedingText
+      ? instructionalTexts.indexOf(precedingText)
+      : index;
+    const followingText =
+      instructionalTexts[
+        Math.min(
+          precedingIndex >= 0 ? precedingIndex + 1 : index + 1,
+          Math.max(0, instructionalTexts.length - 1),
+        )
+      ] ?? textBlocks[Math.min(index + 1, Math.max(0, textBlocks.length - 1))]?.text;
+
+    const sectionHeading =
+      textBlocks.find((block) => block.sectionHeading || block.heading)?.sectionHeading ??
+      textBlocks.find((block) => block.heading)?.heading;
+
+    const actions = extractNearbyActions(
+      altText,
+      sectionHeading,
+      precedingText,
+    );
+    const workflows = classifyFreshdeskWorkflows(
+      altText,
+      sectionHeading,
+      precedingText,
+      followingText,
+    );
+
+    imageBlocks.push({
+      type: "image",
+      imageIndex:
+        typeof synced?.order === "number" && Number.isFinite(synced.order)
+          ? synced.order
+          : index,
+      sourceUrl: synced?.sourceUrl ?? articleImage?.sourceUrl,
+      altText,
+      precedingText,
+      followingText:
+        followingText && followingText !== precedingText
+          ? followingText
+          : undefined,
+      sectionHeading,
+      nearbyHeading: sectionHeading,
+      ...(workflows[0] ? { workflow: workflows[0] } : {}),
+      ...(actions.length > 0 ? { nearbyActions: actions } : {}),
+    });
+  }
+
+  return imageBlocks;
+}
+
+/**
+ * Resolve content blocks for screenshot matching:
+ * A. explicit image contentBlocks — preserve as-is
+ * B. text-only / missing contentBlocks + syncedImages — synthesize image blocks
+ * C. caller falls back to raw article order when matching yields no screenshots
+ */
+export function resolveFreshdeskContentBlocksForMatching(options: {
+  contentBlocks?: FreshdeskArticleContentBlock[];
+  bodyText?: string | null;
+  syncedImages?: Array<{
+    sourceUrl?: string;
+    altText?: string | null;
+    order?: number;
+  }>;
+  articleImages?: Array<{ sourceUrl?: string; altText?: string | null }>;
+}): FreshdeskArticleContentBlock[] {
+  const {
+    contentBlocks,
+    bodyText,
+    syncedImages = [],
+    articleImages = [],
+  } = options;
+
+  if (contentBlocksHaveImageReferences(contentBlocks)) {
+    return contentBlocks ?? [];
+  }
+
+  const textBlocks: TextBlock[] = (contentBlocks ?? []).filter(
+    (block): block is TextBlock => block.type === "text" && Boolean(block.text.trim()),
+  );
+
+  const resolvedTextBlocks =
+    textBlocks.length > 0
+      ? textBlocks
+      : splitBodyTextIntoInstructionBlocks(bodyText);
+
+  if (syncedImages.length === 0) {
+    return resolvedTextBlocks;
+  }
+
+  const imageBlocks = synthesizeFreshdeskImageBlocksForMatching({
+    syncedImageCount: syncedImages.length,
+    articleImages,
+    syncedImages,
+    textBlocks: resolvedTextBlocks,
+  });
+
+  return [...resolvedTextBlocks, ...imageBlocks];
+}
+
 /**
  * Customer-safe ordered instruction blocks. Strips internal fields
  * (sourceUrl, imageIndex, workflow, nearbyActions, blob metadata).

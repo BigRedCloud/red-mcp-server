@@ -18,6 +18,7 @@ import {
 import {
   buildFreshdeskInstructionBlocks,
   enrichScreenshotUrlCaptions,
+  resolveFreshdeskContentBlocksForMatching,
   type HelpInstructionBlock,
 } from "../freshdesk/instruction-blocks.js";
 import {
@@ -71,6 +72,7 @@ import {
   resolveHelpRedActionCapability,
 } from "./help-red-action-capability.js";
 import {
+  buildHelpAnswerSectionsMarkdown,
   AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE,
   HELP_ANSWER_LAYOUT_GUIDANCE,
   TUTORIAL_NO_DATA_CHANGE_GUIDANCE,
@@ -157,8 +159,12 @@ export type HelpResourceDetailsPayload = {
   customerFacingInstructionMarkdown?: string;
   /** Exact public sources used for this detail payload (usually one). */
   sources?: HelpAnswerSource[];
+  /** Resource IDs actually used to form this answer (details article first). */
+  usedResourceIds?: string[];
   /** Ready-to-paste Sources Markdown for the customer-facing answer. */
   customerFacingSourcesMarkdown?: string;
+  /** Sources + optional Red-action + optional support in fixed order. */
+  customerFacingAnswerSectionsMarkdown?: string;
   supportFallbackRecommended?: boolean;
   supportFallbackReason?: string | null;
   supportUrl?: string;
@@ -274,6 +280,7 @@ function buildDetailsGuidance(hasInstructionBlocks: boolean, hasScreenshotLinks:
 }
 
 function buildDetailSourceFields(resource: {
+  resourceId?: string;
   title: string;
   source: HelpResourceSource;
   publicUrl?: string | null;
@@ -281,8 +288,10 @@ function buildDetailSourceFields(resource: {
   imageCount?: number;
   question?: string | null;
 }): {
+  usedResourceIds: string[];
   sources: HelpAnswerSource[];
   customerFacingSourcesMarkdown?: string;
+  customerFacingAnswerSectionsMarkdown?: string;
   supportFallbackRecommended: boolean;
   supportFallbackReason: string | null;
   supportUrl: string;
@@ -309,11 +318,22 @@ function buildDetailSourceFields(resource: {
       sources.length > 0 || (resource.imageCount ?? 0) > 0,
   });
   const redAction = resolveHelpRedActionCapability(resource.question);
+  const usedResourceIds = resource.resourceId ? [resource.resourceId] : [];
+  const customerFacingAnswerSectionsMarkdown = buildHelpAnswerSectionsMarkdown({
+    sourcesMarkdown: customerFacingSourcesMarkdown,
+    redActionMarkdown: redAction.customerFacingRedActionMarkdown,
+    supportMarkdown: supportFallback.customerFacingSupportMarkdown,
+    includeSupport: supportFallback.supportFallbackRecommended,
+  });
 
   return {
+    usedResourceIds,
     sources,
     ...(customerFacingSourcesMarkdown
       ? { customerFacingSourcesMarkdown }
+      : {}),
+    ...(customerFacingAnswerSectionsMarkdown
+      ? { customerFacingAnswerSectionsMarkdown }
       : {}),
     supportFallbackRecommended: supportFallback.supportFallbackRecommended,
     supportFallbackReason: supportFallback.supportFallbackReason,
@@ -334,11 +354,6 @@ function buildDetailSourceFields(resource: {
         }
       : {}),
   };
-}
-function contentBlocksHaveImageReferences(
-  contentBlocks: SyncedFreshdeskArticle["contentBlocks"],
-): boolean {
-  return (contentBlocks ?? []).some((block) => block.type === "image");
 }
 
 function sanitizeScreenshotUrls(
@@ -370,16 +385,26 @@ function sanitizeScreenshotUrls(
 function sanitizeInstructionBlocks(
   blocks: HelpInstructionBlock[],
 ): HelpInstructionBlock[] {
-  return blocks.filter((block) => {
-    if (block.type === "text") {
-      return Boolean(block.text.trim());
-    }
-    return (
-      Boolean(block.url) &&
-      Boolean(block.caption) &&
-      !isRejectedFreshdeskCaption(block.caption)
-    );
-  });
+  return blocks
+    .map((block, index) => {
+      if (block.type === "text") {
+        return Boolean(block.text.trim()) ? block : null;
+      }
+
+      if (!block.url) {
+        return null;
+      }
+
+      if (!block.caption || isRejectedFreshdeskCaption(block.caption)) {
+        return {
+          ...block,
+          caption: buildOrderedArticleImageCaption(index + 1),
+        };
+      }
+
+      return block;
+    })
+    .filter((block): block is HelpInstructionBlock => Boolean(block));
 }
 
 export async function getHelpResourceDetails(
@@ -488,12 +513,18 @@ export async function getHelpResourceDetails(
         article.freshdeskArticleId,
         syncedImages,
       );
+      const matchingContentBlocks = resolveFreshdeskContentBlocksForMatching({
+        contentBlocks: article.contentBlocks,
+        bodyText: article.bodyText,
+        syncedImages,
+        articleImages: article.images,
+      });
       const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(
         rawScreenshotUrls,
-        article.contentBlocks,
+        matchingContentBlocks,
       );
       const rawInstructionBlocks = buildFreshdeskInstructionBlocks(
-        article.contentBlocks,
+        matchingContentBlocks,
         enrichedScreenshotUrls,
         { question },
       );
@@ -504,19 +535,15 @@ export async function getHelpResourceDetails(
         ): block is Extract<HelpInstructionBlock, { type: "screenshot" }> =>
           block.type === "screenshot",
       );
-      const hasUsableImageContentBlocks = contentBlocksHaveImageReferences(
-        article.contentBlocks,
-      );
-      // Prefer workflow-aware screenshots only when contentBlocks actually
-      // reference images (or explicit ordering produced screenshot blocks).
-      // Otherwise fall back to every normalized synced image.
-      const useWorkflowAwareScreenshots =
-        hasUsableImageContentBlocks && instructionScreenshots.length > 0;
+      // A) explicit image contentBlocks, B) semantic matches from synthesized
+      // image context, C) raw article order only when matching yields nothing.
+      const useMatchedStepPlacement = instructionScreenshots.length > 0;
       const hasInstructionBlocks =
-        useWorkflowAwareScreenshots && instructionBlocks.length > 0;
+        useMatchedStepPlacement &&
+        instructionBlocks.some((block) => block.type === "text");
 
       const screenshotUrls = sanitizeScreenshotUrls(
-        useWorkflowAwareScreenshots
+        useMatchedStepPlacement
           ? instructionScreenshots.map((block) => ({
               caption: block.caption,
               url: block.url,
@@ -530,7 +557,9 @@ export async function getHelpResourceDetails(
         buildCustomerFacingScreenshotMarkdown(screenshotUrls);
       const customerFacingInstructionMarkdown =
         buildCustomerFacingInstructionMarkdown(
-          hasInstructionBlocks ? instructionBlocks : undefined,
+          useMatchedStepPlacement && hasInstructionBlocks
+            ? instructionBlocks
+            : undefined,
         );
       const hasScreenshotLinks = screenshotLinksMarkdown.length > 0;
 
@@ -561,6 +590,7 @@ export async function getHelpResourceDetails(
 
       const publicUrl = getSyncedFreshdeskArticlePublicUrl(article);
       const sourceFields = buildDetailSourceFields({
+        resourceId: normalized.resourceId,
         title: normalized.title,
         source: normalized.source,
         publicUrl,
@@ -587,7 +617,9 @@ export async function getHelpResourceDetails(
           skippedImageCount: imageResult.skippedImageCount,
           imageWarning: imageResult.storageWarning,
           imagePresentation,
-          ...(hasInstructionBlocks ? { instructionBlocks } : {}),
+          ...(useMatchedStepPlacement && hasInstructionBlocks
+            ? { instructionBlocks }
+            : {}),
           ...(screenshotUrls.length > 0 ? { screenshotUrls } : {}),
           ...(screenshotLinksMarkdown.length > 0
             ? { screenshotLinksMarkdown }
@@ -600,7 +632,7 @@ export async function getHelpResourceDetails(
             : {}),
           ...sourceFields,
           responseGuidance: buildDetailsGuidance(
-            hasInstructionBlocks,
+            Boolean(customerFacingInstructionMarkdown),
             hasScreenshotLinks,
           ),
         },
@@ -615,6 +647,7 @@ export async function getHelpResourceDetails(
       }
 
       const sourceFields = buildDetailSourceFields({
+        resourceId: resource.resourceId,
         title: resource.title,
         source: resource.source,
         publicUrl: resource.url,
@@ -649,6 +682,7 @@ export async function getHelpResourceDetails(
       }
 
       const sourceFields = buildDetailSourceFields({
+        resourceId: resource.resourceId,
         title: resource.title,
         source: resource.source,
         publicUrl: resource.url,
@@ -683,6 +717,7 @@ export async function getHelpResourceDetails(
       }
 
       const sourceFields = buildDetailSourceFields({
+        resourceId: resource.resourceId,
         title: resource.title,
         source: resource.source,
         publicUrl: resource.url,
@@ -778,6 +813,17 @@ export function helpResourceDetailResponse(
     content.push({
       type: "text",
       text: supportText,
+    });
+  }
+
+  if (payload.customerFacingAnswerSectionsMarkdown) {
+    content.push({
+      type: "text",
+      text: [
+        "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources, then optional Do this through Red, then optional support):",
+        "",
+        payload.customerFacingAnswerSectionsMarkdown,
+      ].join("\n"),
     });
   }
 

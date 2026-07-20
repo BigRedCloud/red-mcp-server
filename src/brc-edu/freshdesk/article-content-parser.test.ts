@@ -5,6 +5,7 @@ import { parseFreshdeskArticleContent } from "./article-content-parser.js";
 import {
   buildFreshdeskInstructionBlocks,
   enrichScreenshotUrlCaptions,
+  resolveFreshdeskContentBlocksForMatching,
   SCREENSHOT_MATCH_MIN_SCORE,
 } from "./instruction-blocks.js";
 import {
@@ -606,4 +607,131 @@ test("legacy articles without contentBlocks still enrich captions safely", () =>
     enriched[0]?.url,
     "https://red.example.com/public/brc-edu/freshdesk-images/9/token",
   );
+});
+
+test("text-only contentBlocks synthesize image refs for semantic matching", () => {
+  const textBlocks = [
+    {
+      type: "text" as const,
+      text: "Click Lookup or Setup.",
+      workflow: "add_customer" as const,
+      nearbyActions: ["Lookup", "Setup"],
+    },
+    {
+      type: "text" as const,
+      text: "Click Customers, then click Add.",
+      workflow: "add_customer" as const,
+      nearbyActions: ["Customers", "Add"],
+    },
+    {
+      type: "text" as const,
+      text: "Click Save on the main customer screen.",
+      workflow: "add_customer" as const,
+      nearbyActions: ["Save"],
+    },
+  ];
+
+  // Synced order deliberately differs from step order (Save first, Lookup last).
+  const articleImages = [
+    { sourceUrl: "https://cdn.freshdesk.com/save.png", altText: "Save customer" },
+    { sourceUrl: "https://cdn.freshdesk.com/add.png", altText: "Click Add" },
+    { sourceUrl: "https://cdn.freshdesk.com/lookup.png", altText: "Lookup or Setup" },
+  ];
+  const syncedImages = articleImages.map((image, order) => ({
+    sourceUrl: image.sourceUrl,
+    order,
+  }));
+
+  const matching = resolveFreshdeskContentBlocksForMatching({
+    contentBlocks: textBlocks,
+    syncedImages,
+    articleImages,
+  });
+
+  assert.equal(matching.filter((block) => block.type === "image").length, 3);
+  assert.equal(matching.filter((block) => block.type === "text").length, 3);
+
+  const screenshotUrls = mockScreenshotUrls(3);
+  const blocks = buildFreshdeskInstructionBlocks(matching, screenshotUrls, {
+    question: "How do I add a customer?",
+  });
+
+  const screenshots = blocks.filter((block) => block.type === "screenshot");
+  assert.ok(screenshots.length >= 2);
+  assert.equal(
+    new Set(screenshots.map((block) => (block.type === "screenshot" ? block.url : ""))).size,
+    screenshots.length,
+  );
+
+  const lookupStep = blocks.findIndex(
+    (block) =>
+      block.type === "text" && block.text.includes("Click Lookup or Setup"),
+  );
+  const addStep = blocks.findIndex(
+    (block) =>
+      block.type === "text" && block.text.includes("Click Customers, then click Add"),
+  );
+  const saveStep = blocks.findIndex(
+    (block) => block.type === "text" && block.text.includes("Click Save"),
+  );
+
+  assert.equal(blocks[lookupStep + 1]?.type, "screenshot");
+  assert.equal(blocks[addStep + 1]?.type, "screenshot");
+  assert.equal(blocks[saveStep + 1]?.type, "screenshot");
+
+  // Placement must follow steps, not raw synced order (Save was index 0).
+  const lookupShot = blocks[lookupStep + 1];
+  const addShot = blocks[addStep + 1];
+  const saveShot = blocks[saveStep + 1];
+  assert.ok(lookupShot?.type === "screenshot");
+  assert.ok(addShot?.type === "screenshot");
+  assert.ok(saveShot?.type === "screenshot");
+  if (
+    lookupShot?.type === "screenshot" &&
+    addShot?.type === "screenshot" &&
+    saveShot?.type === "screenshot"
+  ) {
+    assert.notEqual(
+      lookupShot.url,
+      screenshotUrls[0]!.url,
+      "Lookup step must not take the Save screenshot merely because it is first",
+    );
+    assert.equal(saveShot.url, screenshotUrls[0]!.url);
+    assert.equal(lookupShot.url, screenshotUrls[2]!.url);
+    assert.equal(addShot.url, screenshotUrls[1]!.url);
+  }
+});
+
+test("explicit image contentBlocks are preserved without synthesis", () => {
+  const contentBlocks = [
+    {
+      type: "text" as const,
+      text: "Click Add.",
+      workflow: "add_customer" as const,
+    },
+    {
+      type: "image" as const,
+      imageIndex: 0,
+      precedingText: "Click Add.",
+      altText: "Add",
+    },
+  ];
+
+  const resolved = resolveFreshdeskContentBlocksForMatching({
+    contentBlocks,
+    syncedImages: [
+      { sourceUrl: "https://cdn.freshdesk.com/1.png", order: 0 },
+      { sourceUrl: "https://cdn.freshdesk.com/2.png", order: 1 },
+    ],
+    articleImages: [
+      { sourceUrl: "https://cdn.freshdesk.com/1.png", altText: "Add" },
+      { sourceUrl: "https://cdn.freshdesk.com/2.png", altText: "Extra" },
+    ],
+  });
+
+  assert.equal(resolved.length, 2);
+  assert.equal(resolved[1]?.type, "image");
+  if (resolved[1]?.type === "image") {
+    assert.equal(resolved[1].imageIndex, 0);
+  }
 });

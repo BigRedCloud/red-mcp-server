@@ -518,7 +518,7 @@ test("links mode returns signed screenshot links without downloading blobs", asy
         assert.ok(result.payload.customerFacingScreenshotMarkdown);
     }
 });
-test("syncedImages without contentBlocks still return ordered image links", async () => {
+test("syncedImages without distinctive context still return image links", async () => {
     process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
     process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
     const article = {
@@ -528,8 +528,8 @@ test("syncedImages without contentBlocks still return ordered image links", asyn
         categoryId: 1,
         folderId: 2,
         folderName: "Customers",
-        title: "Customer opening balance",
-        bodyText: "Enter the opening balance.",
+        title: "How do I add a Customer?",
+        bodyText: "Overview of the customer record.",
         images: [
             { sourceUrl: "https://cdn.freshdesk.com/1.jpg", altText: null },
             { sourceUrl: "https://cdn.freshdesk.com/2.jpg", altText: null },
@@ -564,8 +564,8 @@ test("syncedImages without contentBlocks still return ordered image links", asyn
         ],
         updatedAt: "2026-07-01T00:00:00.000Z",
         enabled: true,
-        slug: null,
-        publicUrl: null,
+        slug: "how-do-i-add-a-customer",
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer",
     };
     const index = {
         generatedAt: "2026-07-15T10:00:00.000Z",
@@ -598,44 +598,178 @@ test("syncedImages without contentBlocks still return ordered image links", asyn
     });
     assert.equal(result.ok, true);
     if (result.ok) {
-        assert.equal(result.payload.imageCount, 4);
-        assert.equal(result.payload.screenshotUrls?.length, 4);
-        assert.equal(result.payload.screenshotLinksMarkdown?.length, 4);
-        assert.equal(result.payload.instructionBlocks, undefined);
-        assert.deepEqual(result.payload.screenshotUrls?.map((item) => item.caption), [
-            "Article image 1",
-            "Article image 2",
-            "Article image 3",
-            "Article image 4",
-        ]);
-        for (const link of result.payload.screenshotLinksMarkdown ?? []) {
-            assert.match(link, /^\[Article image \d\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/157000368447\//);
-        }
+        assert.ok((result.payload.imageCount ?? 0) >= 1);
+        assert.ok((result.payload.screenshotLinksMarkdown?.length ?? 0) >= 1);
+        assert.deepEqual(result.payload.usedResourceIds, ["freshdesk:157000368447"]);
+        assert.equal(result.payload.sources?.length, 1);
+        assert.equal(result.payload.sources?.[0]?.title, "How do I add a Customer?");
+        assert.equal(result.payload.sources?.[0]?.url, "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer");
+        assert.match(result.payload.customerFacingSourcesMarkdown ?? "", /How do I add a Customer\?/);
         assert.equal(JSON.stringify(result.payload).includes("freshdesk/157000368447"), false);
         assert.equal(JSON.stringify(result.payload).includes("cdn.freshdesk.com"), false);
     }
 });
-test("text-only contentBlocks still fall back to syncedImages", async () => {
+test("text-only contentBlocks semantically match syncedImages to steps", async () => {
     process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
     process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
     const article = freshdeskArticle();
-    article.syncedImages = [
+    article.title = "How do I add a Customer?";
+    article.freshdeskArticleId = 157000368447;
+    article.id = "freshdesk-157000368447";
+    article.slug = "how-do-i-add-a-customer";
+    article.publicUrl =
+        "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer";
+    article.images = [
+        { sourceUrl: "https://cdn.freshdesk.com/1.png", altText: "Lookup or Setup" },
+        { sourceUrl: "https://cdn.freshdesk.com/2.png", altText: "Click Add" },
+        { sourceUrl: "https://cdn.freshdesk.com/3.png", altText: "Enter customer details" },
+        { sourceUrl: "https://cdn.freshdesk.com/4.png", altText: "Save customer" },
+    ];
+    article.syncedImages = article.images.map((image, order) => ({
+        sourceUrl: image.sourceUrl,
+        blobName: `freshdesk/157000368447/${order}.png`,
+        sha256: `${order}`.repeat(64).slice(0, 64),
+        contentType: "image/png",
+        order,
+    }));
+    article.contentBlocks = [
         {
-            sourceUrl: "https://cdn.freshdesk.com/a.png",
-            blobName: "freshdesk/1001/a.png",
-            sha256: "a".repeat(64),
-            contentType: "image/png",
+            type: "text",
+            text: "Click Lookup or Setup.",
+            workflow: "add_customer",
+            nearbyActions: ["Lookup", "Setup"],
         },
         {
-            sourceUrl: "https://cdn.freshdesk.com/b.png",
-            blobName: "freshdesk/1001/b.png",
-            sha256: "b".repeat(64),
-            contentType: "image/png",
+            type: "text",
+            text: "Click Customers, then click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Customers", "Add"],
+        },
+        {
+            type: "text",
+            text: "Enter the customer details. The A/C Code field is mandatory.",
+            workflow: "add_customer",
+            nearbyActions: ["A/C Code"],
+        },
+        {
+            type: "text",
+            text: "Click Save on the main customer screen.",
+            workflow: "add_customer",
+            nearbyActions: ["Save"],
         },
     ];
+    const index = {
+        generatedAt: "2026-07-15T10:00:00.000Z",
+        articleCount: 1,
+        failureCount: 0,
+        articles: [article],
+        failures: [],
+    };
+    const indexContainer = {
+        getBlockBlobClient() {
+            return {
+                async exists() {
+                    return true;
+                },
+                async download() {
+                    return {
+                        readableStreamBody: (async function* () {
+                            yield Buffer.from(JSON.stringify(index), "utf8");
+                        })(),
+                    };
+                },
+            };
+        },
+    };
+    const result = await getHelpResourceDetails("freshdesk:157000368447", {
+        freshdeskIndexContainer: indexContainer,
+        freshdeskImageContainer: null,
+        includeImages: true,
+        question: "How do I add a customer in Big Red Cloud?",
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+        assert.ok(result.payload.instructionBlocks);
+        assert.ok(result.payload.customerFacingInstructionMarkdown);
+        const blocks = result.payload.instructionBlocks ?? [];
+        const screenshots = blocks.filter((block) => block.type === "screenshot");
+        assert.ok(screenshots.length >= 2);
+        assert.equal(new Set(screenshots.map((block) => block.url)).size, screenshots.length);
+        // Each screenshot must sit immediately after its matched instruction.
+        for (let index = 0; index < blocks.length; index += 1) {
+            const block = blocks[index];
+            if (block?.type !== "screenshot") {
+                continue;
+            }
+            assert.equal(blocks[index - 1]?.type, "text");
+        }
+        const textThenShot = (stepNeedle, captionNeedle) => {
+            const stepIndex = blocks.findIndex((block) => block.type === "text" && block.text.includes(stepNeedle));
+            assert.ok(stepIndex >= 0, `missing step: ${stepNeedle}`);
+            const shot = blocks[stepIndex + 1];
+            assert.equal(shot?.type, "screenshot");
+            if (shot?.type === "screenshot") {
+                assert.match(shot.caption, captionNeedle);
+            }
+        };
+        textThenShot("Click Lookup or Setup", /Lookup|Setup/i);
+        textThenShot("Click Customers, then click Add", /Click Add|\bAdd\b/i);
+        textThenShot("Enter the customer details", /customer details|A\/C Code/i);
+        textThenShot("Click Save", /Save/i);
+        const captions = screenshots
+            .map((block) => (block.type === "screenshot" ? block.caption : ""))
+            .join(" ");
+        assert.equal(/Article image \d/i.test(captions), false);
+        assert.match(captions, /Lookup|Add|Save|customer details/i);
+        const markdown = result.payload.customerFacingInstructionMarkdown ?? "";
+        const lookupStepPos = markdown.indexOf("Click Lookup or Setup");
+        const addStepPos = markdown.indexOf("Click Customers, then click Add");
+        const lookupShotPos = markdown.indexOf("](https://", lookupStepPos);
+        const addShotPos = markdown.indexOf("](https://", addStepPos);
+        assert.ok(lookupStepPos >= 0);
+        assert.ok(addStepPos > lookupStepPos);
+        assert.ok(lookupShotPos > lookupStepPos && lookupShotPos < addStepPos);
+        assert.ok(addShotPos > addStepPos);
+        assert.deepEqual(result.payload.usedResourceIds, ["freshdesk:157000368447"]);
+        assert.equal(result.payload.sources?.length, 1);
+        assert.equal(result.payload.sources?.[0]?.title, "How do I add a Customer?");
+        assert.equal(result.payload.sources?.[0]?.url, article.publicUrl);
+        assert.match(result.payload.customerFacingSourcesMarkdown ?? "", /How do I add a Customer\?/);
+        assert.match(result.payload.customerFacingSourcesMarkdown ?? "", /157000368447-how-do-i-add-a-customer/);
+        assert.ok(result.payload.customerFacingAnswerSectionsMarkdown?.startsWith("Sources"));
+        const sections = result.payload.customerFacingAnswerSectionsMarkdown ?? "";
+        const sourcesPos = sections.indexOf("Sources");
+        const redPos = sections.indexOf("Do this through Red");
+        assert.ok(sourcesPos >= 0);
+        if (result.payload.redActionAvailable) {
+            assert.ok(redPos > sourcesPos);
+        }
+    }
+});
+test("explicit image contentBlocks still preserve step placement", async () => {
+    process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+    process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+    const article = freshdeskArticle();
     article.contentBlocks = [
-        { type: "text", text: "Open Customers and click Change." },
-        { type: "text", text: "Enter the opening balance." },
+        {
+            type: "text",
+            text: "Click Customers, then click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Customers", "Add"],
+        },
+        {
+            type: "image",
+            imageIndex: 0,
+            precedingText: "Click Customers, then click Add.",
+            workflow: "add_customer",
+            nearbyActions: ["Customers", "Add"],
+            altText: "Add customer",
+        },
+        {
+            type: "text",
+            text: "Enter the customer details.",
+            workflow: "add_customer",
+        },
     ];
     const index = {
         generatedAt: "2026-07-15T10:00:00.000Z",
@@ -667,9 +801,10 @@ test("text-only contentBlocks still fall back to syncedImages", async () => {
     });
     assert.equal(result.ok, true);
     if (result.ok) {
-        assert.equal(result.payload.imageCount, 2);
-        assert.equal(result.payload.screenshotUrls?.length, 2);
-        assert.equal(result.payload.screenshotLinksMarkdown?.length, 2);
-        assert.equal(result.payload.instructionBlocks, undefined);
+        assert.ok(result.payload.instructionBlocks);
+        assert.equal(result.payload.instructionBlocks?.[0]?.type, "text");
+        assert.equal(result.payload.instructionBlocks?.[1]?.type, "screenshot");
+        assert.match(result.payload.customerFacingInstructionMarkdown ?? "", /Click Customers, then click Add[\s\S]*\(https:\/\/red\.example\.com/);
+        assert.ok(result.payload.customerFacingSourcesMarkdown);
     }
 });
