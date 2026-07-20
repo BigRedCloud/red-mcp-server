@@ -331,11 +331,17 @@ test("Sources include only used resources, not login or webinar hits", () => {
     assert.equal(response.customerFacingSourcesMarkdown?.includes("API"), false);
     assert.match(response.responseGuidance.format.join(" "), /never claim no dedicated help article exists/i);
     assert.ok(response.customerFacingAnswerSectionsMarkdown?.startsWith("Sources"));
+    assert.match(response.customerFacingSourcesMarkdown ?? "", /Articles/);
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("Videos"), false);
     const sections = response.customerFacingAnswerSectionsMarkdown ?? "";
     const sourcesPos = sections.indexOf("Sources");
     const redPos = sections.indexOf("Do this through Red");
+    const supportPos = sections.indexOf("Still need help?");
     assert.ok(sourcesPos >= 0);
+    assert.ok(supportPos > sourcesPos);
     if (response.redActionAvailable) {
         assert.ok(redPos > sourcesPos);
+        assert.ok(supportPos > redPos);
     }
+    assert.equal(response.customerFacingSupportMarkdown?.includes("https://bigredcloud.com/contact/"), true);
 });

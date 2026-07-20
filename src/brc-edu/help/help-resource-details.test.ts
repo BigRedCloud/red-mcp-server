@@ -511,8 +511,17 @@ test("helpResourceDetailResponse emits Markdown text before optional binary imag
     ),
     false,
   );
-  assert.equal(response.content[2]?.type, "text");
-  assert.equal(response.content[3]?.type, "image");
+  assert.ok(
+    response.content.some(
+      (block) =>
+        block.type === "text" &&
+        "text" in block &&
+        block.text.includes("Still need help?"),
+    ),
+  );
+  const imageIndex = response.content.findIndex((block) => block.type === "image");
+  assert.ok(imageIndex > 1);
+  assert.equal(response.content[imageIndex - 1]?.type, "text");
 });
 
 test("helpResourceDetailResponse links mode has Markdown without binary images", () => {
@@ -538,9 +547,17 @@ test("helpResourceDetailResponse links mode has Markdown without binary images",
     [],
   );
 
-  assert.equal(response.content.length, 2);
+  assert.ok(response.content.length >= 2);
   assert.equal(response.content.every((block) => block.type === "text"), true);
   assert.equal(response.content.some((block) => block.type === "image"), false);
+  assert.ok(
+    response.content.some(
+      (block) =>
+        block.type === "text" &&
+        "text" in block &&
+        block.text.includes("Still need help?"),
+    ),
+  );
 });
 
 test("inline presentation returns binary image blocks", async () => {
@@ -927,16 +944,28 @@ test("text-only contentBlocks semantically match syncedImages to steps", async (
       result.payload.customerFacingSourcesMarkdown ?? "",
       /157000368447-how-do-i-add-a-customer/,
     );
+    assert.match(result.payload.customerFacingSourcesMarkdown ?? "", /Articles/);
+    assert.equal(
+      result.payload.customerFacingSourcesMarkdown?.includes("Videos"),
+      false,
+    );
     assert.ok(
       result.payload.customerFacingAnswerSectionsMarkdown?.startsWith("Sources"),
     );
     const sections = result.payload.customerFacingAnswerSectionsMarkdown ?? "";
     const sourcesPos = sections.indexOf("Sources");
     const redPos = sections.indexOf("Do this through Red");
+    const supportPos = sections.indexOf("Still need help?");
     assert.ok(sourcesPos >= 0);
+    assert.ok(supportPos > sourcesPos);
     if (result.payload.redActionAvailable) {
       assert.ok(redPos > sourcesPos);
+      assert.ok(supportPos > redPos);
     }
+    assert.match(
+      result.payload.customerFacingSupportMarkdown ?? "",
+      /https:\/\/bigredcloud\.com\/contact\//,
+    );
   }
 });
 

@@ -1,10 +1,12 @@
 /**
  * Preferred customer-facing help answer section order.
  * 1. Tutorial steps (+ screenshots beside steps)
- * 2. Sources
+ * 2. Sources (Articles / Videos)
  * 3. Optional "Do this through Red"
- * 4. Optional support (always last when included)
+ * 4. Support (always last)
  */
+
+import { CUSTOMER_FACING_SUPPORT_MARKDOWN } from "./help-support-fallback.js";
 
 export const HELP_ANSWER_SECTION_ORDER = [
   "tutorial_steps_and_screenshots",
@@ -33,9 +35,9 @@ export const AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE = [
 export const HELP_ANSWER_LAYOUT_GUIDANCE = [
   "Preferred successful tutorial layout — always in this exact order:",
   "1) title and numbered steps with screenshot Markdown links immediately after the related step;",
-  "2) Sources (customerFacingSourcesMarkdown / sources — exact publicUrl or registrationUrl only);",
+  "2) Sources grouped as Articles (Freshdesk / docs) and Videos (recorded webinars when used) — exact publicUrl or registrationUrl only;",
   "3) optional Do this through Red when redActionAvailable is true;",
-  "4) optional Still need help? support section last when supportFallbackRecommended is true.",
+  "4) Still need help? support section — always last on every help answer.",
   "Never emit Do this through Red before Sources.",
   "Keep screenshot links beside steps — never move them into Sources.",
   "Do not start a Red write action unless the user asks Red to perform it.",
@@ -45,12 +47,14 @@ export const HELP_ANSWER_LAYOUT_GUIDANCE = [
 
 /**
  * Deterministic post-tutorial sections: Sources → Red action → support.
- * Tutorial steps/screenshots are supplied separately from instruction Markdown.
+ * Support is always included last. Tutorial steps/screenshots are supplied
+ * separately from instruction Markdown.
  */
 export function buildHelpAnswerSectionsMarkdown(options: {
   sourcesMarkdown?: string | null;
   redActionMarkdown?: string | null;
   supportMarkdown?: string | null;
+  /** @deprecated Support is always included; this flag is ignored. */
   includeSupport?: boolean;
 }): string | undefined {
   const sections: string[] = [];
@@ -65,16 +69,9 @@ export function buildHelpAnswerSectionsMarkdown(options: {
     sections.push(redAction);
   }
 
-  if (options.includeSupport) {
-    const support = options.supportMarkdown?.trim();
-    if (support) {
-      sections.push(support);
-    }
-  }
-
-  if (sections.length === 0) {
-    return undefined;
-  }
+  sections.push(
+    options.supportMarkdown?.trim() || CUSTOMER_FACING_SUPPORT_MARKDOWN,
+  );
 
   return sections.join("\n\n");
 }

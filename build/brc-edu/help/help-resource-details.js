@@ -108,10 +108,11 @@ function buildDetailsGuidance(hasInstructionBlocks, hasScreenshotLinks) {
             : {}),
         sources: [
             "Copy customerFacingSourcesMarkdown into the final answer under Sources.",
+            "Group Freshdesk / documentation links under Articles and recorded webinars under Videos — omit an empty Videos heading.",
             "Use the exact publicUrl or registrationUrl returned by this tool — never invent or rewrite URLs.",
             "Keep screenshot links beside their steps — do not move them into Sources.",
             "After Sources, include customerFacingRedActionMarkdown when redActionAvailable is true.",
-            "After Sources and any Red-action section, include customerFacingSupportMarkdown when supportFallbackRecommended is true.",
+            "Always end with customerFacingSupportMarkdown (Still need help?) after Sources and any Red-action section.",
             TUTORIAL_NO_DATA_CHANGE_GUIDANCE,
         ].join(" "),
         layout: HELP_ANSWER_LAYOUT_GUIDANCE,
@@ -154,7 +155,6 @@ function buildDetailSourceFields(resource) {
         sourcesMarkdown: customerFacingSourcesMarkdown,
         redActionMarkdown: redAction.customerFacingRedActionMarkdown,
         supportMarkdown: supportFallback.customerFacingSupportMarkdown,
-        includeSupport: supportFallback.supportFallbackRecommended,
     });
     return {
         usedResourceIds,
@@ -169,11 +169,7 @@ function buildDetailSourceFields(resource) {
         supportFallbackReason: supportFallback.supportFallbackReason,
         supportUrl: supportFallback.supportUrl,
         contactUrl: supportFallback.contactUrl,
-        ...(supportFallback.customerFacingSupportMarkdown
-            ? {
-                customerFacingSupportMarkdown: supportFallback.customerFacingSupportMarkdown,
-            }
-            : {}),
+        customerFacingSupportMarkdown: supportFallback.customerFacingSupportMarkdown,
         redActionAvailable: redAction.redActionAvailable,
         redActionName: redAction.redActionName,
         ...(redAction.customerFacingRedActionMarkdown
@@ -494,9 +490,7 @@ export function helpResourceDetailResponse(payload, images) {
     const redActionText = payload.redActionAvailable
         ? buildRedActionMarkdownTextBlock(payload.customerFacingRedActionMarkdown)
         : undefined;
-    const supportText = payload.supportFallbackRecommended
-        ? buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown)
-        : undefined;
+    const supportText = buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown);
     const content = [
         {
             type: "text",
@@ -533,7 +527,7 @@ export function helpResourceDetailResponse(payload, images) {
         content.push({
             type: "text",
             text: [
-                "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources, then optional Do this through Red, then optional support):",
+                "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources with Articles/Videos, then optional Do this through Red, then Still need help? support last):",
                 "",
                 payload.customerFacingAnswerSectionsMarkdown,
             ].join("\n"),

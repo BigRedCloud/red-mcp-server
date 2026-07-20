@@ -346,7 +346,6 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         sourcesMarkdown: customerFacingSourcesMarkdown,
         redActionMarkdown: redAction.customerFacingRedActionMarkdown,
         supportMarkdown: supportFallback.customerFacingSupportMarkdown,
-        includeSupport: supportFallback.supportFallbackRecommended,
     });
     return {
         question,
@@ -365,11 +364,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         supportFallbackReason: supportFallback.supportFallbackReason,
         supportUrl: supportFallback.supportUrl,
         contactUrl: supportFallback.contactUrl,
-        ...(supportFallback.customerFacingSupportMarkdown
-            ? {
-                customerFacingSupportMarkdown: supportFallback.customerFacingSupportMarkdown,
-            }
-            : {}),
+        customerFacingSupportMarkdown: supportFallback.customerFacingSupportMarkdown,
         redActionAvailable: redAction.redActionAvailable,
         redActionName: redAction.redActionName,
         ...(redAction.customerFacingRedActionMarkdown
@@ -381,9 +376,10 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             format: [
                 "Provide a concise synthesized direct answer first.",
                 "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
-                "End with customerFacingAnswerSectionsMarkdown (or Sources, then optional Do this through Red, then optional support) in that exact order.",
+                "End with customerFacingAnswerSectionsMarkdown (or Sources with Articles/Videos, then optional Do this through Red, then Still need help? support) in that exact order.",
                 "Never emit Do this through Red before Sources.",
                 "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
+                "Always end with the Still need help? support section.",
                 "Use only publicUrl or registrationUrl values returned in sources for hyperlinks.",
                 "Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
                 FRESHDESK_LINK_RESPONSE_GUIDANCE,
@@ -405,6 +401,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
             sources: [
                 "Copy customerFacingSourcesMarkdown into the final answer under the heading Sources.",
+                "Group Freshdesk / documentation links under Articles and recorded webinars under Videos — omit an empty Videos heading.",
                 "Sources must list only usedResourceIds — never login, API-key, user, or webinar hits that were not used.",
                 "Use exact URLs from the sources array — never invent or rewrite URLs.",
                 "Deduplicate. Cap at five. Most relevant first.",
@@ -414,9 +411,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             autoScreenshots: AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE,
         },
         // Backward-compatible alias — prefer supportUrl / supportFallbackRecommended.
-        supportFallbackUrl: supportFallback.supportFallbackRecommended
-            ? supportFallback.supportUrl
-            : null,
+        supportFallbackUrl: supportFallback.supportUrl,
     };
 }
 /**
@@ -439,17 +434,15 @@ export function unifiedFindHelpResourcesMcpContent(payload) {
             content.push({ type: "text", text: redActionText });
         }
     }
-    if (payload.supportFallbackRecommended) {
-        const supportText = buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown);
-        if (supportText) {
-            content.push({ type: "text", text: supportText });
-        }
+    const supportText = buildSupportMarkdownTextBlock(payload.customerFacingSupportMarkdown);
+    if (supportText) {
+        content.push({ type: "text", text: supportText });
     }
     if (payload.customerFacingAnswerSectionsMarkdown) {
         content.push({
             type: "text",
             text: [
-                "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources, then optional Do this through Red, then optional support):",
+                "Copy the following sections after the tutorial steps and screenshots, preserving this exact order (Sources with Articles/Videos, then optional Do this through Red, then Still need help? support last):",
                 "",
                 payload.customerFacingAnswerSectionsMarkdown,
             ].join("\n"),

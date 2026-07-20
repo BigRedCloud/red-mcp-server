@@ -7,7 +7,6 @@ import {
   buildSourcesMarkdownTextBlock,
 } from "./help-answer-sources.js";
 import {
-  COMPANY_SPECIFIC_SUPPORT_MARKDOWN,
   CUSTOMER_FACING_SUPPORT_MARKDOWN,
   SUPPORT_CONTACT_URL,
   resolveSupportFallback,
@@ -157,6 +156,11 @@ test("used Freshdesk article appears under Sources with exact publicUrl", () => 
   assert.deepEqual(response.usedResourceIds, ["freshdesk:1001"]);
   assert.equal(response.sources.length, 1);
   assert.ok(response.customerFacingSourcesMarkdown?.startsWith("Sources"));
+  assert.match(response.customerFacingSourcesMarkdown ?? "", /Articles/);
+  assert.equal(
+    response.customerFacingSourcesMarkdown?.includes("Videos"),
+    false,
+  );
   const freshdeskSource = response.sources.find(
     (source) => source.sourceType === "support_article",
   );
@@ -173,6 +177,44 @@ test("used Freshdesk article appears under Sources with exact publicUrl", () => 
     response.customerFacingSourcesMarkdown?.includes("Getting Started"),
     false,
   );
+});
+
+test("Sources group Articles and Videos and omit empty Videos", () => {
+  const markdown = buildCustomerFacingSourcesMarkdown([
+    {
+      title: "How do I add a Customer?",
+      url: FRESHDESK_PUBLIC_URL,
+      sourceType: "support_article",
+    },
+    {
+      title: "Add Customers Walkthrough",
+      url: "https://www.youtube.com/watch?v=example",
+      sourceType: "recorded_webinar",
+    },
+  ]);
+
+  assert.equal(
+    markdown,
+    [
+      "Sources",
+      "",
+      "Articles",
+      `- [How do I add a Customer?](${FRESHDESK_PUBLIC_URL})`,
+      "",
+      "Videos",
+      "- [Add Customers Walkthrough](https://www.youtube.com/watch?v=example)",
+    ].join("\n"),
+  );
+
+  const articlesOnly = buildCustomerFacingSourcesMarkdown([
+    {
+      title: "How do I add a Customer?",
+      url: FRESHDESK_PUBLIC_URL,
+      sourceType: "support_article",
+    },
+  ]);
+  assert.match(articlesOnly ?? "", /Articles/);
+  assert.equal(articlesOnly?.includes("Videos"), false);
 });
 
 test("Sources are deduplicated and internal metadata is not exposed", () => {
@@ -198,6 +240,7 @@ test("Sources are deduplicated and internal metadata is not exposed", () => {
   assert.equal(sources[0]?.url, FRESHDESK_PUBLIC_URL);
 
   const markdown = buildCustomerFacingSourcesMarkdown(sources);
+  assert.match(markdown ?? "", /Articles/);
   assert.equal(markdown?.includes("freshdesk:1001"), false);
   assert.equal(markdown?.includes("blob.core.windows.net"), false);
   assert.equal(markdown?.includes("freshdesk/1001/a.png"), false);
@@ -302,7 +345,7 @@ test("support appears after Sources and Red-action with exact contact URL", () =
     text.includes("When redActionAvailable is true"),
   );
   const supportIndex = texts.findIndex((text) =>
-    text.includes("Place it last, after Sources"),
+    text.includes("Always include the following support Markdown last"),
   );
 
   assert.ok(sourcesIndex > 0);
@@ -311,6 +354,15 @@ test("support appears after Sources and Red-action with exact contact URL", () =
 
   assert.equal(SUPPORT_CONTACT_URL, "https://bigredcloud.com/contact/");
   assert.match(CUSTOMER_FACING_SUPPORT_MARKDOWN, /https:\/\/bigredcloud\.com\/contact\//);
+  assert.match(
+    response.customerFacingAnswerSectionsMarkdown ?? "",
+    /Still need help\?/,
+  );
+  assert.ok(
+    (response.customerFacingAnswerSectionsMarkdown ?? "").endsWith(
+      "[Contact Big Red Cloud Support](https://bigredcloud.com/contact/)",
+    ),
+  );
 });
 
 test("support link appears when no strong answer is found", () => {
@@ -333,7 +385,7 @@ test("support link appears when no strong answer is found", () => {
   );
 });
 
-test("support link appears for company-specific settings and is omitted for complete answers", () => {
+test("support section is always included on every help answer", () => {
   const fallback = resolveSupportFallback({
     matchCount: 2,
     strongestScore: 500,
@@ -345,16 +397,28 @@ test("support link appears for company-specific settings and is omitted for comp
   assert.equal(fallback.supportFallbackReason, "company_specific_settings");
   assert.equal(
     fallback.customerFacingSupportMarkdown,
-    COMPANY_SPECIFIC_SUPPORT_MARKDOWN,
+    CUSTOMER_FACING_SUPPORT_MARKDOWN,
   );
 
   const response = buildUnifiedFindHelpResourcesResponse("add a customer", {
     freshdeskArticles: [freshdeskArticle()],
   });
   assert.ok(response.matchCount > 0);
-  assert.equal(response.supportFallbackRecommended, false);
-  assert.equal(response.customerFacingSupportMarkdown, undefined);
-  assert.equal(response.supportFallbackUrl, null);
+  assert.equal(response.supportFallbackRecommended, true);
+  assert.equal(
+    response.customerFacingSupportMarkdown,
+    CUSTOMER_FACING_SUPPORT_MARKDOWN,
+  );
+  assert.equal(response.supportFallbackUrl, SUPPORT_CONTACT_URL);
+  assert.match(
+    response.customerFacingAnswerSectionsMarkdown ?? "",
+    /Still need help\?[\s\S]*Contact Big Red Cloud Support/,
+  );
+  const sections = response.customerFacingAnswerSectionsMarkdown ?? "";
+  const sourcesPos = sections.indexOf("Sources");
+  const supportPos = sections.indexOf("Still need help?");
+  assert.ok(sourcesPos >= 0);
+  assert.ok(supportPos > sourcesPos);
 });
 
 test("never claims no Freshdesk article exists when a matching article was returned", () => {

@@ -4,28 +4,15 @@ export const CUSTOMER_FACING_SUPPORT_MARKDOWN = [
     "",
     `[Contact Big Red Cloud Support](${SUPPORT_CONTACT_URL})`,
 ].join("\n");
-export const COMPANY_SPECIFIC_SUPPORT_MARKDOWN = [
-    "Your company settings may affect these steps.",
-    "",
-    `[Contact Big Red Cloud Support](${SUPPORT_CONTACT_URL})`,
-].join("\n");
+/** @deprecated Prefer CUSTOMER_FACING_SUPPORT_MARKDOWN — support footer is always the standard section. */
+export const COMPANY_SPECIFIC_SUPPORT_MARKDOWN = CUSTOMER_FACING_SUPPORT_MARKDOWN;
 export const SUPPORT_FALLBACK_RESPONSE_GUIDANCE = [
-    "Include the support contact link only when the answer may not be enough:",
-    "no strong matching resource, incomplete answer, no relevant screenshot or source,",
-    "the user says the instructions did not solve the problem, company-specific settings,",
-    "specialised assistance, or unresolved uncertainty.",
+    "Always end every help answer with the Still need help? support section.",
     `Use exactly ${SUPPORT_CONTACT_URL}.`,
-    "When support is included, place it after Sources and after any Do this through Red section — support must be last.",
-    "Do not add the support footer automatically to every successful complete answer.",
+    "Place support after Sources and after any Do this through Red section — support must always be last.",
 ].join(" ");
 const STRONG_MATCH_SCORE_THRESHOLD = 100;
-export function buildCustomerFacingSupportMarkdown(reason) {
-    if (!reason) {
-        return undefined;
-    }
-    if (reason === "company_specific_settings") {
-        return COMPANY_SPECIFIC_SUPPORT_MARKDOWN;
-    }
+export function buildCustomerFacingSupportMarkdown(_reason) {
     return CUSTOMER_FACING_SUPPORT_MARKDOWN;
 }
 export function resolveSupportFallback(options) {
@@ -55,25 +42,19 @@ export function resolveSupportFallback(options) {
     else if (options.hasRelevantSourceOrScreenshot === false) {
         reason = "no_relevant_source_or_screenshot";
     }
-    const recommended = reason !== null;
-    const markdown = recommended
-        ? buildCustomerFacingSupportMarkdown(reason)
-        : undefined;
     return {
-        supportFallbackRecommended: recommended,
+        // Support footer is required on every help answer.
+        supportFallbackRecommended: true,
         supportFallbackReason: reason,
         supportUrl: SUPPORT_CONTACT_URL,
         contactUrl: SUPPORT_CONTACT_URL,
-        ...(markdown ? { customerFacingSupportMarkdown: markdown } : {}),
+        customerFacingSupportMarkdown: CUSTOMER_FACING_SUPPORT_MARKDOWN,
     };
 }
 export function buildSupportMarkdownTextBlock(supportMarkdown) {
-    const markdown = supportMarkdown?.trim();
-    if (!markdown) {
-        return undefined;
-    }
+    const markdown = supportMarkdown?.trim() || CUSTOMER_FACING_SUPPORT_MARKDOWN;
     return [
-        "Include the following support Markdown only when supportFallbackRecommended is true. Place it last, after Sources and after any Do this through Red section:",
+        "Always include the following support Markdown last, after Sources and after any Do this through Red section:",
         "",
         markdown,
     ].join("\n");

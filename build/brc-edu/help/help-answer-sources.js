@@ -64,8 +64,30 @@ export function buildCustomerFacingSourcesMarkdown(sources) {
     if (sources.length === 0) {
         return undefined;
     }
-    const lines = sources.map((source) => `- [${source.title}](${source.url})`);
-    return ["Sources", "", ...lines].join("\n");
+    const articles = sources.filter((source) => source.sourceType === "support_article" ||
+        source.sourceType === "customer_documentation");
+    const videos = sources.filter((source) => source.sourceType === "recorded_webinar" ||
+        source.sourceType === "upcoming_webinar");
+    const lines = ["Sources"];
+    if (articles.length > 0) {
+        lines.push("", "Articles");
+        for (const source of articles) {
+            lines.push(`- [${source.title}](${source.url})`);
+        }
+    }
+    if (videos.length > 0) {
+        lines.push("", "Videos");
+        for (const source of videos) {
+            lines.push(`- [${source.title}](${source.url})`);
+        }
+    }
+    // If somehow only unclassified types appear, fall back to a flat list.
+    if (articles.length === 0 && videos.length === 0) {
+        for (const source of sources) {
+            lines.push(`- [${source.title}](${source.url})`);
+        }
+    }
+    return lines.join("\n");
 }
 export function buildSourcesMarkdownTextBlock(sourcesMarkdown) {
     const markdown = sourcesMarkdown?.trim();
