@@ -7,6 +7,13 @@ const WEBINAR_CSV = [
     "title,url,helpRoutingCategory,keywords,description,isActive,contentType,source,lastReviewed,generatedFrom,needsReview",
     "Bank Reconciliation Webinar,https://www.youtube.com/watch?v=bank-rec,bank_feeds,bank reconciliation,Video walkthrough,true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false",
 ].join("\n");
+const TRAINING_VIDEOS_CSV = [
+    "title,url,helpRoutingCategory,keywords,description,isActive,contentType,source,lastReviewed,generatedFrom,needsReview",
+    '"Sales Invoices, Cash Book and Bank Rec in Big Red Cloud",https://www.youtube.com/watch?v=sales-invoices-cash-bank,sales_cash_bank_rec,"sales invoices, cash book, bank reconciliation","Sales invoices cash book and bank rec walkthrough",true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false',
+    "Bank Reconciliation Webinar,https://www.youtube.com/watch?v=bank-rec,bank_feeds,bank reconciliation,Video walkthrough of bank reconciliation,true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false",
+    "Getting Started with Big Red Cloud,https://www.youtube.com/watch?v=getting-started,getting_started,getting started overview,Generic onboarding overview,true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false",
+    "API Keys and Users Overview,https://www.youtube.com/watch?v=api-keys,admin,api key users login,API and user administration,true,video,Big Red Cloud,2026-07-08,webinar_video_routing_index.csv,false",
+].join("\n");
 function freshdeskArticle() {
     return {
         id: "freshdesk-1001",
@@ -344,4 +351,94 @@ test("Sources include only used resources, not login or webinar hits", () => {
         assert.ok(supportPos > redPos);
     }
     assert.equal(response.customerFacingSupportMarkdown?.includes("https://bigredcloud.com/contact/"), true);
+});
+test("sales invoice help automatically includes the relevant training video", () => {
+    const salesBook = {
+        ...freshdeskArticle(),
+        id: "freshdesk-sales-book",
+        freshdeskArticleId: 2001,
+        folderName: "Sales",
+        title: "Sales Book Explained",
+        bodyText: "How to create a sales invoice in the sales book.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/2001-sales-book-explained",
+    };
+    const response = buildUnifiedFindHelpResourcesResponse("How do I create a sales invoice?", {
+        freshdeskArticles: [salesBook],
+        recordedWebinars: parseEnrichedEduCsv(TRAINING_VIDEOS_CSV),
+    });
+    assert.ok(response.usedResourceIds.includes("freshdesk:2001"));
+    assert.ok(response.usedResourceIds.some((id) => id.startsWith("recorded_webinar:")));
+    assert.equal(response.sources[0]?.sourceType, "support_article");
+    assert.equal(response.sources[0]?.title, "Sales Book Explained");
+    const videoSource = response.sources.find((source) => source.sourceType === "recorded_webinar");
+    assert.ok(videoSource);
+    assert.match(videoSource?.title ?? "", /Sales Invoices/i);
+    assert.equal(videoSource?.url, "https://www.youtube.com/watch?v=sales-invoices-cash-bank");
+    const markdown = response.customerFacingSourcesMarkdown ?? "";
+    assert.match(markdown, /Articles/);
+    assert.match(markdown, /Videos/);
+    assert.match(markdown, /\[Sales Invoices, Cash Book and Bank Rec in Big Red Cloud\]\(https:\/\/www\.youtube\.com\/watch\?v=sales-invoices-cash-bank\)/);
+    assert.equal(markdown.includes("API Keys"), false);
+    assert.equal(markdown.includes("Getting Started"), false);
+});
+test("bank reconciliation help automatically includes a relevant video when available", () => {
+    const bankRec = {
+        ...freshdeskArticle(),
+        title: "How do I do the Bank Reconciliation (Bank Rec)?",
+        publicUrl: BANK_RECON_CANONICAL_URL,
+    };
+    const response = buildUnifiedFindHelpResourcesResponse("How do I reconcile my bank?", {
+        freshdeskArticles: [bankRec],
+        recordedWebinars: parseEnrichedEduCsv(TRAINING_VIDEOS_CSV),
+    });
+    assert.ok(response.usedResourceIds[0]?.startsWith("freshdesk:"));
+    const videoSource = response.sources.find((source) => source.sourceType === "recorded_webinar");
+    assert.ok(videoSource);
+    assert.match(videoSource?.title ?? "", /Bank Reconciliation/i);
+    assert.equal(videoSource?.url, "https://www.youtube.com/watch?v=bank-rec");
+    assert.match(response.customerFacingSourcesMarkdown ?? "", /Videos/);
+    assert.match(response.customerFacingSourcesMarkdown ?? "", /https:\/\/www\.youtube\.com\/watch\?v=bank-rec/);
+});
+test("Videos heading is omitted when no strong video match exists", () => {
+    const addCustomer = {
+        ...freshdeskArticle(),
+        id: "freshdesk-157000368447",
+        freshdeskArticleId: 157000368447,
+        folderName: "Customers",
+        title: "How do I add a Customer?",
+        bodyText: "Click Customers, then click Add.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer",
+    };
+    const response = buildUnifiedFindHelpResourcesResponse("How do I add a customer in Big Red Cloud?", {
+        freshdeskArticles: [addCustomer],
+        recordedWebinars: parseEnrichedEduCsv(TRAINING_VIDEOS_CSV),
+    });
+    assert.deepEqual(response.usedResourceIds, ["freshdesk:157000368447"]);
+    assert.equal(response.sources.length, 1);
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("Videos"), false);
+    assert.equal(response.customerFacingSourcesMarkdown?.includes("youtube.com"), false);
+});
+test("irrelevant webinars are excluded from Sources Videos", () => {
+    const salesBook = {
+        ...freshdeskArticle(),
+        id: "freshdesk-sales-book",
+        freshdeskArticleId: 2001,
+        folderName: "Sales",
+        title: "Sales Book Explained",
+        bodyText: "How to create a sales invoice in the sales book.",
+        syncedImages: [],
+        publicUrl: "https://bigredcloud.freshdesk.com/support/solutions/articles/2001-sales-book-explained",
+    };
+    const response = buildUnifiedFindHelpResourcesResponse("How do I create a sales invoice?", {
+        freshdeskArticles: [salesBook],
+        recordedWebinars: parseEnrichedEduCsv(TRAINING_VIDEOS_CSV),
+    });
+    const markdown = response.customerFacingSourcesMarkdown ?? "";
+    assert.equal(markdown.includes("API Keys and Users Overview"), false);
+    assert.equal(markdown.includes("watch?v=api-keys"), false);
+    assert.equal(markdown.includes("Getting Started with Big Red Cloud"), false);
+    assert.equal(markdown.includes("watch?v=getting-started"), false);
+    assert.match(markdown, /Sales Invoices, Cash Book and Bank Rec/);
 });

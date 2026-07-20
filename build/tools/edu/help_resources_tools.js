@@ -21,6 +21,7 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
     "Never claim no Freshdesk article exists when usedResourceIds includes a matching Freshdesk resource.",
     "Sources must list only usedResourceIds — never unrelated login, API-key, user, or webinar search hits.",
     "Under Sources, group Freshdesk / documentation under Articles and recorded webinars under Videos — omit an empty Videos heading.",
+    "For procedural how-tos, automatically include the strongest topic-aligned training video under Videos when one exists — do not require the user to ask for a video.",
     "Always emit Sources before any Do this through Red section.",
     "When redActionAvailable is true, include customerFacingRedActionMarkdown after Sources and before support — do not start the action unless the user asks.",
     "Always end every help answer with Still need help? and [Contact Big Red Cloud Support](https://bigredcloud.com/contact/) — support must be last.",

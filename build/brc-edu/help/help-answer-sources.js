@@ -1,5 +1,6 @@
 import { isPublicHttpsUrl } from "./help-resource-types.js";
 import { isFreshdeskPublicArticleUrl } from "../freshdesk/freshdesk-article-url.js";
+import { isStrongProceduralVideoMatch, scoreProceduralVideoMatch, } from "./help-query-expansion.js";
 export const DEFAULT_HELP_SOURCES_MAX = 5;
 export const SOURCES_MARKDOWN_COPY_INSTRUCTION = "Include the following exact Sources Markdown in the customer-facing answer. Use these exact URLs — never invent or rewrite them. Do not move screenshot links into Sources.";
 const SOURCE_TYPE_BY_RESOURCE = {
@@ -107,27 +108,63 @@ export function helpSearchResultsToSourceInputs(results) {
 }
 /**
  * Choose the resources that should appear under Sources for a tutorial answer.
- * Prefer the strongest Freshdesk procedural article; otherwise the top result only.
+ * Prefer the strongest Freshdesk procedural article as primary, then the
+ * strongest topic-aligned recorded webinar when one exists.
  * Never dump the full search list into Sources.
  */
 export function selectUsedHelpResources(results, options) {
     if (results.length === 0) {
         return [];
     }
-    const maxUsed = options?.maxUsed ?? 1;
+    const maxUsed = options?.maxUsed ?? 5;
+    const question = options?.question?.trim() ?? "";
+    const used = [];
+    const usedIds = new Set();
+    const push = (resource) => {
+        if (!resource || usedIds.has(resource.resourceId) || used.length >= maxUsed) {
+            return;
+        }
+        usedIds.add(resource.resourceId);
+        used.push(resource);
+    };
     const strongFreshdesk = results.find((result) => result.source === "freshdesk" &&
         result.relevanceScore >= 500 &&
         Boolean(result.publicUrl));
-    if (strongFreshdesk) {
-        return [strongFreshdesk];
+    push(strongFreshdesk);
+    if (used.length === 0 && options?.intentIsProcedural) {
+        push(results.find((result) => result.source === "freshdesk" && Boolean(result.publicUrl)));
     }
-    if (options?.intentIsProcedural) {
-        const anyFreshdesk = results.find((result) => result.source === "freshdesk" && Boolean(result.publicUrl));
-        if (anyFreshdesk) {
-            return [anyFreshdesk];
+    if (used.length === 0) {
+        push(results[0]);
+    }
+    // Auto-include one strong topic-aligned training video for procedural how-tos.
+    if (options?.intentIsProcedural && question) {
+        const companionVideo = pickStrongCompanionVideo(results, question, usedIds);
+        push(companionVideo);
+    }
+    return used;
+}
+function pickStrongCompanionVideo(results, question, usedIds) {
+    const candidates = results
+        .filter((result) => result.source === "recorded_webinar" &&
+        Boolean(result.publicUrl) &&
+        !usedIds.has(result.resourceId))
+        .map((result) => {
+        const matchScore = scoreProceduralVideoMatch(question, result.title);
+        return {
+            result,
+            matchScore,
+            strong: isStrongProceduralVideoMatch(question, result.title, [], result.relevanceScore),
+        };
+    })
+        .filter((entry) => entry.strong)
+        .sort((left, right) => {
+        if (right.matchScore !== left.matchScore) {
+            return right.matchScore - left.matchScore;
         }
-    }
-    return results.slice(0, maxUsed);
+        return right.result.relevanceScore - left.result.relevanceScore;
+    });
+    return candidates[0]?.result;
 }
 export function filterHelpResultsByUsedIds(results, usedResourceIds) {
     if (usedResourceIds.length === 0) {

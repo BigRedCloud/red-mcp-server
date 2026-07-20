@@ -46,6 +46,7 @@ import {
   detectHelpProceduralIntent,
   expandHelpSearchQueries,
   scoreProceduralTitleMatch,
+  scoreProceduralVideoMatch,
 } from "./help-query-expansion.js";
 
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
@@ -480,8 +481,21 @@ export function searchUnifiedHelpResources(
           ]),
         );
 
-        if (intent && !/\b(video|webinar|recording|watch)\b/i.test(question)) {
-          score = Math.max(0, score - 60);
+        // Auto-surface topic-aligned training videos for procedural how-tos —
+        // do not require the user to say "video" / "webinar".
+        const videoMatch = scoreProceduralVideoMatch(
+          question,
+          normalized.title,
+          normalized.topics,
+        );
+        if (videoMatch > 0) {
+          score = Math.max(score, videoMatch);
+        } else if (
+          intent &&
+          !/\b(video|webinar|recording|watch)\b/i.test(question)
+        ) {
+          // Keep weak/generic videos from crowding procedural results.
+          score = Math.max(0, score - 40);
         }
 
         consider(
@@ -544,6 +558,7 @@ export function buildUnifiedFindHelpResourcesResponse(
   const intent = detectHelpProceduralIntent(question);
   const usedResources = selectUsedHelpResources(resources, {
     intentIsProcedural: intent !== null,
+    question,
   });
   const usedResourceIds = usedResources.map((resource) => resource.resourceId);
   const answerSources = buildHelpAnswerSources(
@@ -624,6 +639,7 @@ export function buildUnifiedFindHelpResourcesResponse(
       sources: [
         "Copy customerFacingSourcesMarkdown into the final answer under the heading Sources.",
         "Group Freshdesk / documentation links under Articles and recorded webinars under Videos — omit an empty Videos heading.",
+        "For procedural how-tos, automatically include the strongest topic-aligned training video under Videos when one exists — do not require the user to ask for a video.",
         "Sources must list only usedResourceIds — never login, API-key, user, or webinar hits that were not used.",
         "Use exact URLs from the sources array — never invent or rewrite URLs.",
         "Deduplicate. Cap at five. Most relevant first.",

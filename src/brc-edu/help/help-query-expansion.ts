@@ -95,7 +95,7 @@ const EXPANSION_RULES: ExpansionRule[] = [
       "How do I create a sales invoice",
       "raise invoice",
     ],
-    titleHints: ["sales invoice", "create a sales invoice"],
+    titleHints: ["sales invoice", "create a sales invoice", "sales book"],
   },
 ];
 
@@ -221,7 +221,10 @@ export function scoreProceduralTitleMatch(
     }
     if (titleNorm.includes(hintNorm)) {
       // Prefer exact procedural titles over longer variants (e.g. opening balance).
-      const extra = titleNorm.replace(hintNorm, "").replace(/how do i|\?/g, "").trim();
+      const extra = titleNorm
+        .replace(hintNorm, "")
+        .replace(/how do i|\?/g, "")
+        .trim();
       if (!extra) {
         best = Math.max(best, 850);
       } else if (intent === "opening_balance" || extra.includes("opening")) {
@@ -233,4 +236,87 @@ export function scoreProceduralTitleMatch(
   }
 
   return best;
+}
+
+/**
+ * Strong match when a recorded webinar/video title aligns with the procedural intent.
+ * Unlike article scoring, "webinar" in the title is not treated as irrelevant noise.
+ */
+export function scoreProceduralVideoMatch(
+  question: string,
+  title: string,
+  topics: string[] = [],
+): number {
+  const intent = detectHelpProceduralIntent(question);
+  if (!intent) {
+    return 0;
+  }
+
+  // Videos about login/API keys remain weak for operational how-tos.
+  if (
+    /\b(log\s*in|login|api\s*key|password|permission|backup|restore)\b/i.test(
+      title,
+    )
+  ) {
+    return 0;
+  }
+
+  const haystack = normaliseHelpSearchText([title, ...topics].join(" "));
+  if (!haystack) {
+    return 0;
+  }
+
+  const hints = getProceduralTitleHints(question);
+  let best = 0;
+
+  for (const hint of hints) {
+    const hintNorm = normaliseHelpSearchText(hint);
+    if (!hintNorm) {
+      continue;
+    }
+    if (haystack === hintNorm) {
+      best = Math.max(best, 850);
+      continue;
+    }
+    if (haystack.includes(hintNorm)) {
+      // Prefer focused training titles over multi-topic compilations.
+      const focused = haystack.length <= hintNorm.length + 48 ? 750 : 700;
+      best = Math.max(best, focused);
+    }
+  }
+
+  // Token overlap with the core intent phrase (e.g. sales + invoice).
+  if (best === 0) {
+    const intentTokens = hints
+      .flatMap((hint) => normaliseHelpSearchText(hint).split(/\s+/))
+      .filter((token) => token.length >= 4);
+    const uniqueTokens = [...new Set(intentTokens)];
+    const hitCount = uniqueTokens.filter((token) =>
+      haystack.includes(token),
+    ).length;
+    if (uniqueTokens.length > 0 && hitCount === uniqueTokens.length) {
+      best = Math.max(best, 550);
+    } else if (hitCount >= 2) {
+      best = Math.max(best, 400);
+    }
+  }
+
+  return best;
+}
+
+/**
+ * True when a video is strong enough to auto-include under Sources → Videos.
+ */
+export function isStrongProceduralVideoMatch(
+  question: string,
+  title: string,
+  topics: string[] = [],
+  relevanceScore = 0,
+): boolean {
+  const matchScore = scoreProceduralVideoMatch(question, title, topics);
+  if (matchScore >= 400) {
+    return true;
+  }
+  // Organic search score alone is not enough without topic alignment.
+  return matchScore > 0 && relevanceScore >= 250;
 }

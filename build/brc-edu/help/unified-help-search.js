@@ -7,7 +7,7 @@ import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSource
 import { SUPPORT_CONTACT_URL, SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMarkdownTextBlock, resolveSupportFallback, } from "./help-support-fallback.js";
 import { AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, buildHelpAnswerSectionsMarkdown, } from "./help-answer-layout.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
-import { detectHelpProceduralIntent, expandHelpSearchQueries, scoreProceduralTitleMatch, } from "./help-query-expansion.js";
+import { detectHelpProceduralIntent, expandHelpSearchQueries, scoreProceduralTitleMatch, scoreProceduralVideoMatch, } from "./help-query-expansion.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
 export const SUPPORT_FOOTER_GUIDANCE = "For advice specific to your company, or for more specialised assistance, please contact the Big Red Cloud support team: https://bigredcloud.com/contact/";
@@ -299,8 +299,16 @@ export function searchUnifiedHelpResources(question, sources, options) {
                     normalized.bodyText,
                     normalized.topics.join(" "),
                 ]));
-                if (intent && !/\b(video|webinar|recording|watch)\b/i.test(question)) {
-                    score = Math.max(0, score - 60);
+                // Auto-surface topic-aligned training videos for procedural how-tos —
+                // do not require the user to say "video" / "webinar".
+                const videoMatch = scoreProceduralVideoMatch(question, normalized.title, normalized.topics);
+                if (videoMatch > 0) {
+                    score = Math.max(score, videoMatch);
+                }
+                else if (intent &&
+                    !/\b(video|webinar|recording|watch)\b/i.test(question)) {
+                    // Keep weak/generic videos from crowding procedural results.
+                    score = Math.max(0, score - 40);
                 }
                 consider(`recorded_webinar:${normalized.url}`, score, toHelpSearchResult(normalized, score));
             }
@@ -331,6 +339,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
     const intent = detectHelpProceduralIntent(question);
     const usedResources = selectUsedHelpResources(resources, {
         intentIsProcedural: intent !== null,
+        question,
     });
     const usedResourceIds = usedResources.map((resource) => resource.resourceId);
     const answerSources = buildHelpAnswerSources(helpSearchResultsToSourceInputs(usedResources));
@@ -402,6 +411,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             sources: [
                 "Copy customerFacingSourcesMarkdown into the final answer under the heading Sources.",
                 "Group Freshdesk / documentation links under Articles and recorded webinars under Videos — omit an empty Videos heading.",
+                "For procedural how-tos, automatically include the strongest topic-aligned training video under Videos when one exists — do not require the user to ask for a video.",
                 "Sources must list only usedResourceIds — never login, API-key, user, or webinar hits that were not used.",
                 "Use exact URLs from the sources array — never invent or rewrite URLs.",
                 "Deduplicate. Cap at five. Most relevant first.",
