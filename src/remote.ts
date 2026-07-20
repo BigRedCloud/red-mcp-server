@@ -67,18 +67,25 @@ import {
   createConfiguredWorkbookBlobAccess,
 } from "./edu/brc_edu_workbook_store.js";
 import {
+  authorizeBrcEduAdminRequest,
+  BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE,
+  getBrcEduAdminProtectedPath,
+  type BrcEduAdminAuthResult,
+} from "./edu/brc_edu_admin_auth.js";
+import {
   BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY,
   BRC_EDU_UPLOAD_FIELD_NAME,
   BRC_EDU_UPLOAD_MAX_BYTES,
   createConfiguredBrcEduBlobUploader,
   handleBrcEduResourceUpload,
-  validateBrcEduAdminUploadSecret,
 } from "./edu/brc_edu_upload_store.js";
 import {
+  renderBrcEduStaffDeniedPage,
   renderBrcEduUploadErrorPage,
   renderBrcEduUploadPage,
   renderBrcEduUploadPlainError,
   renderBrcEduUploadSuccessPage,
+  type BrcEduAdminPageAuth,
   WORKBOOK_API_PATH,
   WORKBOOK_DOWNLOAD_PATH,
 } from "./edu/brc_edu_upload_page.js";
@@ -224,6 +231,50 @@ function getBrcEduAdminUploadSecretFromQuery(req: Request): string | undefined {
   }
 
   return typeof secret === "string" ? secret : undefined;
+}
+
+function authorizeBrcEduAdminHttpRequest(req: Request): BrcEduAdminAuthResult {
+  return authorizeBrcEduAdminRequest({
+    headers: req.headers,
+    providedSecret: getBrcEduAdminUploadSecretFromQuery(req),
+    returnPath: req.originalUrl || getBrcEduAdminProtectedPath(),
+  });
+}
+
+function brcEduAdminPageAuthFromResult(
+  authResult: Extract<BrcEduAdminAuthResult, { ok: true }>,
+  providedSecret: string | undefined,
+): BrcEduAdminPageAuth {
+  if (authResult.method === "secret" && providedSecret) {
+    return { mode: "secret", secret: providedSecret };
+  }
+
+  return { mode: "session" };
+}
+
+function sendBrcEduAdminAuthFailure(
+  res: Response,
+  authResult: Extract<BrcEduAdminAuthResult, { ok: false }>,
+  options: { asJson?: boolean } = {},
+): void {
+  if (authResult.redirectToLogin) {
+    res.redirect(302, authResult.redirectToLogin);
+    return;
+  }
+
+  if (options.asJson) {
+    res.status(authResult.status).json({ error: authResult.error });
+    return;
+  }
+
+  if (authResult.status === 403) {
+    res
+      .status(403)
+      .send(renderBrcEduStaffDeniedPage(authResult.error || BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE));
+    return;
+  }
+
+  res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
 }
 
 type RateLimitBucket = {
@@ -576,23 +627,23 @@ app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
 });
 
 app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
+  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
 
   if (!authResult.ok) {
-    res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+    sendBrcEduAdminAuthFailure(res, authResult);
     return;
   }
 
-  res.send(renderBrcEduUploadPage(secret!));
+  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
+  res.send(renderBrcEduUploadPage(pageAuth));
 });
 
 app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
 
   if (!authResult.ok) {
-    res.status(authResult.status).json({ error: authResult.error });
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
@@ -617,11 +668,10 @@ app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
 });
 
 app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
 
   if (!authResult.ok) {
-    res.status(authResult.status).json({ error: authResult.error });
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
@@ -646,11 +696,10 @@ app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
 });
 
 app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
 
   if (!authResult.ok) {
-    res.status(authResult.status).json({ error: authResult.error });
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
@@ -695,13 +744,15 @@ app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
 });
 
 app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
-  const secret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = validateBrcEduAdminUploadSecret(secret);
+  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
 
   if (!authResult.ok) {
-    res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+    sendBrcEduAdminAuthFailure(res, authResult);
     return;
   }
+
+  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
 
   eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
     void (async () => {
@@ -711,7 +762,7 @@ app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => 
             ? "File exceeds the maximum size of 5 MB."
             : "Upload failed.";
 
-        res.status(400).send(renderBrcEduUploadErrorPage(message, secret));
+        res.status(400).send(renderBrcEduUploadErrorPage(message, pageAuth));
         return;
       }
 
@@ -730,7 +781,9 @@ app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => 
       );
 
       if (!uploadResult.ok) {
-        res.status(uploadResult.status).send(renderBrcEduUploadErrorPage(uploadResult.error, secret));
+        res
+          .status(uploadResult.status)
+          .send(renderBrcEduUploadErrorPage(uploadResult.error, pageAuth));
         return;
       }
 
@@ -740,12 +793,12 @@ app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => 
         renderBrcEduUploadSuccessPage(
           uploadResult.latestBlob,
           uploadResult.archiveBlob,
-          secret!,
+          pageAuth,
         ),
       );
     })().catch(() => {
       if (!res.headersSent) {
-        res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", secret));
+        res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", pageAuth));
       }
     });
   });

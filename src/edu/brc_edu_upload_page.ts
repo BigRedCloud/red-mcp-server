@@ -317,21 +317,46 @@ function pageShell(title: string, content: string, extraHead = ""): string {
 </html>`;
 }
 
-function uploadActionUrl(secret: string): string {
-  return `${UPLOAD_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+/** How the admin page authenticates subsequent API calls. */
+export type BrcEduAdminPageAuth =
+  | { mode: "session" }
+  | { mode: "secret"; secret: string };
+
+function withOptionalSecretQuery(path: string, auth: BrcEduAdminPageAuth): string {
+  if (auth.mode !== "secret") {
+    return path;
+  }
+
+  return `${path}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(auth.secret)}`;
 }
 
-function workbookApiUrl(secret: string): string {
-  return `${WORKBOOK_API_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+function uploadActionUrl(auth: BrcEduAdminPageAuth): string {
+  return withOptionalSecretQuery(UPLOAD_PATH, auth);
 }
 
-function workbookDownloadUrl(secret: string): string {
-  return `${WORKBOOK_DOWNLOAD_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+function workbookApiUrl(auth: BrcEduAdminPageAuth): string {
+  return withOptionalSecretQuery(WORKBOOK_API_PATH, auth);
 }
 
-function adminPageScript(secret: string): string {
-  const apiUrl = workbookApiUrl(secret);
-  const downloadUrl = workbookDownloadUrl(secret);
+function workbookDownloadUrl(auth: BrcEduAdminPageAuth): string {
+  return withOptionalSecretQuery(WORKBOOK_DOWNLOAD_PATH, auth);
+}
+
+function resolvePageAuth(secretOrAuth?: string | BrcEduAdminPageAuth): BrcEduAdminPageAuth {
+  if (!secretOrAuth) {
+    return { mode: "session" };
+  }
+
+  if (typeof secretOrAuth === "string") {
+    return { mode: "secret", secret: secretOrAuth };
+  }
+
+  return secretOrAuth;
+}
+
+function adminPageScript(auth: BrcEduAdminPageAuth): string {
+  const apiUrl = workbookApiUrl(auth);
+  const downloadUrl = workbookDownloadUrl(auth);
 
   return `<script>
 (() => {
@@ -620,7 +645,8 @@ function adminPageScript(secret: string): string {
 </script>`;
 }
 
-export function renderBrcEduUploadPage(secret: string): string {
+export function renderBrcEduUploadPage(secretOrAuth?: string | BrcEduAdminPageAuth): string {
+  const auth = resolvePageAuth(secretOrAuth);
   const content = `
       <div class="card instructions">
         <h2>How to manage Red webinar resources</h2>
@@ -671,7 +697,7 @@ export function renderBrcEduUploadPage(secret: string): string {
         <p class="lead">
           You can still upload an approved <strong>.xlsx</strong> or <strong>.csv</strong> file directly. Red stores the file in Azure Blob Storage for downstream processing.
         </p>
-        <form method="POST" action="${escapeHtml(uploadActionUrl(secret))}" enctype="multipart/form-data">
+        <form method="POST" action="${escapeHtml(uploadActionUrl(auth))}" enctype="multipart/form-data">
           <label for="${BRC_EDU_UPLOAD_FIELD_NAME}">Resource file</label>
           <input
             id="${BRC_EDU_UPLOAD_FIELD_NAME}"
@@ -684,14 +710,15 @@ export function renderBrcEduUploadPage(secret: string): string {
         </form>
       </div>`;
 
-  return pageShell("BRC Edu webinar resources", content + adminPageScript(secret));
+  return pageShell("BRC Edu webinar resources", content + adminPageScript(auth));
 }
 
 export function renderBrcEduUploadSuccessPage(
   latestBlob: string,
   archiveBlob: string,
-  secret: string,
+  secretOrAuth?: string | BrcEduAdminPageAuth,
 ): string {
+  const auth = resolvePageAuth(secretOrAuth);
   const content = `
       <div class="card">
         <div class="notice success">
@@ -699,16 +726,21 @@ export function renderBrcEduUploadSuccessPage(
         </div>
         <p><strong>Latest:</strong> ${escapeHtml(latestBlob)}</p>
         <p><strong>Archive:</strong> ${escapeHtml(archiveBlob)}</p>
-        <p><a href="${escapeHtml(uploadActionUrl(secret))}">Return to webinar admin</a></p>
+        <p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>
       </div>`;
 
   return pageShell("BRC Edu upload successful", content);
 }
 
-export function renderBrcEduUploadErrorPage(message: string, secret?: string): string {
-  const retryLink = secret
-    ? `<p><a href="${escapeHtml(uploadActionUrl(secret))}">Return to webinar admin</a></p>`
-    : "";
+export function renderBrcEduUploadErrorPage(
+  message: string,
+  secretOrAuth?: string | BrcEduAdminPageAuth,
+): string {
+  const auth = resolvePageAuth(secretOrAuth);
+  const retryLink =
+    auth.mode === "session" || auth.mode === "secret"
+      ? `<p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>`
+      : "";
 
   const content = `
       <div class="card">
@@ -721,6 +753,17 @@ export function renderBrcEduUploadErrorPage(message: string, secret?: string): s
 
 export function renderBrcEduUploadPlainError(message: string): string {
   return message;
+}
+
+export function renderBrcEduStaffDeniedPage(
+  message = "This area is available only to authorised Big Red Cloud staff.",
+): string {
+  const content = `
+      <div class="card">
+        <div class="notice error">${escapeHtml(message)}</div>
+      </div>`;
+
+  return pageShell("Access denied", content);
 }
 
 export { WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH };

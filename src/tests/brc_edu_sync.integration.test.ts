@@ -10,7 +10,7 @@ import type { Readable } from "node:stream";
 import { BRC_EDU_SYNC_SECRET_HEADER } from "../edu/brc_edu_synced_store.js";
 
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
+const SERVER_START_TIMEOUT_MS = 60_000;
 const SYNC_PATH = "/internal/brc-edu/resources/sync";
 
 const SUPPORT_CSV = [

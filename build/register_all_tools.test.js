@@ -53,6 +53,17 @@ test("register_all_tools includes brc_get_help_resource_details", () => {
     assert.ok(registeredTools.has("brc_get_help_resource_details"));
     assert.equal(isToolEnabled("brc_get_help_resource_details"), true);
 });
+test("register_all_tools includes brc_open_edu_admin", () => {
+    assert.ok(registeredTools.has("brc_open_edu_admin"));
+    assert.equal(isToolEnabled("brc_open_edu_admin"), true);
+});
+test("brc_open_edu_admin does not require company credentials", () => {
+    assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_open_edu_admin"));
+    const tool = registeredTools.get("brc_open_edu_admin");
+    assert.ok(tool);
+    assert.match(tool.description, /Does not bypass authentication/i);
+    assert.match(tool.description, /never a shared secret/i);
+});
 test("brc_get_help_resource_details does not require company credentials", () => {
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_get_help_resource_details"));
     const tool = registeredTools.get("brc_get_help_resource_details");

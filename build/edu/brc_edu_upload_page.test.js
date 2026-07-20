@@ -57,3 +57,10 @@ test("renderBrcEduUploadPage does not embed the admin secret in error message te
     assert.equal(html.includes(`Admin page element missing: ${secret}`), false);
     assert.equal(html.includes(`Could not load workbook.${secret}`), false);
 });
+test("renderBrcEduUploadPage session mode keeps the admin page without secret query parameters", () => {
+    const html = renderBrcEduUploadPage({ mode: "session" });
+    assert.match(html, /BRC Edu webinar resources/);
+    assert.match(html, /id="refresh-btn"/);
+    assert.match(html, /id="save-btn"/);
+    assert.equal(html.includes("secret="), false);
+});

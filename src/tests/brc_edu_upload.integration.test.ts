@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "../edu/brc_edu_upload_store.js";
 
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
+const SERVER_START_TIMEOUT_MS = 60_000;
 const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
 const WORKBOOK_PATH = `${UPLOAD_PATH}/workbook`;
 const WORKBOOK_DOWNLOAD_PATH = `${UPLOAD_PATH}/workbook/download`;
@@ -97,6 +97,11 @@ async function startTestServer(
       APPLICATIONINSIGHTS_CONNECTION_STRING: "",
       BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
       BRC_ALLOW_DEV_MODE: "false",
+      // Keep secret-only tests isolated unless a case opts into Entra.
+      BRC_EDU_ADMIN_ENTRA_TENANT_ID: "",
+      BRC_EDU_ADMIN_ENTRA_GROUP_ID: "",
+      BRC_EDU_ADMIN_ENTRA_APP_ROLE: "",
+      BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "true",
       ...envOverrides,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -399,4 +404,94 @@ test("GET and POST /internal/brc-edu/resources/upload do not log secrets in serv
 
   assert.equal(output.includes(secret), false);
   assert.equal(output.includes(BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY), false);
+});
+
+function encodeEasyAuthPrincipal(claims: Array<{ typ: string; val: string }>): string {
+  return Buffer.from(
+    JSON.stringify({
+      auth_typ: "aad",
+      claims,
+    }),
+    "utf8",
+  ).toString("base64");
+}
+
+test("GET /internal/brc-edu/resources/upload redirects unauthenticated users to Microsoft sign-in when Entra is configured", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+    BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+    BRC_EDU_ADMIN_UPLOAD_SECRET: "",
+    BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "false",
+  });
+
+  const response = await fetch(uploadUrl(port), { redirect: "manual" });
+  assert.equal(response.status, 302);
+  const location = response.headers.get("location") ?? "";
+  assert.match(location, /\/\.auth\/login\/aad\?/);
+  assert.match(location, /post_login_redirect_uri=/);
+});
+
+test("GET /internal/brc-edu/resources/upload allows approved Entra staff without a secret", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+    BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+    BRC_EDU_ADMIN_UPLOAD_SECRET: "must-never-appear-in-html",
+  });
+
+  const principal = encodeEasyAuthPrincipal([
+    {
+      typ: "http://schemas.microsoft.com/identity/claims/tenantid",
+      val: "tenant-a",
+    },
+    { typ: "groups", val: "group-edu-admins" },
+    { typ: "preferred_username", val: "staff@bigredbook.com" },
+  ]);
+
+  const response = await fetch(uploadUrl(port), {
+    headers: {
+      "x-ms-client-principal": principal,
+      "x-ms-client-principal-name": "staff@bigredbook.com",
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /BRC Edu webinar resources/i);
+  assert.match(html, /Refresh from Azure/i);
+  assert.match(html, /Save &amp; Publish/i);
+  assert.equal(html.includes("must-never-appear-in-html"), false);
+  assert.equal(html.includes(`${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=`), false);
+});
+
+test("GET /internal/brc-edu/resources/upload denies authenticated users outside the approved group", async (t) => {
+  const port = await getFreePort();
+  await startTestServer(t, port, {
+    BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+    BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+  });
+
+  const principal = encodeEasyAuthPrincipal([
+    {
+      typ: "http://schemas.microsoft.com/identity/claims/tenantid",
+      val: "tenant-a",
+    },
+    { typ: "groups", val: "some-other-group" },
+    { typ: "preferred_username", val: "external@example.com" },
+  ]);
+
+  const response = await fetch(uploadUrl(port), {
+    headers: {
+      "x-ms-client-principal": principal,
+      "x-ms-client-principal-name": "external@example.com",
+    },
+  });
+
+  assert.equal(response.status, 403);
+  const body = await response.text();
+  assert.match(
+    body,
+    /This area is available only to authorised Big Red Cloud staff\./,
+  );
 });

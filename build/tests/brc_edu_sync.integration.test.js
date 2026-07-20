@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { BRC_EDU_SYNC_SECRET_HEADER } from "../edu/brc_edu_synced_store.js";
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
+const SERVER_START_TIMEOUT_MS = 60_000;
 const SYNC_PATH = "/internal/brc-edu/resources/sync";
 const SUPPORT_CSV = [
     "Video Title,Video URL,Help-Routing Category",

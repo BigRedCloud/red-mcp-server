@@ -303,18 +303,33 @@ function pageShell(title, content, extraHead = "") {
   </body>
 </html>`;
 }
-function uploadActionUrl(secret) {
-    return `${UPLOAD_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+function withOptionalSecretQuery(path, auth) {
+    if (auth.mode !== "secret") {
+        return path;
+    }
+    return `${path}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(auth.secret)}`;
 }
-function workbookApiUrl(secret) {
-    return `${WORKBOOK_API_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+function uploadActionUrl(auth) {
+    return withOptionalSecretQuery(UPLOAD_PATH, auth);
 }
-function workbookDownloadUrl(secret) {
-    return `${WORKBOOK_DOWNLOAD_PATH}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+function workbookApiUrl(auth) {
+    return withOptionalSecretQuery(WORKBOOK_API_PATH, auth);
 }
-function adminPageScript(secret) {
-    const apiUrl = workbookApiUrl(secret);
-    const downloadUrl = workbookDownloadUrl(secret);
+function workbookDownloadUrl(auth) {
+    return withOptionalSecretQuery(WORKBOOK_DOWNLOAD_PATH, auth);
+}
+function resolvePageAuth(secretOrAuth) {
+    if (!secretOrAuth) {
+        return { mode: "session" };
+    }
+    if (typeof secretOrAuth === "string") {
+        return { mode: "secret", secret: secretOrAuth };
+    }
+    return secretOrAuth;
+}
+function adminPageScript(auth) {
+    const apiUrl = workbookApiUrl(auth);
+    const downloadUrl = workbookDownloadUrl(auth);
     return `<script>
 (() => {
   function requireElement(id) {
@@ -601,7 +616,8 @@ function adminPageScript(secret) {
 })();
 </script>`;
 }
-export function renderBrcEduUploadPage(secret) {
+export function renderBrcEduUploadPage(secretOrAuth) {
+    const auth = resolvePageAuth(secretOrAuth);
     const content = `
       <div class="card instructions">
         <h2>How to manage Red webinar resources</h2>
@@ -652,7 +668,7 @@ export function renderBrcEduUploadPage(secret) {
         <p class="lead">
           You can still upload an approved <strong>.xlsx</strong> or <strong>.csv</strong> file directly. Red stores the file in Azure Blob Storage for downstream processing.
         </p>
-        <form method="POST" action="${escapeHtml(uploadActionUrl(secret))}" enctype="multipart/form-data">
+        <form method="POST" action="${escapeHtml(uploadActionUrl(auth))}" enctype="multipart/form-data">
           <label for="${BRC_EDU_UPLOAD_FIELD_NAME}">Resource file</label>
           <input
             id="${BRC_EDU_UPLOAD_FIELD_NAME}"
@@ -664,9 +680,10 @@ export function renderBrcEduUploadPage(secret) {
           <button class="btn btn-primary" type="submit">Upload Excel</button>
         </form>
       </div>`;
-    return pageShell("BRC Edu webinar resources", content + adminPageScript(secret));
+    return pageShell("BRC Edu webinar resources", content + adminPageScript(auth));
 }
-export function renderBrcEduUploadSuccessPage(latestBlob, archiveBlob, secret) {
+export function renderBrcEduUploadSuccessPage(latestBlob, archiveBlob, secretOrAuth) {
+    const auth = resolvePageAuth(secretOrAuth);
     const content = `
       <div class="card">
         <div class="notice success">
@@ -674,13 +691,14 @@ export function renderBrcEduUploadSuccessPage(latestBlob, archiveBlob, secret) {
         </div>
         <p><strong>Latest:</strong> ${escapeHtml(latestBlob)}</p>
         <p><strong>Archive:</strong> ${escapeHtml(archiveBlob)}</p>
-        <p><a href="${escapeHtml(uploadActionUrl(secret))}">Return to webinar admin</a></p>
+        <p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>
       </div>`;
     return pageShell("BRC Edu upload successful", content);
 }
-export function renderBrcEduUploadErrorPage(message, secret) {
-    const retryLink = secret
-        ? `<p><a href="${escapeHtml(uploadActionUrl(secret))}">Return to webinar admin</a></p>`
+export function renderBrcEduUploadErrorPage(message, secretOrAuth) {
+    const auth = resolvePageAuth(secretOrAuth);
+    const retryLink = auth.mode === "session" || auth.mode === "secret"
+        ? `<p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>`
         : "";
     const content = `
       <div class="card">
@@ -691,5 +709,12 @@ export function renderBrcEduUploadErrorPage(message, secret) {
 }
 export function renderBrcEduUploadPlainError(message) {
     return message;
+}
+export function renderBrcEduStaffDeniedPage(message = "This area is available only to authorised Big Red Cloud staff.") {
+    const content = `
+      <div class="card">
+        <div class="notice error">${escapeHtml(message)}</div>
+      </div>`;
+    return pageShell("Access denied", content);
 }
 export { WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH };

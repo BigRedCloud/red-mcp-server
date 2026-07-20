@@ -438,12 +438,53 @@ BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\
 
 ### Production / staging (admin upload)
 
-Internal/support users can upload the approved BRC Edu resource file through a browser form. Red stores the uploaded file in Azure Blob Storage for downstream processing (for example, an Azure Function). This step does not parse or enrich the file.
+Internal/support users manage BRC Edu webinar resources through a browser admin page. Red stores uploaded files in Azure Blob Storage for downstream processing (for example, an Azure Function). This step does not parse or enrich the file.
 
-Routes (both require `?secret=<BRC_EDU_ADMIN_UPLOAD_SECRET>`):
+#### Staff access (Microsoft Entra / App Service Authentication)
 
-- `GET /internal/brc-edu/resources/upload` — upload form
+Primary access is Azure App Service Authentication with Microsoft Entra ID. Staff ask Red to open the admin page; Red returns a clickable link only — never a shared password or secret.
+
+1. Staff ask Red: "Open Red's admin page"
+2. Red calls `brc_open_edu_admin` and returns the protected URL
+3. Opening the link redirects to Microsoft sign-in when the user is not authenticated
+4. After sign-in, only authorised Big Red Book staff (configured Entra group or app role) can access the page
+5. Unauthorised users see: `This area is available only to authorised Big Red Cloud staff.`
+
+Protected route (default):
+
+- `GET /internal/brc-edu/resources/upload` — admin page
 - `POST /internal/brc-edu/resources/upload` — `multipart/form-data` with field name `file`
+- Workbook API routes under the same path prefix
+
+MCP tool:
+
+- `brc_open_edu_admin` — returns the customer-facing protected admin URL only (no secret, no query parameters, does not bypass authentication)
+
+Entra configuration:
+
+- `BRC_EDU_ADMIN_ENTRA_TENANT_ID` — allowed Microsoft Entra tenant ID (required for Entra access)
+- `BRC_EDU_ADMIN_ENTRA_GROUP_ID` — allowed Entra security group object ID (for example BRC Edu Admins), and/or
+- `BRC_EDU_ADMIN_ENTRA_APP_ROLE` — allowed app role value
+- `BRC_EDU_ADMIN_PROTECTED_PATH` — protected admin path (default `/internal/brc-edu/resources/upload`)
+- `BRC_EDU_ADMIN_PUBLIC_URL` — customer-facing absolute admin URL (optional; otherwise derived from `RED_PUBLIC_BASE_URL` / `BRC_PUBLIC_BASE_URL`)
+
+App Service setup:
+
+- Enable Authentication with Microsoft as the identity provider
+- Allow unauthenticated requests at the platform level so Red can redirect to `/.auth/login/aad` and enforce group/role checks in application code
+- Configure the Entra app registration to emit group claims or assign the configured app role
+
+Access logging:
+
+- Logs authenticated staff identity, access time, method (`entra` or `secret`), and result
+- Never logs tokens or `BRC_EDU_ADMIN_UPLOAD_SECRET`
+
+#### Emergency secret fallback (temporary)
+
+Until Entra access is verified, the shared secret query parameter remains available as an emergency fallback only. Do not expose it to Red, MCP output, browser bookmarks shared with customers, or logs.
+
+- `?secret=<BRC_EDU_ADMIN_UPLOAD_SECRET>` — emergency fallback only
+- `BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK=false` — disable the secret path after Entra is verified
 
 Accepted files:
 
@@ -458,13 +499,15 @@ Blob paths written on successful upload:
 Responses:
 
 - `200` — HTML success page (POST) or upload form (GET)
+- `302` — redirect to Microsoft sign-in when Entra is configured and the user is unauthenticated
 - `400` — missing file, invalid file type, or file too large
-- `401` — missing or wrong `secret` query parameter
-- `503` — `BRC_EDU_ADMIN_UPLOAD_SECRET` is not configured (GET/POST auth), or blob storage env vars are missing (POST upload only)
+- `401` — missing/wrong emergency secret (secret-only mode), or authentication required
+- `403` — signed-in user is not in the approved Entra group/role
+- `503` — admin access is not configured, or blob storage env vars are missing (POST upload only)
 
-Configuration:
+Storage configuration:
 
-- `BRC_EDU_ADMIN_UPLOAD_SECRET` — shared secret for the upload page query parameter (required for upload routes to work)
+- `BRC_EDU_ADMIN_UPLOAD_SECRET` — emergency shared secret only (optional once Entra is verified)
 - `BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING` — Azure Storage connection string for uploaded files
 - `BRC_EDU_UPLOAD_CONTAINER` — blob container name for uploaded files
 
@@ -547,6 +590,8 @@ Implementation:
 - `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
 - `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
 - `src/edu/brc_edu_upload_store.ts` — admin upload auth, validation, and Azure Blob Storage writes
+- `src/edu/brc_edu_admin_auth.ts` — Microsoft Entra / Easy Auth staff access for the admin page
+- `src/tools/edu/edu_admin_tools.ts` — `brc_open_edu_admin` MCP tool (protected URL only)
 - `src/edu/brc_edu_upload_page.ts` — internal HTML upload form and result pages
 - `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
 - `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
