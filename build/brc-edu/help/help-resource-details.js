@@ -1,7 +1,7 @@
 import { loadCustomerDocsForHelpSearch } from "../customer-docs/customer-docs-index-store.js";
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "../freshdesk/freshdesk-index-store.js";
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
-import { buildFreshdeskScreenshotUrls, toCustomerFacingScreenshotUrl, } from "../freshdesk/freshdesk-public-image-url.js";
+import { buildFreshdeskScreenshotUrls, buildOrderedArticleImageCaption, toCustomerFacingScreenshotUrl, } from "../freshdesk/freshdesk-public-image-url.js";
 import { buildFreshdeskInstructionBlocks, enrichScreenshotUrlCaptions, } from "../freshdesk/instruction-blocks.js";
 import { buildCustomerFacingInstructionMarkdown, buildCustomerFacingScreenshotMarkdown, buildScreenshotLinksMarkdown, buildScreenshotMarkdownTextBlock, resolveHelpImagePresentation, } from "../freshdesk/screenshot-markdown.js";
 import { isRejectedFreshdeskCaption } from "../freshdesk/screenshot-caption.js";
@@ -116,12 +116,27 @@ function buildDetailsGuidance(hasInstructionBlocks, hasScreenshotLinks) {
         ],
     };
 }
+function contentBlocksHaveImageReferences(contentBlocks) {
+    return (contentBlocks ?? []).some((block) => block.type === "image");
+}
 function sanitizeScreenshotUrls(screenshots) {
     return screenshots
-        .map(toCustomerFacingScreenshotUrl)
-        .filter((screenshot) => Boolean(screenshot.url) &&
-        Boolean(screenshot.caption) &&
-        !isRejectedFreshdeskCaption(screenshot.caption));
+        .map((screenshot, index) => {
+        const facing = toCustomerFacingScreenshotUrl(screenshot);
+        if (!facing.url) {
+            return null;
+        }
+        // Keep synced images even when altText/order/context is missing — use a
+        // stable non-rejected caption instead of dropping the screenshot.
+        if (!facing.caption || isRejectedFreshdeskCaption(facing.caption)) {
+            return {
+                ...facing,
+                caption: buildOrderedArticleImageCaption(index + 1),
+            };
+        }
+        return facing;
+    })
+        .filter((screenshot) => Boolean(screenshot));
 }
 function sanitizeInstructionBlocks(blocks) {
     return blocks.filter((block) => {
@@ -187,13 +202,15 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
             const enrichedScreenshotUrls = enrichScreenshotUrlCaptions(rawScreenshotUrls, article.contentBlocks);
             const rawInstructionBlocks = buildFreshdeskInstructionBlocks(article.contentBlocks, enrichedScreenshotUrls, { question });
             const instructionBlocks = sanitizeInstructionBlocks(rawInstructionBlocks);
-            const hasInstructionBlocks = instructionBlocks.length > 0;
-            // Prefer screenshots that support the selected answer path. Fall back to
-            // the full enriched list for legacy articles without instruction blocks.
-            const screenshotUrls = sanitizeScreenshotUrls(hasInstructionBlocks
-                ? instructionBlocks
-                    .filter((block) => block.type === "screenshot")
-                    .map((block) => ({
+            const instructionScreenshots = instructionBlocks.filter((block) => block.type === "screenshot");
+            const hasUsableImageContentBlocks = contentBlocksHaveImageReferences(article.contentBlocks);
+            // Prefer workflow-aware screenshots only when contentBlocks actually
+            // reference images (or explicit ordering produced screenshot blocks).
+            // Otherwise fall back to every normalized synced image.
+            const useWorkflowAwareScreenshots = hasUsableImageContentBlocks && instructionScreenshots.length > 0;
+            const hasInstructionBlocks = useWorkflowAwareScreenshots && instructionBlocks.length > 0;
+            const screenshotUrls = sanitizeScreenshotUrls(useWorkflowAwareScreenshots
+                ? instructionScreenshots.map((block) => ({
                     caption: block.caption,
                     url: block.url,
                     mimeType: block.mimeType,

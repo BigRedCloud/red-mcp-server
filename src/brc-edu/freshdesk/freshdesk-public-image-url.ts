@@ -11,7 +11,8 @@ import {
 import type { FreshdeskSyncedImage } from "./freshdesk-image-metadata.js";
 import {
   buildFreshdeskScreenshotCaption,
-  FRESHDESK_SCREENSHOT_CAPTION_FALLBACK,
+  isGenericFreshdeskAltText,
+  isRejectedFreshdeskCaption,
 } from "./screenshot-caption.js";
 
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX =
@@ -28,8 +29,24 @@ export type FreshdeskScreenshotUrl = {
   imageIndex?: number;
 };
 
-function buildScreenshotCaption(altText?: string): string {
-  return buildFreshdeskScreenshotCaption({ altText }) || FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
+/** Customer-facing caption when alt text / article context is missing. */
+export function buildOrderedArticleImageCaption(imageNumber: number): string {
+  return `Article image ${imageNumber}`;
+}
+
+function buildScreenshotCaption(
+  altText: string | undefined,
+  imageNumber: number,
+): string {
+  const built = buildFreshdeskScreenshotCaption({ altText });
+  if (
+    !built ||
+    isRejectedFreshdeskCaption(built) ||
+    isGenericFreshdeskAltText(built)
+  ) {
+    return buildOrderedArticleImageCaption(imageNumber);
+  }
+  return built;
 }
 
 export function buildFreshdeskPublicImagePath(
@@ -70,10 +87,16 @@ export function buildFreshdeskScreenshotUrls(
   }
 
   const screenshotUrls: FreshdeskScreenshotUrl[] = [];
-
-  for (const syncedImage of [...syncedImages].sort(
+  const orderedImages = [...syncedImages].sort(
     (left, right) => left.order - right.order,
-  )) {
+  );
+
+  for (let index = 0; index < orderedImages.length; index += 1) {
+    const syncedImage = orderedImages[index];
+    if (!syncedImage) {
+      continue;
+    }
+
     const mimeType = normalizeFreshdeskImageMimeType(syncedImage.mimeType);
 
     if (!mimeType || !isSupportedFreshdeskImageMimeType(mimeType)) {
@@ -108,7 +131,7 @@ export function buildFreshdeskScreenshotUrls(
     }
 
     screenshotUrls.push({
-      caption: buildScreenshotCaption(syncedImage.altText),
+      caption: buildScreenshotCaption(syncedImage.altText, index + 1),
       mimeType,
       url,
       imageIndex: syncedImage.order,

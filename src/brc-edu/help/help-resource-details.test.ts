@@ -649,3 +649,176 @@ test("links mode returns signed screenshot links without downloading blobs", asy
     assert.ok(result.payload.customerFacingScreenshotMarkdown);
   }
 });
+
+test("syncedImages without contentBlocks still return ordered image links", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const article: SyncedFreshdeskArticle = {
+    id: "freshdesk-157000368447",
+    source: "freshdesk",
+    freshdeskArticleId: 157000368447,
+    categoryId: 1,
+    folderId: 2,
+    folderName: "Customers",
+    title: "Customer opening balance",
+    bodyText: "Enter the opening balance.",
+    images: [
+      { sourceUrl: "https://cdn.freshdesk.com/1.jpg", altText: null },
+      { sourceUrl: "https://cdn.freshdesk.com/2.jpg", altText: null },
+      { sourceUrl: "https://cdn.freshdesk.com/3.jpg", altText: null },
+      { sourceUrl: "https://cdn.freshdesk.com/4.jpg", altText: null },
+    ],
+    syncedImages: [
+      {
+        sourceUrl: "https://cdn.freshdesk.com/1.jpg",
+        blobName: "freshdesk/157000368447/aaaa.jpg",
+        sha256: "a".repeat(64),
+        contentType: "image/jpeg",
+      },
+      {
+        sourceUrl: "https://cdn.freshdesk.com/2.jpg",
+        blobName: "freshdesk/157000368447/bbbb.jpg",
+        sha256: "b".repeat(64),
+        contentType: "image/jpeg",
+      },
+      {
+        sourceUrl: "https://cdn.freshdesk.com/3.jpg",
+        blobName: "freshdesk/157000368447/cccc.jpg",
+        sha256: "c".repeat(64),
+        contentType: "image/jpeg",
+      },
+      {
+        sourceUrl: "https://cdn.freshdesk.com/4.jpg",
+        blobName: "freshdesk/157000368447/dddd.jpg",
+        sha256: "d".repeat(64),
+        contentType: "image/jpeg",
+      },
+    ],
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    enabled: true,
+    slug: null,
+    publicUrl: null,
+  };
+
+  const index = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 1,
+    failureCount: 0,
+    articles: [article],
+    failures: [],
+  };
+
+  const indexContainer = {
+    getBlockBlobClient() {
+      return {
+        async exists() {
+          return true;
+        },
+        async download() {
+          return {
+            readableStreamBody: (async function* () {
+              yield Buffer.from(JSON.stringify(index), "utf8");
+            })(),
+          };
+        },
+      };
+    },
+  };
+
+  const result = await getHelpResourceDetails("freshdesk:157000368447", {
+    freshdeskIndexContainer: indexContainer as never,
+    freshdeskImageContainer: null,
+    includeImages: true,
+    imagePresentation: "links",
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.payload.imageCount, 4);
+    assert.equal(result.payload.screenshotUrls?.length, 4);
+    assert.equal(result.payload.screenshotLinksMarkdown?.length, 4);
+    assert.equal(result.payload.instructionBlocks, undefined);
+    assert.deepEqual(
+      result.payload.screenshotUrls?.map((item) => item.caption),
+      [
+        "Article image 1",
+        "Article image 2",
+        "Article image 3",
+        "Article image 4",
+      ],
+    );
+    for (const link of result.payload.screenshotLinksMarkdown ?? []) {
+      assert.match(
+        link,
+        /^\[Article image \d\]\(https:\/\/red\.example\.com\/public\/brc-edu\/freshdesk-images\/157000368447\//,
+      );
+    }
+    assert.equal(JSON.stringify(result.payload).includes("freshdesk/157000368447"), false);
+    assert.equal(JSON.stringify(result.payload).includes("cdn.freshdesk.com"), false);
+  }
+});
+
+test("text-only contentBlocks still fall back to syncedImages", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const article = freshdeskArticle();
+  article.syncedImages = [
+    {
+      sourceUrl: "https://cdn.freshdesk.com/a.png",
+      blobName: "freshdesk/1001/a.png",
+      sha256: "a".repeat(64),
+      contentType: "image/png",
+    },
+    {
+      sourceUrl: "https://cdn.freshdesk.com/b.png",
+      blobName: "freshdesk/1001/b.png",
+      sha256: "b".repeat(64),
+      contentType: "image/png",
+    },
+  ];
+  article.contentBlocks = [
+    { type: "text", text: "Open Customers and click Change." },
+    { type: "text", text: "Enter the opening balance." },
+  ];
+
+  const index = {
+    generatedAt: "2026-07-15T10:00:00.000Z",
+    articleCount: 1,
+    failureCount: 0,
+    articles: [article],
+    failures: [],
+  };
+
+  const indexContainer = {
+    getBlockBlobClient() {
+      return {
+        async exists() {
+          return true;
+        },
+        async download() {
+          return {
+            readableStreamBody: (async function* () {
+              yield Buffer.from(JSON.stringify(index), "utf8");
+            })(),
+          };
+        },
+      };
+    },
+  };
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: indexContainer as never,
+    freshdeskImageContainer: null,
+    includeImages: true,
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.payload.imageCount, 2);
+    assert.equal(result.payload.screenshotUrls?.length, 2);
+    assert.equal(result.payload.screenshotLinksMarkdown?.length, 2);
+    assert.equal(result.payload.instructionBlocks, undefined);
+  }
+});

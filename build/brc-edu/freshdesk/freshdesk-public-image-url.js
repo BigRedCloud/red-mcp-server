@@ -1,10 +1,20 @@
 import { getCustomerFacingScreenshotBaseUrl } from "../../config/red_public_base_url.js";
 import { normalizeFreshdeskImageMimeType, isSupportedFreshdeskImageMimeType, } from "./freshdesk-image-metadata.js";
 import { createFreshdeskPublicImageToken, isFreshdeskPublicImageSigningConfigured, resolveFreshdeskImageKey, } from "./freshdesk-public-image-token.js";
-import { buildFreshdeskScreenshotCaption, FRESHDESK_SCREENSHOT_CAPTION_FALLBACK, } from "./screenshot-caption.js";
+import { buildFreshdeskScreenshotCaption, isGenericFreshdeskAltText, isRejectedFreshdeskCaption, } from "./screenshot-caption.js";
 export const FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX = "/public/brc-edu/freshdesk-images";
-function buildScreenshotCaption(altText) {
-    return buildFreshdeskScreenshotCaption({ altText }) || FRESHDESK_SCREENSHOT_CAPTION_FALLBACK;
+/** Customer-facing caption when alt text / article context is missing. */
+export function buildOrderedArticleImageCaption(imageNumber) {
+    return `Article image ${imageNumber}`;
+}
+function buildScreenshotCaption(altText, imageNumber) {
+    const built = buildFreshdeskScreenshotCaption({ altText });
+    if (!built ||
+        isRejectedFreshdeskCaption(built) ||
+        isGenericFreshdeskAltText(built)) {
+        return buildOrderedArticleImageCaption(imageNumber);
+    }
+    return built;
 }
 export function buildFreshdeskPublicImagePath(articleId, imageToken) {
     return `${FRESHDESK_PUBLIC_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(String(articleId))}/${encodeURIComponent(imageToken)}`;
@@ -21,7 +31,12 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, options = 
         return [];
     }
     const screenshotUrls = [];
-    for (const syncedImage of [...syncedImages].sort((left, right) => left.order - right.order)) {
+    const orderedImages = [...syncedImages].sort((left, right) => left.order - right.order);
+    for (let index = 0; index < orderedImages.length; index += 1) {
+        const syncedImage = orderedImages[index];
+        if (!syncedImage) {
+            continue;
+        }
         const mimeType = normalizeFreshdeskImageMimeType(syncedImage.mimeType);
         if (!mimeType || !isSupportedFreshdeskImageMimeType(mimeType)) {
             continue;
@@ -41,7 +56,7 @@ export function buildFreshdeskScreenshotUrls(articleId, syncedImages, options = 
             continue;
         }
         screenshotUrls.push({
-            caption: buildScreenshotCaption(syncedImage.altText),
+            caption: buildScreenshotCaption(syncedImage.altText, index + 1),
             mimeType,
             url,
             imageIndex: syncedImage.order,

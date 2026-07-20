@@ -11,6 +11,7 @@ import {
 } from "../freshdesk/freshdesk-article-url.js";
 import {
   buildFreshdeskScreenshotUrls,
+  buildOrderedArticleImageCaption,
   toCustomerFacingScreenshotUrl,
   type FreshdeskScreenshotUrl,
 } from "../freshdesk/freshdesk-public-image-url.js";
@@ -224,17 +225,35 @@ function buildDetailsGuidance(hasInstructionBlocks: boolean, hasScreenshotLinks:
     ],
   };
 }
+function contentBlocksHaveImageReferences(
+  contentBlocks: SyncedFreshdeskArticle["contentBlocks"],
+): boolean {
+  return (contentBlocks ?? []).some((block) => block.type === "image");
+}
 
 function sanitizeScreenshotUrls(
   screenshots: FreshdeskScreenshotUrl[],
 ): FreshdeskScreenshotUrl[] {
   return screenshots
-    .map(toCustomerFacingScreenshotUrl)
-    .filter(
-      (screenshot) =>
-        Boolean(screenshot.url) &&
-        Boolean(screenshot.caption) &&
-        !isRejectedFreshdeskCaption(screenshot.caption),
+    .map((screenshot, index) => {
+      const facing = toCustomerFacingScreenshotUrl(screenshot);
+      if (!facing.url) {
+        return null;
+      }
+
+      // Keep synced images even when altText/order/context is missing — use a
+      // stable non-rejected caption instead of dropping the screenshot.
+      if (!facing.caption || isRejectedFreshdeskCaption(facing.caption)) {
+        return {
+          ...facing,
+          caption: buildOrderedArticleImageCaption(index + 1),
+        };
+      }
+
+      return facing;
+    })
+    .filter((screenshot): screenshot is FreshdeskScreenshotUrl =>
+      Boolean(screenshot),
     );
 }
 
@@ -369,24 +388,30 @@ export async function getHelpResourceDetails(
         { question },
       );
       const instructionBlocks = sanitizeInstructionBlocks(rawInstructionBlocks);
-      const hasInstructionBlocks = instructionBlocks.length > 0;
+      const instructionScreenshots = instructionBlocks.filter(
+        (
+          block,
+        ): block is Extract<HelpInstructionBlock, { type: "screenshot" }> =>
+          block.type === "screenshot",
+      );
+      const hasUsableImageContentBlocks = contentBlocksHaveImageReferences(
+        article.contentBlocks,
+      );
+      // Prefer workflow-aware screenshots only when contentBlocks actually
+      // reference images (or explicit ordering produced screenshot blocks).
+      // Otherwise fall back to every normalized synced image.
+      const useWorkflowAwareScreenshots =
+        hasUsableImageContentBlocks && instructionScreenshots.length > 0;
+      const hasInstructionBlocks =
+        useWorkflowAwareScreenshots && instructionBlocks.length > 0;
 
-      // Prefer screenshots that support the selected answer path. Fall back to
-      // the full enriched list for legacy articles without instruction blocks.
       const screenshotUrls = sanitizeScreenshotUrls(
-        hasInstructionBlocks
-          ? instructionBlocks
-              .filter(
-                (
-                  block,
-                ): block is Extract<HelpInstructionBlock, { type: "screenshot" }> =>
-                  block.type === "screenshot",
-              )
-              .map((block) => ({
-                caption: block.caption,
-                url: block.url,
-                mimeType: block.mimeType,
-              }))
+        useWorkflowAwareScreenshots
+          ? instructionScreenshots.map((block) => ({
+              caption: block.caption,
+              url: block.url,
+              mimeType: block.mimeType,
+            }))
           : enrichedScreenshotUrls,
       );
 
