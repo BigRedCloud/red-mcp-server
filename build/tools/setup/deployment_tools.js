@@ -449,6 +449,7 @@ export function registerDeploymentTools(server) {
     server.tool("brc_getting_started", [
         "Use this whenever the user asks how to start, says start, says getting started, or wants to connect or reconnect companies in Red.",
         "Return simple customer-friendly setup steps and example prompts.",
+        "Do not use when the user asks to open Red's admin page, the BRC Edu admin page, the help resources admin page, or to manage BRC Edu resources — use brc_open_edu_admin instead.",
         "Do not use for tutorial, webinar, or video how-to questions — use brc_find_help_resources for those.",
         "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
     ].join(" "), {}, async () => textResponse(buildGettingStartedText()));

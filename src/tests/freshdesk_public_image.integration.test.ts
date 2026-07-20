@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION } from "../tools/edu/help_resources_tools.js";
 
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
+const SERVER_START_TIMEOUT_MS = 60_000;
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {

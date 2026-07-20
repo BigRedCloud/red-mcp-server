@@ -40,3 +40,14 @@ test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () =
     assert.match(instructions, /https:\/\/bigredcloud\.com\/contact\//);
     assert.equal(/helpInteractionMode/i.test(instructions), false);
 });
+test("MCP server instructions route Red admin page requests to brc_open_edu_admin", () => {
+    const instructions = getBrcMcpServerInstructions(50, false);
+    assert.match(instructions, /brc_open_edu_admin/);
+    assert.match(instructions, /Open Red's admin page/);
+    assert.match(instructions, /open the BRC Edu admin page/i);
+    assert.match(instructions, /open the help resources admin page/i);
+    assert.match(instructions, /manage BRC Edu resources/i);
+    assert.match(instructions, /Do not ask whether they mean Big Red Cloud website login or connecting a company/i);
+    assert.match(instructions, /Never invent a secret query parameter/i);
+    assert.match(instructions, /BRC_EDU_ADMIN_UPLOAD_SECRET/);
+});

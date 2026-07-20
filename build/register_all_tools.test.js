@@ -61,8 +61,13 @@ test("brc_open_edu_admin does not require company credentials", () => {
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_open_edu_admin"));
     const tool = registeredTools.get("brc_open_edu_admin");
     assert.ok(tool);
+    assert.match(tool.description, /open Red's admin page/i);
+    assert.match(tool.description, /open the BRC Edu admin page/i);
+    assert.match(tool.description, /open the help resources admin page/i);
+    assert.match(tool.description, /manage BRC Edu resources/i);
     assert.match(tool.description, /Does not bypass authentication/i);
     assert.match(tool.description, /never a shared secret/i);
+    assert.match(tool.description, /Do not ask whether the user means Big Red Cloud website login or connecting a company/i);
 });
 test("brc_get_help_resource_details does not require company credentials", () => {
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_get_help_resource_details"));

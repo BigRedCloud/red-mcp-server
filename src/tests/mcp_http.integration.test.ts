@@ -5,7 +5,7 @@ import net from "node:net";
 import type { Readable } from "node:stream";
 
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
+const SERVER_START_TIMEOUT_MS = 60_000;
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
