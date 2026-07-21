@@ -27,10 +27,16 @@ src/
 │   └── cosmos_connection_store.ts Optional shared Cosmos DB connection store
 ├── config/
 │   ├── server_config.ts           Deployment skill gating (BRC_ALLOW_* flags)
-│   └── mcp_config.ts              MCP server instructions and connection-safety rules
+│   ├── mcp_config.ts              MCP server instructions and connection-safety rules
+│   └── red_public_base_url.ts     Public base URL used for help screenshot links
 ├── guards/                        Transaction, reference, VAT, product line, and write-confirmation checks
 ├── data_quality/                  Lightweight data-quality checks (e.g. customer name/email)
-├── edu/                           BRC Edu CSV path resolution, enrichment, and help-resource lookup
+├── brc-edu/
+│   ├── freshdesk/                 Freshdesk support articles, screenshots, and public image links
+│   ├── customer-docs/             Customer documentation index
+│   ├── upcoming-webinars/         Upcoming webinar index
+│   └── help/                      Unified help search and resource-detail formatting
+├── edu/                           Help-resource loading, enrichment, workbook parsing, and storage configuration
 └── tools/
     ├── general/                   Generic list/get/create/update/delete/batch + payload builders
     ├── setup/                     Company context, setup config, readiness, deployment policy, processing settings
@@ -38,6 +44,7 @@ src/
     ├── purchases/                 Purchases and suppliers
     ├── bank-payments/             Bank accounts, payments, cash payments, cash receipts
     ├── journals/                  Nominal reports and nominal journal batches
+    ├── edu/                       Read-only help-resource tools
     ├── customer_tools.ts          Customers
     ├── product_tools.ts           Products
     ├── vat_sales_tools.ts         VAT processing + combined sales listing
@@ -46,6 +53,7 @@ src/
     ├── alloc_tools.ts             Allocation resolvers
     └── audit_session_tools.ts     Session audit log
 ```
+
 
 ---
 
@@ -59,12 +67,16 @@ src/
   - write tools receive preview-before-posting/confirmation handling and the appropriate confirmation schema fields.
 - **`src/shared.ts`** — The Big Red Cloud HTTP client (`brcFetch`, JSON request helpers), session-scoped connection storage, the session audit log, list/response helpers, and user-facing status wording.
 - **`src/config/server_config.ts`** — Classifies each tool into a skill group and decides whether it is enabled, based on the `BRC_ALLOW_*` flags.
-- **`src/config/mcp_config.ts`** — Server instructions, connection-safety rules, and rules that keep `connectionRef` out of normal user-facing chat.
+- **`src/config/mcp_config.ts`** — Server instructions, connection-safety rules, help-answer presentation rules, and rules that keep `connectionRef` out of normal user-facing chat.
 - **`src/read_connection_metadata.ts`** — Adds `connectionStatus`, `activeConnectionRef`, `assistantInstruction`, and `presentationHint` to enriched tool responses in hosted HTTP mode.
 - **`src/auth/connection_presentation.ts`** — `formatCredentialTtlForUser()`, confirm/list customer messages, and `shouldShowDeveloperConnectionDetails()` (respects `BRC_ALLOW_DEV_MODE`).
 - **`src/auth/credential_validation.ts`** — Validates each API key with the same class of BRC read access as live tools (`GET /v1/customers?page=1&pageSize=1`, plus financial year). Failed keys are not stored.
 - **`src/auth/connection_persistence.ts`** — `validateAndPersistConnectedCompanies()` used by `POST /connect`; clears stale per-company entries before re-validating on CSV resubmit.
 - **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory or Cosmos), connection codes, connectionRef, and credential handling. API keys are never returned to clients.
+- **`src/brc-edu/help/`** — Unified search across Freshdesk articles, customer documentation, recorded webinars, and upcoming webinars.
+- **`src/brc-edu/freshdesk/`** — Freshdesk article processing, screenshot metadata, signed public image links, and help-answer formatting.
+- **`src/tools/edu/help_resources_tools.ts`** — Registers `brc_find_help_resources` and `brc_get_help_resource_details`. These read-only tools do not require a connected company.
+- **`src/config/red_public_base_url.ts`** — Resolves the public base URL used when generating screenshot links.
 
 ---
 
@@ -154,6 +166,27 @@ Endpoint paths are relative to the configured Big Red Cloud API base URL. Write 
 | `brc_clear_all_company_api_keys` | Clear all company connections |
 
 Credential-requiring tools accept an optional `connectionRef` argument (hosted HTTP). See `src/auth/connection_ref.ts` and `register_all_tools.ts`.
+
+### Help and training resources
+
+These tools are read-only and do not require a connected Big Red Cloud company.
+
+| MCP tool | Purpose |
+| -------- | ------- |
+| `brc_find_help_resources` | Search Freshdesk support articles, customer documentation, recorded webinars, and upcoming webinars |
+| `brc_get_help_resource_details` | Load the full details for a selected resource, including article steps and relevant screenshot links where available |
+
+`brc_find_help_resources` supports source filtering so callers can search all help sources or a specific source.
+
+Freshdesk resource details may include:
+
+- official article links;
+- step-by-step instructions;
+- screenshot links;
+- related recorded videos;
+- a Big Red Cloud support fallback.
+
+These tools are intended for product help and training questions, not for accessing a customer’s accounting data.
 
 ### Company setup and readiness
 
@@ -399,123 +432,97 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:config` — deployment/config tests.
 - `npm run test:integration` — integration tests.
 
-Representative coverage includes the sales invoice safeguards (Gross Price Entry `priceBasis`, Sales VAT category validation, placeholder product ID blocking, note/delivery handling), transaction date validation, transaction settings warnings, the secure connection flow (CSV validation, partial confirm, runtime credential invalidation), connectionRef presentation rules, TTL wording from `BRC_API_KEY_TTL_MINUTES`, and response wording.
+Representative coverage includes sales invoice safeguards, transaction date validation, transaction settings warnings, the secure connection flow, connectionRef presentation rules, TTL wording, response wording, unified help search, Freshdesk article ranking, screenshot links, recorded webinar matching, and help-resource details.
 
 ---
 
-## 10. BRC Edu help resources
+## 10. Help and training resources
 
-Support and webinar teams maintain `webinar_video_routing_index.csv` in the shared **Red Edu** OneDrive folder:
+Red can answer Big Red Cloud how-to and training questions using deployment-provided support indexes. These help tools are read-only and do not require a connected company.
 
-[Red Edu folder on SharePoint](https://bigredbook-my.sharepoint.com/my?id=%2Fpersonal%2Flauren%5Fdwyer%5Fbigredbook%5Fcom%2FDocuments%2FRed%20Edu&viewid=c3f46ceb%2D1a27%2D45f7%2Dbcb6%2D3a692ffb1e97)
+### Supported sources
 
-That SharePoint link is for humans. Red does not write to OneDrive or SharePoint during normal user chats.
+`brc_find_help_resources` can search:
 
-Support CSV columns (support-friendly headers shown; internal names also accepted):
+| Source | Content |
+| ------ | ------- |
+| Freshdesk | Official support articles and screenshots |
+| Customer documentation | Big Red Cloud procedural and product documentation |
+| Recorded webinars | Relevant training and webinar recordings |
+| Upcoming webinars | Scheduled training events and registration information |
 
-- `Video Title` / `title`
-- `Video URL` / `url`
-- `Help-Routing Category` / `preferredCategory`
-- `notes` (optional)
-- `active` (optional; defaults to true)
+The optional source filter accepts:
 
-### Local / dev workflow
+- `all`
+- `freshdesk`
+- `customer_docs`
+- `recorded_webinar`
+- `upcoming_webinar`
 
-Developers run `npm run build` then `npm run sync:brc-edu`. The sync writes `dev_only_video_routing_index_updated.csv` for local inspection. With `BRC_EDU_SOURCE=local`, Red reads that generated CSV through `brc_find_help_resources`.
+### Help search
 
-Path configuration (optional):
+`brc_find_help_resources` ranks resources according to the user's question and returns the strongest matches.
 
-- `BRC_EDU_SUPPORT_CSV_PATH` — support CSV path (default: `data/webinar_video_routing_index.csv`)
-- `BRC_EDU_ENRICHED_CSV_PATH` — generated CSV path (default: `data/dev_only_video_routing_index_updated.csv`)
+Results can contain:
 
-Local OneDrive example:
+- resource ID;
+- title;
+- source type;
+- short description;
+- article or video URL;
+- relevance information;
+- suggested next action.
+
+The returned `resourceId` can be passed to `brc_get_help_resource_details`.
+
+### Resource details
+
+`brc_get_help_resource_details` returns the full available information for one selected resource.
+
+For a Freshdesk article, this may include:
+
+- article title and official URL;
+- step-by-step instructions;
+- screenshot captions;
+- signed screenshot links;
+- related videos;
+- support contact information.
+
+For recorded webinars, it may include:
+
+- video title;
+- YouTube URL;
+- description;
+- topic and category metadata.
+
+### Screenshot links
+
+Freshdesk screenshots are served through a public, signed image route. The links are time-limited and do not expose storage credentials.
+
+The hosted server uses the configured public application base URL when creating screenshot links.
+
+Public route format:
 
 ```text
-BRC_EDU_SOURCE=local
-BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\webinar_video_routing_index.csv
-BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
+/public/brc-edu/freshdesk-images/:articleId/:imageToken
 ```
 
-### Production / staging (Azure Function processor)
+The public repository includes the route, token validation, and image presentation logic. It does not include Big Red Cloud's internal content-management or resource-upload workflow.
 
-When a BRC Edu resource file is uploaded to blob storage, an Azure Function can process the latest blob and push CSV text to Red’s existing sync endpoint.
+### Source layout
 
-Trigger:
+Key implementation files:
 
-- Blob trigger on `brc-edu-resources/brc-edu/latest/{name}`
+- `src/tools/edu/help_resources_tools.ts` — MCP help-tool registration
+- `src/brc-edu/help/unified-help-search.ts` — combined help-source ranking
+- `src/brc-edu/help/help-resource-details.ts` — detailed resource responses
+- `src/brc-edu/help/help-answer-layout.ts` — help answer structure
+- `src/brc-edu/help/help-answer-sources.ts` — article and video source formatting
+- `src/brc-edu/freshdesk/` — Freshdesk article and screenshot handling
+- `src/brc-edu/customer-docs/` — customer-document search index
+- `src/brc-edu/upcoming-webinars/` — upcoming-webinar parsing and index loading
+- `src/edu/brc_edu_resources.ts` — recorded-webinar resource loading
+- `src/edu/brc_edu_storage_config.ts` — shared help-index storage configuration
+- `src/config/red_public_base_url.ts` — public screenshot-link base URL
 
-Supported files:
-
-- `.csv` — read as UTF-8 text
-- `.xlsx` — first worksheet converted to CSV text
-
-The function POSTs to Red:
-
-- `POST /internal/brc-edu/resources/sync`
-- Header: `x-red-edu-sync-secret: <secret>`
-- Body: `{ "csvText": "..." }`
-
-Function configuration:
-
-- `AzureWebJobsStorage` — Function App runtime storage account
-- `BRC_EDU_STORAGE_CONNECTION` — BRC Edu blob storage account connection for the blob trigger
-- `RED_BRC_EDU_SYNC_ENDPOINT` — full Red sync URL
-- `RED_BRC_EDU_SYNC_SECRET` — shared secret for the sync header
-
-Logging:
-
-- Logs filename and success/failure only
-- Does not log the sync secret or full file content
-
-Implementation:
-
-- `functions/brc-edu-resource-processor/` — Azure Function app (`brcEduResourceProcessor`)
-
-### Production / staging (push sync)
-
-Power Automate or another trusted internal automation can push the support CSV to Red without OneDrive access from the server.
-
-Endpoint:
-
-- `POST /internal/brc-edu/resources/sync`
-- Header: `x-red-edu-sync-secret: <secret>` (from `BRC_EDU_SYNC_SECRET`)
-- Body: `{ "csvText": "Video Title,Video URL,Help-Routing Category\n..." }`
-
-Responses:
-
-- `200` — `{ ok, rowsRead, rowsEnriched, inactiveRows, needsReviewRows, storedAt }`
-- `400` — missing or invalid `csvText`
-- `401` — missing or wrong sync secret header
-- `503` — `BRC_EDU_SYNC_SECRET` is not configured
-
-Red validates the secret, parses and enriches the CSV, and writes `data/brc_edu_synced_resources.json` (or `BRC_EDU_SYNCED_RESOURCES_PATH`). `brc_find_help_resources` prefers this synced JSON over the local generated CSV fallback.
-
-Configuration:
-
-- `BRC_EDU_SYNC_SECRET` — shared secret for the sync endpoint (required for sync to work)
-- `BRC_EDU_SYNCED_RESOURCES_PATH` — JSON store path (default: `data/brc_edu_synced_resources.json`)
-
-### Production / staging (Microsoft Graph, optional)
-
-With `BRC_EDU_SOURCE=graph`, Red can still read the support CSV from OneDrive/SharePoint using Microsoft Graph when no synced JSON is available. This path is optional and not the default for new deployments.
-
-Graph configuration:
-
-- `BRC_EDU_GRAPH_TENANT_ID`
-- `BRC_EDU_GRAPH_CLIENT_ID`
-- `BRC_EDU_GRAPH_CLIENT_SECRET`
-- `BRC_EDU_GRAPH_DRIVE_ID`
-- `BRC_EDU_GRAPH_ITEM_ID`
-
-If Graph is unavailable or misconfigured, Red logs a safe warning and falls back to the local generated CSV when present. Synced JSON (from push sync) is always preferred when available.
-
-Implementation:
-
-- `functions/brc-edu-resource-processor/` — Azure Function blob trigger that converts uploaded files and calls Red sync
-- `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
-- `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
-- `src/edu/brc_edu_storage_config.ts` — shared Azure Blob storage connection and container helpers for help indexes
-- `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
-- `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
-- `src/edu/brc_edu_resources.ts` — loads synced JSON first, then graph/local CSV; searches enriched resources for `brc_find_help_resources`
-- `scripts/sync_brc_edu_from_support_csv.mjs` — dev/admin sync only; normal user chats do not write CSV
+Help-resource indexes are supplied by the deployment operator. Public users cannot use these MCP tools to modify the live indexes or upload replacement support content.
