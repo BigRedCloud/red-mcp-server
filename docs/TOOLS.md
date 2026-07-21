@@ -30,6 +30,7 @@ src/
 │   └── mcp_config.ts              MCP server instructions and connection-safety rules
 ├── guards/                        Transaction, reference, VAT, product line, and write-confirmation checks
 ├── data_quality/                  Lightweight data-quality checks (e.g. customer name/email)
+├── edu/                           BRC Edu CSV path resolution, enrichment, and help-resource lookup
 └── tools/
     ├── general/                   Generic list/get/create/update/delete/batch + payload builders
     ├── setup/                     Company context, setup config, readiness, deployment policy, processing settings
@@ -399,3 +400,122 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:integration` — integration tests.
 
 Representative coverage includes the sales invoice safeguards (Gross Price Entry `priceBasis`, Sales VAT category validation, placeholder product ID blocking, note/delivery handling), transaction date validation, transaction settings warnings, the secure connection flow (CSV validation, partial confirm, runtime credential invalidation), connectionRef presentation rules, TTL wording from `BRC_API_KEY_TTL_MINUTES`, and response wording.
+
+---
+
+## 10. BRC Edu help resources
+
+Support and webinar teams maintain `webinar_video_routing_index.csv` in the shared **Red Edu** OneDrive folder:
+
+[Red Edu folder on SharePoint](https://bigredbook-my.sharepoint.com/my?id=%2Fpersonal%2Flauren%5Fdwyer%5Fbigredbook%5Fcom%2FDocuments%2FRed%20Edu&viewid=c3f46ceb%2D1a27%2D45f7%2Dbcb6%2D3a692ffb1e97)
+
+That SharePoint link is for humans. Red does not write to OneDrive or SharePoint during normal user chats.
+
+Support CSV columns (support-friendly headers shown; internal names also accepted):
+
+- `Video Title` / `title`
+- `Video URL` / `url`
+- `Help-Routing Category` / `preferredCategory`
+- `notes` (optional)
+- `active` (optional; defaults to true)
+
+### Local / dev workflow
+
+Developers run `npm run build` then `npm run sync:brc-edu`. The sync writes `dev_only_video_routing_index_updated.csv` for local inspection. With `BRC_EDU_SOURCE=local`, Red reads that generated CSV through `brc_find_help_resources`.
+
+Path configuration (optional):
+
+- `BRC_EDU_SUPPORT_CSV_PATH` — support CSV path (default: `data/webinar_video_routing_index.csv`)
+- `BRC_EDU_ENRICHED_CSV_PATH` — generated CSV path (default: `data/dev_only_video_routing_index_updated.csv`)
+
+Local OneDrive example:
+
+```text
+BRC_EDU_SOURCE=local
+BRC_EDU_SUPPORT_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\webinar_video_routing_index.csv
+BRC_EDU_ENRICHED_CSV_PATH=C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\dev_only_video_routing_index_updated.csv
+```
+
+### Production / staging (Azure Function processor)
+
+When a BRC Edu resource file is uploaded to blob storage, an Azure Function can process the latest blob and push CSV text to Red’s existing sync endpoint.
+
+Trigger:
+
+- Blob trigger on `brc-edu-resources/brc-edu/latest/{name}`
+
+Supported files:
+
+- `.csv` — read as UTF-8 text
+- `.xlsx` — first worksheet converted to CSV text
+
+The function POSTs to Red:
+
+- `POST /internal/brc-edu/resources/sync`
+- Header: `x-red-edu-sync-secret: <secret>`
+- Body: `{ "csvText": "..." }`
+
+Function configuration:
+
+- `AzureWebJobsStorage` — Function App runtime storage account
+- `BRC_EDU_STORAGE_CONNECTION` — BRC Edu blob storage account connection for the blob trigger
+- `RED_BRC_EDU_SYNC_ENDPOINT` — full Red sync URL
+- `RED_BRC_EDU_SYNC_SECRET` — shared secret for the sync header
+
+Logging:
+
+- Logs filename and success/failure only
+- Does not log the sync secret or full file content
+
+Implementation:
+
+- `functions/brc-edu-resource-processor/` — Azure Function app (`brcEduResourceProcessor`)
+
+### Production / staging (push sync)
+
+Power Automate or another trusted internal automation can push the support CSV to Red without OneDrive access from the server.
+
+Endpoint:
+
+- `POST /internal/brc-edu/resources/sync`
+- Header: `x-red-edu-sync-secret: <secret>` (from `BRC_EDU_SYNC_SECRET`)
+- Body: `{ "csvText": "Video Title,Video URL,Help-Routing Category\n..." }`
+
+Responses:
+
+- `200` — `{ ok, rowsRead, rowsEnriched, inactiveRows, needsReviewRows, storedAt }`
+- `400` — missing or invalid `csvText`
+- `401` — missing or wrong sync secret header
+- `503` — `BRC_EDU_SYNC_SECRET` is not configured
+
+Red validates the secret, parses and enriches the CSV, and writes `data/brc_edu_synced_resources.json` (or `BRC_EDU_SYNCED_RESOURCES_PATH`). `brc_find_help_resources` prefers this synced JSON over the local generated CSV fallback.
+
+Configuration:
+
+- `BRC_EDU_SYNC_SECRET` — shared secret for the sync endpoint (required for sync to work)
+- `BRC_EDU_SYNCED_RESOURCES_PATH` — JSON store path (default: `data/brc_edu_synced_resources.json`)
+
+### Production / staging (Microsoft Graph, optional)
+
+With `BRC_EDU_SOURCE=graph`, Red can still read the support CSV from OneDrive/SharePoint using Microsoft Graph when no synced JSON is available. This path is optional and not the default for new deployments.
+
+Graph configuration:
+
+- `BRC_EDU_GRAPH_TENANT_ID`
+- `BRC_EDU_GRAPH_CLIENT_ID`
+- `BRC_EDU_GRAPH_CLIENT_SECRET`
+- `BRC_EDU_GRAPH_DRIVE_ID`
+- `BRC_EDU_GRAPH_ITEM_ID`
+
+If Graph is unavailable or misconfigured, Red logs a safe warning and falls back to the local generated CSV when present. Synced JSON (from push sync) is always preferred when available.
+
+Implementation:
+
+- `functions/brc-edu-resource-processor/` — Azure Function blob trigger that converts uploaded files and calls Red sync
+- `src/edu/brc_edu_paths.ts` — resolves support and enriched CSV paths from environment variables
+- `src/edu/brc_edu_synced_store.ts` — push-sync JSON store, validation, and enrichment pipeline for the HTTP endpoint
+- `src/edu/brc_edu_storage_config.ts` — shared Azure Blob storage connection and container helpers for help indexes
+- `src/edu/brc_edu_graph.ts` — client-credentials Microsoft Graph download for the support CSV
+- `src/edu/brc_edu_enrichment.ts` — category inference and CSV formatting for sync
+- `src/edu/brc_edu_resources.ts` — loads synced JSON first, then graph/local CSV; searches enriched resources for `brc_find_help_resources`
+- `scripts/sync_brc_edu_from_support_csv.mjs` — dev/admin sync only; normal user chats do not write CSV

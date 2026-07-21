@@ -532,8 +532,9 @@ export function registerDeploymentTools(server: ServerType) {
   server.tool(
     "brc_getting_started",
     [
-      "Use this whenever the user asks how to start, says start, says getting started, or asks for help using Big Red Cloud.",
+      "Use this whenever the user asks how to start, says start, says getting started, or wants to connect or reconnect companies in Red.",
       "Return simple customer-friendly setup steps and example prompts.",
+      "Do not use for tutorial, webinar, or video how-to questions — use brc_find_help_resources for those.",
       "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
     ].join(" "),
     {},

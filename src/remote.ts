@@ -55,6 +55,12 @@ import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.j
 import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
+import {
+  BRC_EDU_SYNC_SECRET_HEADER,
+  handleBrcEduResourcesSyncRequest,
+} from "./edu/brc_edu_synced_store.js";
+import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
+import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -261,6 +267,8 @@ app.get("/favicon.ico", (_req, res) => {
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+registerFreshdeskPublicImageRoute(app);
 
 function isInitializeRequest(body: unknown): boolean {
   if (Array.isArray(body)) {
@@ -515,6 +523,18 @@ app.get("/mcp", async (req: Request, res: Response) => {
     error: { code: -32000, message: "Bad Request: No valid session for GET." },
     id: null,
   });
+});
+
+app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret) ? requestSecret[0] : requestSecret;
+  const result = handleBrcEduResourcesSyncRequest(req.body, normalizedSecret);
+
+  if (result.status === 200) {
+    invalidateEduResourcesCache();
+  }
+
+  res.status(result.status).json(result.body);
 });
 
 app.delete("/mcp", async (req: Request, res: Response) => {
