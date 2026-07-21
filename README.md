@@ -9,6 +9,7 @@ With Red, a connected user can:
 - **Review** Big Red Cloud data with read-only lookups (customers, suppliers, products, invoices, quotes, nominal reports, and more).
 - **Review before posting** — see a plain-English preview of new records before anything is written to Big Red Cloud.
 - **Create, update, or delete** records only after explicit confirmation.
+- **Ask Big Red Cloud how-to and training questions** — Red answers using official support articles, customer documentation, screenshots, and webinar resources. These help tools do not require a connected company.
 
 ---
 
@@ -35,6 +36,7 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 - VAT and transaction safety checks
 - Sales invoice safeguards, including Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
 - Session audit log of writes made through the MCP session
+- Official Big Red Cloud help answers from Freshdesk articles, customer documentation, screenshots, and webinars — no company connection required
 - Local stdio and hosted HTTP transports
 
 ---
@@ -89,6 +91,9 @@ Key shared modules:
 - `src/auth/credential_validation.ts` — BRC read validation before storing company connection credentials
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
+- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, screenshots, and unified help search
+- `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
+- `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -305,9 +310,31 @@ For a detailed developer guide to the source layout and MCP tool coverage, see [
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
 - **Audit and session** — session connection management and the session audit log.
-- **Under development or deployment-gated** — bank account writes and email sending are available only where enabled by tenant configuration and deployment flags; read-only bank lookups are available for payments workflows.
+- **Help and training** — Freshdesk  articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
+
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
+
+---
+
+## Help and training resources
+
+Red includes two read-only MCP tools for Big Red Cloud help and training questions:
+
+- `brc_find_help_resources` — searches official  articles, customer documentation, recorded webinars, and upcoming webinars.
+- `brc_get_help_resource_details` — returns the full details for a selected resource, including step-by-step guidance and relevant screenshot links where available.
+
+These tools do not require a connected Big Red Cloud company.
+
+Help answers may include:
+
+- official Freshdesk  articles;
+- customer documentation;
+- relevant screenshots;
+- recorded YouTube training videos;
+- upcoming webinar links.
+
+Help-resource indexes are supplied by the deployment operator. The public repository does not include Big Red Cloud’s internal content-management or resource-upload workflow.
 
 ---
 
