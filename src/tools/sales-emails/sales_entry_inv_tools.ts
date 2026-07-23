@@ -11,6 +11,7 @@ import {
   }  from "../../shared.js";
   import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, resolveSalesInvoiceVatTypeId, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
   import {
+    buildSalesInvoiceGenRefValidationFailureBody,
     generatedReferenceSalesInvoicePayloadObjectSchema,
     validateGeneratedReferenceSalesInvoicePayload,
   } from "./sales_invoice_payload_schemas.js";
@@ -42,6 +43,10 @@ import {
   /**
    * Core handler for brc_create_sales_invoice_gen_ref. Exported for unit tests
    * so brcJsonRequest can be stubbed when payload validation fails.
+   *
+   * Never throws for payload validation failures — returns an MCP jsonResponse
+   * with valid:false and field errors so the connector does not surface a
+   * generic "server isn't responding" failure.
    */
   export async function createSalesInvoiceWithGeneratingReference(
     args: {
@@ -53,72 +58,85 @@ import {
     deps: CreateSalesInvoiceGenRefDeps = defaultCreateSalesInvoiceGenRefDeps
   ) {
     const { companyName, payload, priceBasis, confirmCrAnalysisCategory } = args;
-    const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
 
-    const validation = validateGeneratedReferenceSalesInvoicePayload(finalPayload);
-    if (!validation.valid) {
+    try {
+      const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
+
+      const validation = validateGeneratedReferenceSalesInvoicePayload(finalPayload);
+      if (!validation.valid) {
+        return jsonResponse(
+          buildSalesInvoiceGenRefValidationFailureBody(companyName, validation.errors)
+        );
+      }
+
+      // Default the invoice VAT type from the selected customer (BRC manual
+      // entry behaviour) only when the raw payload did not already supply a
+      // valid vatTypeId. An explicit vatTypeId in the payload is respected. VAT
+      // rate / percentage selection is unchanged.
+      const existingVatTypeId = Number(finalPayload.vatTypeId);
+      if (!(Number.isFinite(existingVatTypeId) && existingVatTypeId > 0)) {
+        const customerVatType = await deps.resolveCustomerVatType(
+          String(companyName),
+          finalPayload.customerId as number | string | undefined
+        );
+        finalPayload.vatTypeId = resolveSalesInvoiceVatTypeId(customerVatType);
+      }
+
+      requireSalesRepInPayload(finalPayload);
+      enforceSalesProductLineProductIdOrThrow(finalPayload);
+      await deps.enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
+      enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
+        confirmCrAnalysisCategory,
+      });
+
+      const processingSettings = await deps.loadAndEnforceTransactionSettings(
+        String(companyName),
+        "sales_invoice",
+        finalPayload,
+        { priceBasis }
+      );
+      const { warnings: referenceWarnings } =
+        await deps.loadAndEnforceReferenceSettings(
+          String(companyName),
+          "sales_invoice",
+          finalPayload,
+          "generated"
+        );
+
+      const settingsWarnings = [
+        ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
+        ...referenceWarnings,
+      ];
+
+      const response = await deps.brcJsonRequest(
+        companyName,
+        "POST",
+        "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
+        finalPayload
+      );
+
       return jsonResponse({
-        message:
-          "Sales invoice payload validation failed. Fix the reported fields before posting.",
+        message: "Sales invoice created with generated reference.",
+        companyName,
+        payloadSent: finalPayload,
+        settingsWarnings:
+          settingsWarnings.length > 0 ? settingsWarnings : undefined,
+        response,
+      });
+    } catch (error) {
+      return jsonResponse({
+        message: "Error creating sales invoice with generated reference.",
         companyName,
         valid: false,
-        errors: validation.errors,
+        errors: [
+          {
+            field: "(root)",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
+        error: error instanceof Error ? error.message : String(error),
       });
     }
-
-    // Default the invoice VAT type from the selected customer (BRC manual
-    // entry behaviour) only when the raw payload did not already supply a
-    // valid vatTypeId. An explicit vatTypeId in the payload is respected. VAT
-    // rate / percentage selection is unchanged.
-    const existingVatTypeId = Number(finalPayload.vatTypeId);
-    if (!(Number.isFinite(existingVatTypeId) && existingVatTypeId > 0)) {
-      const customerVatType = await deps.resolveCustomerVatType(
-        String(companyName),
-        finalPayload.customerId as number | string | undefined
-      );
-      finalPayload.vatTypeId = resolveSalesInvoiceVatTypeId(customerVatType);
-    }
-
-    requireSalesRepInPayload(finalPayload);
-    enforceSalesProductLineProductIdOrThrow(finalPayload);
-    await deps.enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
-    enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
-      confirmCrAnalysisCategory,
-    });
-
-    const processingSettings = await deps.loadAndEnforceTransactionSettings(
-      String(companyName),
-      "sales_invoice",
-      finalPayload,
-      { priceBasis }
-    );
-    const { warnings: referenceWarnings } = await deps.loadAndEnforceReferenceSettings(
-      String(companyName),
-      "sales_invoice",
-      finalPayload,
-      "generated"
-    );
-
-    const settingsWarnings = [
-      ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
-      ...referenceWarnings,
-    ];
-
-    const response = await deps.brcJsonRequest(
-      companyName,
-      "POST",
-      "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
-      finalPayload
-    );
-
-    return jsonResponse({
-      message: "Sales invoice created with generated reference.",
-      companyName,
-      payloadSent: finalPayload,
-      settingsWarnings:
-        settingsWarnings.length > 0 ? settingsWarnings : undefined,
-      response,
-    });
   }
 
   export function registerSalesEntryInvoiceTools(server:ServerType){

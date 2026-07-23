@@ -194,11 +194,8 @@ test("missing productTrans returns a field error", () => {
   }
 
   assert.ok(
-    result.errors.some(
-      (error) =>
-        error.field === "productTrans" &&
-        /at least one product line/i.test(error.message)
-    )
+    result.errors.some((error) => error.field === "productTrans"),
+    `expected productTrans error, got ${JSON.stringify(result.errors)}`
   );
 });
 
@@ -214,11 +211,42 @@ test("product line missing acEntries returns a field error", () => {
   }
 
   assert.ok(
-    result.errors.some(
-      (error) =>
-        error.field === "productTrans[0].acEntries" &&
-        /at least one nested acEntries/i.test(error.message)
-    )
+    result.errors.some((error) => error.field === "productTrans.0.acEntries"),
+    `expected productTrans.0.acEntries, got ${JSON.stringify(result.errors)}`
+  );
+});
+
+test("missing productTrans.1.acEntries returns structured field error", () => {
+  const payload = twoLineInvoice();
+  const lines = payload.productTrans as Record<string, unknown>[];
+  delete lines[1]!.acEntries;
+
+  const result = validateGeneratedReferenceSalesInvoicePayload(payload);
+  assert.equal(result.valid, false);
+  if (result.valid) {
+    return;
+  }
+
+  assert.ok(
+    result.errors.some((error) => error.field === "productTrans.1.acEntries"),
+    `expected productTrans.1.acEntries, got ${JSON.stringify(result.errors)}`
+  );
+});
+
+test("empty productTrans.1.acEntries returns structured field error", () => {
+  const payload = twoLineInvoice();
+  const lines = payload.productTrans as Record<string, unknown>[];
+  lines[1]!.acEntries = [];
+
+  const result = validateGeneratedReferenceSalesInvoicePayload(payload);
+  assert.equal(result.valid, false);
+  if (result.valid) {
+    return;
+  }
+
+  assert.ok(
+    result.errors.some((error) => error.field === "productTrans.1.acEntries"),
+    `expected productTrans.1.acEntries, got ${JSON.stringify(result.errors)}`
   );
 });
 
@@ -259,7 +287,7 @@ test("analysis values not reconciling to amountNet are rejected", () => {
   assert.ok(
     result.errors.some(
       (error) =>
-        error.field === "productTrans[0].acEntries" &&
+        error.field === "productTrans.0.acEntries" &&
         /amountNet/i.test(error.message)
     )
   );
@@ -279,7 +307,7 @@ test("line amount not equalling amountNet + VAT is rejected", () => {
   assert.ok(
     result.errors.some(
       (error) =>
-        error.field === "productTrans[1].amount" &&
+        error.field === "productTrans.1.amount" &&
         /amountNet \+ vat/i.test(error.message)
     )
   );
@@ -411,6 +439,114 @@ test("invalid payload does not call brcJsonRequest", async () => {
   assert.equal(body.companyName, "Test Co");
   assert.ok(Array.isArray(body.errors));
   assert.ok((body.errors as unknown[]).length > 0);
+});
+
+async function assertAcEntriesLineOneFailureDoesNotCallBrc(
+  mutate: (lines: Record<string, unknown>[]) => void
+): Promise<void> {
+  let brcJsonRequestCalled = false;
+  const payload = twoLineInvoice();
+  mutate(payload.productTrans as Record<string, unknown>[]);
+
+  let threw = false;
+  let result: { content: Array<{ text: string }> } | undefined;
+  try {
+    result = await createSalesInvoiceWithGeneratingReference(
+      {
+        companyName: "Test Co",
+        payload,
+      },
+      {
+        brcJsonRequest: async () => {
+          brcJsonRequestCalled = true;
+          return { ok: true };
+        },
+        resolveCustomerVatType: async () => 1,
+        loadAndEnforceTransactionSettings: async () => ({
+          raw: {},
+          cashReceiptVatMode: "not_enabled",
+          grossPriceSalesInvoicingEnabled: false,
+        }),
+        loadAndEnforceReferenceSettings: async () => ({
+          settings: {
+            raw: {},
+            salesAutoGenerateReference: true,
+          },
+          warnings: [],
+        }),
+        enforceSalesVatCategoryOrThrow: async () => undefined,
+      }
+    );
+  } catch {
+    threw = true;
+  }
+
+  assert.equal(threw, false, "handler must not throw for acEntries validation failures");
+  assert.equal(brcJsonRequestCalled, false);
+  assert.ok(result);
+  const body = parseResponseText(result!);
+  assert.equal(body.valid, false);
+  assert.ok(Array.isArray(body.errors));
+  assert.ok(
+    (body.errors as Array<{ field: string }>).some(
+      (error) => error.field === "productTrans.1.acEntries"
+    ),
+    `expected productTrans.1.acEntries in ${JSON.stringify(body.errors)}`
+  );
+}
+
+test("missing productTrans.1.acEntries does not throw and does not call brcJsonRequest", async () => {
+  await assertAcEntriesLineOneFailureDoesNotCallBrc((lines) => {
+    delete lines[1]!.acEntries;
+  });
+});
+
+test("empty productTrans.1.acEntries does not throw and does not call brcJsonRequest", async () => {
+  await assertAcEntriesLineOneFailureDoesNotCallBrc((lines) => {
+    lines[1]!.acEntries = [];
+  });
+});
+
+test("write wrapper returns structured acEntries error before preview without calling handler", async () => {
+  const { wrapWriteToolHandler } = await import(
+    "../../guards/write_confirmation.js"
+  );
+
+  let handlerCalled = false;
+  const wrapped = wrapWriteToolHandler(
+    "brc_create_sales_invoice_gen_ref",
+    async () => {
+      handlerCalled = true;
+      return "posted";
+    }
+  );
+
+  const payload = twoLineInvoice();
+  (payload.productTrans as Record<string, unknown>[])[1]!.acEntries = [];
+
+  // Omit companyName so Sales VAT preflight (network) is skipped; schema
+  // validation must still return a structured response before preview.
+  let threw = false;
+  let result: unknown;
+  try {
+    result = await wrapped({
+      payload,
+    });
+  } catch {
+    threw = true;
+  }
+
+  assert.equal(threw, false);
+  assert.equal(handlerCalled, false);
+  const body = parseResponseText(
+    result as { content: Array<{ text: string }> }
+  );
+  assert.equal(body.valid, false);
+  assert.ok(
+    (body.errors as Array<{ field: string }>).some(
+      (error) => error.field === "productTrans.1.acEntries"
+    )
+  );
 });
 
 test("existing placeholder product ID guard still works on multi-line payloads", () => {

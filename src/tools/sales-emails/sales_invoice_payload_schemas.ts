@@ -20,6 +20,45 @@ function sumNumbers(values: number[]): number {
 }
 
 /**
+ * Formats a Zod issue path as `productTrans.1.acEntries` (dot + numeric index).
+ */
+export function formatZodIssueFieldPath(path: PropertyKey[]): string {
+  if (path.length === 0) {
+    return "(root)";
+  }
+
+  let field = "";
+  for (const part of path) {
+    if (typeof part === "number") {
+      field += `.${part}`;
+      continue;
+    }
+
+    const text = String(part);
+    if (text === "") {
+      continue;
+    }
+
+    if (/^\d+$/.test(text)) {
+      field += `.${text}`;
+      continue;
+    }
+
+    // Support legacy single-segment paths such as "productTrans[1]".
+    const bracketMatch = /^([^[\]]+)\[(\d+)\]$/.exec(text);
+    if (bracketMatch) {
+      field += field.length === 0 ? bracketMatch[1]! : `.${bracketMatch[1]!}`;
+      field += `.${bracketMatch[2]!}`;
+      continue;
+    }
+
+    field += field.length === 0 ? text : `.${text}`;
+  }
+
+  return field.replace(/^\./, "") || "(root)";
+}
+
+/**
  * Nested analysis entry on a sales invoice productTrans line.
  * Matches the shape produced by buildSalesInvoicePayload (no top-level acEntries).
  */
@@ -38,8 +77,44 @@ export type SalesInvoiceAnalysisEntry = z.infer<
   typeof salesInvoiceAnalysisEntrySchema
 >;
 
+const productLineBaseFields = {
+  id: z.number().optional(),
+  amount: z.number(),
+  amountNet: z.number(),
+  percentage: z.number(),
+  productId: z.number().optional(),
+  productCode: z.string().min(1),
+  quantity: z.number(),
+  unitPrice: z.number(),
+  vat: z.number(),
+  vatRateId: z.number(),
+  vatAnalysisTypeId: z.number(),
+  // Optional on the structural schema: applySalesPriceBasisToRawPayload may
+  // set this from priceBasis before full in-handler reconciliation.
+  useTaxInclusiveUnitPrice: z.boolean().optional(),
+  tranNotes: z.array(z.string()),
+} as const;
+
 /**
- * One productTrans line on a sales invoice, including nested acEntries.
+ * MCP-facing product line: acEntries is optional here so missing/empty/null
+ * values reach the handler and return a structured valid:false response
+ * instead of failing as a raw MCP Zod protocol error (which Cursor can surface
+ * as "The connector's server isn't responding").
+ */
+export const salesInvoiceProductLineInputSchema = z
+  .object({
+    ...productLineBaseFields,
+    acEntries: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z.array(salesInvoiceAnalysisEntrySchema).optional()
+    ),
+  })
+  .passthrough();
+
+/**
+ * Strict productTrans line used for in-handler safeParse.
+ * acEntries is required and must contain at least one nested analysis entry.
+ *
  * id is optional — the BRC createSaleInvoiceWithGeneratingReference Swagger
  * example omits id on productTrans lines.
  *
@@ -49,22 +124,8 @@ export type SalesInvoiceAnalysisEntry = z.infer<
  */
 export const salesInvoiceProductLineSchema = z
   .object({
-    id: z.number().optional(),
-    amount: z.number(),
-    amountNet: z.number(),
-    percentage: z.number(),
-    productId: z.number().optional(),
-    productCode: z.string().min(1),
-    quantity: z.number(),
-    unitPrice: z.number(),
-    vat: z.number(),
-    vatRateId: z.number(),
-    vatAnalysisTypeId: z.number(),
-    // Optional on the structural schema: applySalesPriceBasisToRawPayload may
-    // set this from priceBasis before full in-handler reconciliation.
-    useTaxInclusiveUnitPrice: z.boolean().optional(),
-    tranNotes: z.array(z.string()),
-    acEntries: z.array(salesInvoiceAnalysisEntrySchema).optional(),
+    ...productLineBaseFields,
+    acEntries: z.array(salesInvoiceAnalysisEntrySchema).min(1),
   })
   .passthrough();
 
@@ -72,9 +133,38 @@ export type SalesInvoiceProductLine = z.infer<
   typeof salesInvoiceProductLineSchema
 >;
 
+const salesInvoiceHeaderFields = {
+  customerId: z.number(),
+  acCode: z.string().min(1),
+  entryDate: z.string().min(1),
+  procDate: z.string().min(1),
+  saleRepId: z.number(),
+  // Required here and by requireSalesRepInPayload / existing tests even though
+  // the Swagger createSaleInvoiceWithGeneratingReference example omits
+  // saleRepCode. Confirm with BRC whether the API accepts saleRepId alone
+  // before relaxing this — do not remove the runtime requirement yet.
+  saleRepCode: z.string().min(1),
+  bookTranTypeId: z.number(),
+  totalNet: z.number(),
+  totalVAT: z.number(),
+  total: z.number(),
+  unpaid: z.number().optional(),
+  note: z.string().optional(),
+  deliveryTo: z.union([z.string(), z.array(z.string())]).optional(),
+  vatTypeId: z.number().optional(),
+  // Optional: applySalesPriceBasisToRawPayload can add this before full validation.
+  useTaxInclusiveUnitPrice: z.boolean().optional(),
+  customFields: z.array(z.unknown()).optional(),
+  id: z.number().optional(),
+  quoteId: z.number().optional(),
+  netGoods: z.number().optional(),
+  netServices: z.number().optional(),
+} as const;
+
 /**
- * Structural BRC sales invoice payload for generated-reference creates.
- * Cross-field reconciliation is applied by generatedReferenceSalesInvoicePayloadSchema.
+ * Structural BRC sales invoice payload for generated-reference creates (MCP tool
+ * input). Cross-field reconciliation and required acEntries.min(1) are applied by
+ * generatedReferenceSalesInvoicePayloadSchema in-handler.
  *
  * id is optional — the Swagger create example omits header id.
  * unpaid is optional — the Swagger create example omits unpaid; when supplied it
@@ -82,38 +172,22 @@ export type SalesInvoiceProductLine = z.infer<
  */
 export const generatedReferenceSalesInvoicePayloadObjectSchema = z
   .object({
-    customerId: z.number(),
-    acCode: z.string().min(1),
-    entryDate: z.string().min(1),
-    procDate: z.string().min(1),
-    saleRepId: z.number(),
-    // Required here and by requireSalesRepInPayload / existing tests even though
-    // the Swagger createSaleInvoiceWithGeneratingReference example omits
-    // saleRepCode. Confirm with BRC whether the API accepts saleRepId alone
-    // before relaxing this — do not remove the runtime requirement yet.
-    saleRepCode: z.string().min(1),
-    bookTranTypeId: z.number(),
-    totalNet: z.number(),
-    totalVAT: z.number(),
-    total: z.number(),
-    unpaid: z.number().optional(),
-    productTrans: z.array(salesInvoiceProductLineSchema).optional(),
-    note: z.string().optional(),
-    deliveryTo: z.union([z.string(), z.array(z.string())]).optional(),
-    vatTypeId: z.number().optional(),
-    // Optional: applySalesPriceBasisToRawPayload can add this before full validation.
-    useTaxInclusiveUnitPrice: z.boolean().optional(),
-    customFields: z.array(z.unknown()).optional(),
-    id: z.number().optional(),
-    quoteId: z.number().optional(),
-    netGoods: z.number().optional(),
-    netServices: z.number().optional(),
+    ...salesInvoiceHeaderFields,
+    productTrans: z.array(salesInvoiceProductLineInputSchema).optional(),
   })
   .passthrough();
 
 export type GeneratedReferenceSalesInvoicePayload = z.infer<
   typeof generatedReferenceSalesInvoicePayloadObjectSchema
 >;
+
+/** Strict object shape used by safeParse after price-basis normalisation. */
+const generatedReferenceSalesInvoicePayloadValidationObjectSchema = z
+  .object({
+    ...salesInvoiceHeaderFields,
+    productTrans: z.array(salesInvoiceProductLineSchema).min(1),
+  })
+  .passthrough();
 
 function resolveLineTaxInclusive(
   line: SalesInvoiceProductLine,
@@ -130,138 +204,144 @@ function resolveLineTaxInclusive(
 
 function addIssue(
   ctx: z.RefinementCtx,
-  field: string,
+  path: Array<string | number>,
   message: string
 ): void {
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     message,
-    path: field.split(".").filter((part) => part !== ""),
+    path,
   });
 }
 
 /**
  * Full generated-reference multi-line sales invoice payload schema, including
- * cross-field reconciliation. Prefer safeParse so all issues can be returned.
+ * required nested acEntries.min(1) and cross-field reconciliation.
+ * Prefer safeParse so all issues can be returned together.
  */
 export const generatedReferenceSalesInvoicePayloadSchema =
-  generatedReferenceSalesInvoicePayloadObjectSchema.superRefine((payload, ctx) => {
-    const productTrans = payload.productTrans;
+  generatedReferenceSalesInvoicePayloadValidationObjectSchema.superRefine(
+    (payload, ctx) => {
+      const productTrans = payload.productTrans;
 
-    if (!Array.isArray(productTrans) || productTrans.length === 0) {
-      addIssue(
-        ctx,
-        "productTrans",
-        "productTrans must contain at least one product line."
-      );
-      return;
-    }
-
-    for (let lineIndex = 0; lineIndex < productTrans.length; lineIndex += 1) {
-      const line = productTrans[lineIndex]!;
-      const linePath = `productTrans[${lineIndex}]`;
-      const acEntries = line.acEntries;
-
-      if (!Array.isArray(acEntries) || acEntries.length === 0) {
+      if (!Array.isArray(productTrans) || productTrans.length === 0) {
         addIssue(
           ctx,
-          `${linePath}.acEntries`,
-          "Each productTrans line must contain at least one nested acEntries item."
+          ["productTrans"],
+          "productTrans must contain at least one product line."
         );
-      } else {
-        const analysisSum = sumNumbers(acEntries.map((entry) => entry.value));
-        if (!amountsEqual(analysisSum, line.amountNet)) {
+        return;
+      }
+
+      for (let lineIndex = 0; lineIndex < productTrans.length; lineIndex += 1) {
+        const line = productTrans[lineIndex]!;
+        const acEntries = line.acEntries;
+
+        // Belt-and-braces: schema already requires min(1); keep a clear message.
+        if (!Array.isArray(acEntries) || acEntries.length === 0) {
           addIssue(
             ctx,
-            `${linePath}.acEntries`,
-            `Sum of acEntries.value (${analysisSum}) must equal amountNet (${line.amountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+            ["productTrans", lineIndex, "acEntries"],
+            "Each productTrans line must contain at least one nested acEntries item."
           );
-        }
-      }
-
-      const amountFromNetAndVat = line.amountNet + line.vat;
-      if (!amountsEqual(line.amount, amountFromNetAndVat)) {
-        addIssue(
-          ctx,
-          `${linePath}.amount`,
-          `amount (${line.amount}) must equal amountNet + vat (${amountFromNetAndVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-        );
-      }
-
-      const taxInclusive = resolveLineTaxInclusive(
-        line,
-        payload.useTaxInclusiveUnitPrice
-      );
-      if (taxInclusive !== undefined) {
-        const qtyTimesPrice = line.quantity * line.unitPrice;
-        if (taxInclusive) {
-          if (!amountsEqual(qtyTimesPrice, line.amount)) {
+        } else {
+          const analysisSum = sumNumbers(acEntries.map((entry) => entry.value));
+          if (!amountsEqual(analysisSum, line.amountNet)) {
             addIssue(
               ctx,
-              `${linePath}.unitPrice`,
-              `When useTaxInclusiveUnitPrice is true, quantity × unitPrice (${qtyTimesPrice}) must equal amount (${line.amount}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+              ["productTrans", lineIndex, "acEntries"],
+              `Sum of acEntries.value (${analysisSum}) must equal amountNet (${line.amountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
             );
           }
-        } else if (!amountsEqual(qtyTimesPrice, line.amountNet)) {
+        }
+
+        const amountFromNetAndVat = line.amountNet + line.vat;
+        if (!amountsEqual(line.amount, amountFromNetAndVat)) {
           addIssue(
             ctx,
-            `${linePath}.unitPrice`,
-            `When useTaxInclusiveUnitPrice is false, quantity × unitPrice (${qtyTimesPrice}) must equal amountNet (${line.amountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+            ["productTrans", lineIndex, "amount"],
+            `amount (${line.amount}) must equal amountNet + vat (${amountFromNetAndVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
           );
         }
+
+        const taxInclusive = resolveLineTaxInclusive(
+          line,
+          payload.useTaxInclusiveUnitPrice
+        );
+        if (taxInclusive !== undefined) {
+          const qtyTimesPrice = line.quantity * line.unitPrice;
+          if (taxInclusive) {
+            if (!amountsEqual(qtyTimesPrice, line.amount)) {
+              addIssue(
+                ctx,
+                ["productTrans", lineIndex, "unitPrice"],
+                `When useTaxInclusiveUnitPrice is true, quantity × unitPrice (${qtyTimesPrice}) must equal amount (${line.amount}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+              );
+            }
+          } else if (!amountsEqual(qtyTimesPrice, line.amountNet)) {
+            addIssue(
+              ctx,
+              ["productTrans", lineIndex, "unitPrice"],
+              `When useTaxInclusiveUnitPrice is false, quantity × unitPrice (${qtyTimesPrice}) must equal amountNet (${line.amountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+            );
+          }
+        }
+      }
+
+      const sumAmountNet = sumNumbers(productTrans.map((line) => line.amountNet));
+      const sumVat = sumNumbers(productTrans.map((line) => line.vat));
+      const sumAmount = sumNumbers(productTrans.map((line) => line.amount));
+
+      if (!amountsEqual(payload.totalNet, sumAmountNet)) {
+        addIssue(
+          ctx,
+          ["totalNet"],
+          `totalNet (${payload.totalNet}) must equal the sum of productTrans amountNet (${sumAmountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+        );
+      }
+
+      if (!amountsEqual(payload.totalVAT, sumVat)) {
+        addIssue(
+          ctx,
+          ["totalVAT"],
+          `totalVAT (${payload.totalVAT}) must equal the sum of productTrans vat (${sumVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+        );
+      }
+
+      if (!amountsEqual(payload.total, sumAmount)) {
+        addIssue(
+          ctx,
+          ["total"],
+          `total (${payload.total}) must equal the sum of productTrans amount (${sumAmount}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+        );
+      }
+
+      const headerNetPlusVat = payload.totalNet + payload.totalVAT;
+      if (!amountsEqual(payload.total, headerNetPlusVat)) {
+        addIssue(
+          ctx,
+          ["total"],
+          `total (${payload.total}) must equal totalNet + totalVAT (${headerNetPlusVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+        );
+      }
+
+      // Swagger create example omits unpaid; only reconcile when the caller supplies it.
+      if (
+        payload.unpaid !== undefined &&
+        !amountsEqual(payload.unpaid, payload.total)
+      ) {
+        addIssue(
+          ctx,
+          ["unpaid"],
+          `unpaid (${payload.unpaid}) must equal total (${payload.total}) for a newly created invoice within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
+        );
       }
     }
-
-    const sumAmountNet = sumNumbers(productTrans.map((line) => line.amountNet));
-    const sumVat = sumNumbers(productTrans.map((line) => line.vat));
-    const sumAmount = sumNumbers(productTrans.map((line) => line.amount));
-
-    if (!amountsEqual(payload.totalNet, sumAmountNet)) {
-      addIssue(
-        ctx,
-        "totalNet",
-        `totalNet (${payload.totalNet}) must equal the sum of productTrans amountNet (${sumAmountNet}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-      );
-    }
-
-    if (!amountsEqual(payload.totalVAT, sumVat)) {
-      addIssue(
-        ctx,
-        "totalVAT",
-        `totalVAT (${payload.totalVAT}) must equal the sum of productTrans vat (${sumVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-      );
-    }
-
-    if (!amountsEqual(payload.total, sumAmount)) {
-      addIssue(
-        ctx,
-        "total",
-        `total (${payload.total}) must equal the sum of productTrans amount (${sumAmount}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-      );
-    }
-
-    const headerNetPlusVat = payload.totalNet + payload.totalVAT;
-    if (!amountsEqual(payload.total, headerNetPlusVat)) {
-      addIssue(
-        ctx,
-        "total",
-        `total (${payload.total}) must equal totalNet + totalVAT (${headerNetPlusVat}) within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-      );
-    }
-
-    // Swagger create example omits unpaid; only reconcile when the caller supplies it.
-    if (payload.unpaid !== undefined && !amountsEqual(payload.unpaid, payload.total)) {
-      addIssue(
-        ctx,
-        "unpaid",
-        `unpaid (${payload.unpaid}) must equal total (${payload.total}) for a newly created invoice within ${SALES_INVOICE_CURRENCY_TOLERANCE}.`
-      );
-    }
-  });
+  );
 
 /**
  * Formats Zod issues into stable { field, message } errors for tool responses.
- * Prefers the custom path from refinements; falls back to Zod's issue path.
+ * Field paths use dot-index form, e.g. productTrans.1.acEntries.
  */
 export function formatSalesInvoicePayloadValidationErrors(
   error: z.ZodError
@@ -270,13 +350,7 @@ export function formatSalesInvoicePayloadValidationErrors(
   const errors: SalesInvoicePayloadFieldError[] = [];
 
   for (const issue of error.issues) {
-    const field =
-      issue.path.length > 0
-        ? issue.path
-            .map((part) => (typeof part === "number" ? `[${part}]` : String(part)))
-            .join(".")
-            .replace(/\.\[/g, "[")
-        : "(root)";
+    const field = formatZodIssueFieldPath(issue.path);
     const key = `${field}::${issue.message}`;
     if (seen.has(key)) {
       continue;
@@ -289,22 +363,62 @@ export function formatSalesInvoicePayloadValidationErrors(
 }
 
 export type ValidateGeneratedReferenceSalesInvoiceResult =
-  | { valid: true; data: z.infer<typeof generatedReferenceSalesInvoicePayloadSchema> }
+  | {
+      valid: true;
+      data: z.infer<typeof generatedReferenceSalesInvoicePayloadSchema>;
+    }
   | { valid: false; errors: SalesInvoicePayloadFieldError[] };
 
 /**
  * Validates a generated-reference sales invoice payload after price-basis
  * normalisation. Returns every collected field error when invalid.
+ * Never throws — callers can safely map failures to MCP jsonResponse bodies.
  */
 export function validateGeneratedReferenceSalesInvoicePayload(
   payload: unknown
 ): ValidateGeneratedReferenceSalesInvoiceResult {
-  const parsed = generatedReferenceSalesInvoicePayloadSchema.safeParse(payload);
-  if (parsed.success) {
-    return { valid: true, data: parsed.data };
+  try {
+    const parsed = generatedReferenceSalesInvoicePayloadSchema.safeParse(payload);
+    if (parsed.success) {
+      return { valid: true, data: parsed.data };
+    }
+    return {
+      valid: false,
+      errors: formatSalesInvoicePayloadValidationErrors(parsed.error),
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      errors: [
+        {
+          field: "(root)",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unexpected sales invoice payload validation failure.",
+        },
+      ],
+    };
   }
+}
+
+/**
+ * Builds the MCP tool jsonResponse body for a failed gen-ref payload validation.
+ */
+export function buildSalesInvoiceGenRefValidationFailureBody(
+  companyName: string,
+  errors: SalesInvoicePayloadFieldError[]
+): {
+  message: string;
+  companyName: string;
+  valid: false;
+  errors: SalesInvoicePayloadFieldError[];
+} {
   return {
+    message:
+      "Sales invoice payload validation failed. Fix the reported fields before posting.",
+    companyName,
     valid: false,
-    errors: formatSalesInvoicePayloadValidationErrors(parsed.error),
+    errors,
   };
 }
