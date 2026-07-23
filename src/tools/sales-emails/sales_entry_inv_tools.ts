@@ -23,6 +23,8 @@ import {
   import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
   import { enforceSalesVatCategoryOrThrow } from "../../guards/sales_vat_category.js";
   import { resolveCustomerVatType } from "../../guards/customer_vat_type.js";
+  import { runWithActiveConnectionRef } from "../../shared.js";
+  import { extractConnectionRefFromToolArgs } from "../../auth/connection_ref.js";
 
   export type CreateSalesInvoiceGenRefDeps = {
     brcJsonRequest: typeof brcJsonRequest;
@@ -54,11 +56,14 @@ import {
       payload: Record<string, unknown>;
       priceBasis?: "net" | "gross";
       confirmCrAnalysisCategory?: boolean;
+      connectionRef?: string;
     },
     deps: CreateSalesInvoiceGenRefDeps = defaultCreateSalesInvoiceGenRefDeps
   ) {
     const { companyName, payload, priceBasis, confirmCrAnalysisCategory } = args;
+    const connectionRef = args.connectionRef?.trim() || undefined;
 
+    const run = async () => {
     try {
       const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
 
@@ -137,6 +142,12 @@ import {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    };
+
+    if (connectionRef) {
+      return runWithActiveConnectionRef(connectionRef, run);
+    }
+    return run();
   }
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
@@ -332,12 +343,15 @@ server.tool(
           "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
         ),
     },
-    async ({ companyName, payload, priceBasis, confirmCrAnalysisCategory }) =>
+    async (args) =>
       createSalesInvoiceWithGeneratingReference({
-        companyName: String(companyName),
-        payload: payload as Record<string, unknown>,
-        priceBasis,
-        confirmCrAnalysisCategory,
+        companyName: String(args.companyName),
+        payload: args.payload as Record<string, unknown>,
+        priceBasis: args.priceBasis,
+        confirmCrAnalysisCategory: args.confirmCrAnalysisCategory,
+        connectionRef: extractConnectionRefFromToolArgs(
+          args as Record<string, unknown>
+        ),
       })
   );
   

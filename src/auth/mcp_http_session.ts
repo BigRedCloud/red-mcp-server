@@ -366,14 +366,19 @@ export async function runHttpToolSessionFromExtra<T>(
 
   const sessionId =
     transportSessionId?.trim() || resolveMcpSessionIdFromExtra(extra);
+  const connectionRef = options?.connectionRef;
 
   if (!sessionId) {
+    // Still honour an explicit connectionRef when the transport did not supply a
+    // session id (Vibe/Mistral session rotation edge cases).
+    if (connectionRef) {
+      return runWithActiveConnectionRef(connectionRef, fn);
+    }
     return fn();
   }
 
   const store = keyStore ?? resolveSessionKeyStore(sessionId);
   const clientKey = buildHttpClientKeyFromExtra(extra);
-  const connectionRef = options?.connectionRef;
   const scope = await prepareHttpToolSessionScope(
     sessionId,
     store,
