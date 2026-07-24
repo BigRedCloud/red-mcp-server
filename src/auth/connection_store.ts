@@ -58,6 +58,30 @@ function resolveCosmosContainerId(): string {
   return process.env.RED_CONNECT_COSMOS_CONTAINER?.trim() || "connections";
 }
 
+/**
+ * Safe store label for diagnostics (kind + db/container names only — never the
+ * connection string). Example: `cosmos:red-connect/connections` or `memory`.
+ */
+export function getConnectionStoreTargetName(): string {
+  const kind = getConnectionStoreKind();
+  if (kind === "cosmos") {
+    return `cosmos:${resolveCosmosDatabaseId()}/${resolveCosmosContainerId()}`;
+  }
+  return "memory";
+}
+
+export function getDeploymentEnvironmentLabel(): string {
+  const configured = process.env.BRC_DEPLOYMENT_ENV?.trim().toLowerCase();
+  if (configured) {
+    return configured;
+  }
+  const slot = process.env.WEBSITE_SLOT_NAME?.trim().toLowerCase();
+  if (slot) {
+    return slot;
+  }
+  return "unknown";
+}
+
 export function getConnectionStore(): ConnectionStore {
   if (connectionStore) {
     return connectionStore;

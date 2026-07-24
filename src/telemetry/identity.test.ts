@@ -134,6 +134,31 @@ test("form submission body includes telemetryClientId field name", () => {
   assert.equal(result.postClientIdValid, true);
 });
 
+test("rendered connect HTML posts telemetryClientId with exact multipart field name", async () => {
+  const { TELEMETRY_CLIENT_ID_FORM_FIELD } = await import("./identity.js");
+  const { renderConnectPage } = await import("../auth/connection_page.js");
+  const id = generateTelemetryUuid();
+  const html = renderConnectPage("code-xyz", { telemetryClientId: id });
+
+  assert.match(html, /method="POST"/i);
+  assert.match(html, /action="\/connect"/i);
+  assert.match(html, /enctype="multipart\/form-data"/i);
+  assert.match(
+    html,
+    new RegExp(
+      `<input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${id.toLowerCase()}"`
+    )
+  );
+
+  const parsed = resolveTelemetryClientIdFromRequest({
+    headers: {},
+    body: { [TELEMETRY_CLIENT_ID_FORM_FIELD]: id },
+  });
+  assert.equal(parsed.postClientIdPresent, true);
+  assert.equal(parsed.postClientIdValid, true);
+  assert.equal(parsed.clientId, id.toLowerCase());
+});
+
 test("parseCookieHeader reads multiple cookies", () => {
   const parsed = parseCookieHeader("a=1; red_telemetry_client_id=550e8400-e29b-41d4-a716-446655440000");
   assert.equal(parsed.a, "1");

@@ -8,6 +8,7 @@ import { trace } from "@opentelemetry/api";
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  getConnectionStoreTargetName,
   resolveConnectionIdForActiveSessionWithMeta,
 } from "../auth/connection_store.js";
 import { hydrateSessionKeyStoreFromConnectionStore } from "../auth/connection_persistence.js";
@@ -62,6 +63,7 @@ export type RedTelemetryDiagnostics = {
   platform: string;
   clientIdPresent: boolean;
   connectionSessionIdPresent: boolean;
+  sourceStoreName?: string;
 };
 
 /**
@@ -251,6 +253,7 @@ export function buildRedTelemetryDiagnostics(
   options: {
     telemetryRecordFound: boolean;
     connectionContextFound: boolean;
+    sourceStoreName?: string;
   }
 ): RedTelemetryDiagnostics {
   return {
@@ -263,6 +266,7 @@ export function buildRedTelemetryDiagnostics(
     platform: context.clientPlatform ?? "unknown",
     clientIdPresent: Boolean(context.telemetryClientId),
     connectionSessionIdPresent: Boolean(context.connectionSessionId),
+    sourceStoreName: options.sourceStoreName,
   };
 }
 
@@ -308,6 +312,28 @@ export function logRedTelemetryDiagnostics(
         platform: diagnostics.platform,
         clientIdPresent: diagnostics.clientIdPresent,
         connectionSessionIdPresent: diagnostics.connectionSessionIdPresent,
+        sourceStoreName: diagnostics.sourceStoreName ?? null,
+      })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export function logMcpTelemetryLoadDiagnostics(args: {
+  telemetryRecordFound: boolean;
+  telemetryClientIdPresent: boolean;
+  connectionSessionIdPresent: boolean;
+  sourceStoreName: string;
+}): void {
+  try {
+    console.info(
+      "Red telemetry MCP load:",
+      JSON.stringify({
+        telemetryRecordFound: args.telemetryRecordFound,
+        telemetryClientIdPresent: args.telemetryClientIdPresent,
+        connectionSessionIdPresent: args.connectionSessionIdPresent,
+        sourceStoreName: args.sourceStoreName,
       })
     );
   } catch {
@@ -364,6 +390,14 @@ export async function prepareMcpTelemetryContext(args: {
     connectionId || undefined,
     args.keyStore.size
   );
+  const sourceStoreName = getConnectionStoreTargetName();
+
+  logMcpTelemetryLoadDiagnostics({
+    telemetryRecordFound: stored.recordFound,
+    telemetryClientIdPresent: Boolean(stored.telemetryClientId),
+    connectionSessionIdPresent: Boolean(stored.connectionSessionId),
+    sourceStoreName,
+  });
 
   const context = buildRequestTelemetryContext({
     headers: args.headers,
@@ -377,6 +411,7 @@ export async function prepareMcpTelemetryContext(args: {
   const diagnostics = buildRedTelemetryDiagnostics(context, {
     telemetryRecordFound: stored.recordFound,
     connectionContextFound: Boolean(connectionId),
+    sourceStoreName,
   });
 
   return {

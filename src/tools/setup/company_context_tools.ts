@@ -29,6 +29,7 @@ import {
   assertApiKeyAllowed,
   getApiKeyExpirationMs,
   getPublicBaseUrl,
+  getConnectUrlHostMismatch,
 } from "../../config/server_config.js";
 import {
   claimConnectionCodeForSession,
@@ -36,6 +37,8 @@ import {
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  getConnectionStoreTargetName,
+  getDeploymentEnvironmentLabel,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
 import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
@@ -68,6 +71,20 @@ export function registerCompanyContextTools(server: ServerType) {
 
       const { code } = await createPendingConnection(sessionId);
       const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
+
+      try {
+        const hostMismatch = getConnectUrlHostMismatch();
+        console.info(
+          "Red connect URL host check:",
+          JSON.stringify({
+            ...hostMismatch,
+            targetEnvironment: getDeploymentEnvironmentLabel(),
+            targetStoreName: getConnectionStoreTargetName(),
+          })
+        );
+      } catch {
+        // ignore
+      }
 
       return textResponse(formatStartConnectionResponse(url));
     }

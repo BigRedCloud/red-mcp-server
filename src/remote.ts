@@ -34,6 +34,7 @@ import {
 } from "./auth/mcp_http_session.js";
 import {
   buildTelemetryClientIdSetCookie,
+  isValidTelemetryUuid,
   runWithRedTelemetryContext,
 } from "./telemetry.js";
 import {
@@ -52,6 +53,8 @@ import {
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  getConnectionStoreTargetName,
+  getDeploymentEnvironmentLabel,
 } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
@@ -502,6 +505,20 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     persistedTelemetryClientIdPresent: false,
     loadedTelemetryClientIdPresent: false,
   };
+
+  try {
+    console.info(
+      "Red telemetry client id save:",
+      JSON.stringify({
+        telemetryClientIdPresent: Boolean(telemetryClientId),
+        telemetryClientIdValid: isValidTelemetryUuid(telemetryClientId),
+        targetEnvironment: getDeploymentEnvironmentLabel(),
+        targetStoreName: getConnectionStoreTargetName(),
+      })
+    );
+  } catch {
+    // ignore
+  }
 
   // Persist client id as soon as the pending code is claimed, before credential
   // validation, so a later session-id write cannot be the first (partial) upsert.

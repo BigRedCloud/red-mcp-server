@@ -281,7 +281,11 @@ test("safe diagnostics never include identifier values", () => {
       connectedCompanyCount: 2,
       clientPlatform: "claude",
     },
-    { telemetryRecordFound: true, connectionContextFound: true }
+    {
+      telemetryRecordFound: true,
+      connectionContextFound: true,
+      sourceStoreName: "cosmos:red-connect/connections",
+    }
   );
 
   const blob = JSON.stringify(diagnostics);
@@ -290,6 +294,47 @@ test("safe diagnostics never include identifier values", () => {
   assert.equal(diagnostics.clientIdPresent, true);
   assert.equal(diagnostics.connectionSessionIdPresent, true);
   assert.equal(diagnostics.companyCount, 2);
+  assert.equal(diagnostics.sourceStoreName, "cosmos:red-connect/connections");
+});
+
+test("MCP load diagnostics expose store name without UUID values", async () => {
+  const {
+    getConnectionStore,
+    ensureConnectionStoreInitialized,
+    getConnectionStoreTargetName,
+  } = await import("../auth/connection_store.js");
+  const { logMcpTelemetryLoadDiagnostics, prepareMcpTelemetryContext } =
+    await import("./context.js");
+
+  await ensureConnectionStoreInitialized();
+  const store = getConnectionStore();
+  const connectionId = uniqueId("conn-store-diag");
+  const clientId = generateTelemetryUuid();
+  const sessionId = generateTelemetryUuid();
+
+  await store.saveConnectionTelemetry(connectionId, {
+    telemetryClientId: clientId,
+    connectionSessionId: sessionId,
+  });
+  await store.bindSessionToConnection("session-diag", connectionId);
+
+  const prepared = await prepareMcpTelemetryContext({
+    sessionId: "session-diag",
+    keyStore: new Map(),
+    headers: { "user-agent": "claude-desktop" },
+  });
+
+  assert.equal(prepared.diagnostics.sourceStoreName, getConnectionStoreTargetName());
+  assert.equal(prepared.diagnostics.clientIdPresent, true);
+  assert.doesNotThrow(() =>
+    logMcpTelemetryLoadDiagnostics({
+      telemetryRecordFound: true,
+      telemetryClientIdPresent: true,
+      connectionSessionIdPresent: true,
+      sourceStoreName: getConnectionStoreTargetName(),
+    })
+  );
+  assert.equal(JSON.stringify(prepared.diagnostics).includes(clientId), false);
 });
 
 test("no sensitive values are exported in dimensions", () => {
