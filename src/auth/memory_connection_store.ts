@@ -1,5 +1,6 @@
 import { encodeStoredApiKey } from "./credential_secret.js";
 import { isPendingConnectionExpired } from "./connection_pending.js";
+import { mergeConnectionTelemetryRecord } from "./connection_telemetry_merge.js";
 import type {
   CompanyCredentialInput,
   ConnectionStore,
@@ -297,15 +298,9 @@ export class MemoryConnectionStore implements ConnectionStore {
       connectionSessionId?: string;
     }
   ): Promise<void> {
-    const existing = telemetryByConnection.get(connectionId);
-    telemetryByConnection.set(connectionId, {
-      connectionId,
-      telemetryClientId:
-        patch.telemetryClientId ?? existing?.telemetryClientId,
-      connectionSessionId:
-        patch.connectionSessionId ?? existing?.connectionSessionId,
-      updatedAt: Date.now(),
-    });
+    const existing = telemetryByConnection.get(connectionId) ?? null;
+    const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+    telemetryByConnection.set(connectionId, merged);
   }
 
   async getConnectionTelemetry(

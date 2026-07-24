@@ -202,6 +202,7 @@ test("user_Id enrichment occurs when client ID exists; auth user id stays empty"
   const processor = new RedTelemetrySpanProcessor();
   const attrs: Record<string, string> = {
     "enduser.id": "should-be-removed",
+    user_AuthenticatedId: "should-be-removed",
   };
   const clientId = generateTelemetryUuid();
 
@@ -224,6 +225,24 @@ test("user_Id enrichment occurs when client ID exists; auth user id stays empty"
   assert.equal(attrs["red.tool_name"], "brc_list_customers");
   assert.equal(attrs["red.connected_company_count"], "3");
   assert.equal("enduser.id" in attrs, false);
+  assert.equal("user_AuthenticatedId" in attrs, false);
+});
+
+test("client id path diagnostics never include UUID values", async () => {
+  const { logTelemetryClientIdPathDiagnostics } = await import("./context.js");
+  const clientId = generateTelemetryUuid();
+  const diagnostics = {
+    cookieClientIdPresent: true,
+    localStorageClientIdSubmitted: true,
+    postClientIdPresent: true,
+    postClientIdValid: true,
+    saveTelemetryClientIdPresent: true,
+    persistedTelemetryClientIdPresent: true,
+    loadedTelemetryClientIdPresent: true,
+  };
+  const blob = JSON.stringify(diagnostics);
+  assert.equal(blob.includes(clientId), false);
+  assert.doesNotThrow(() => logTelemetryClientIdPathDiagnostics(diagnostics));
 });
 
 test("tool name appears on tool spans via prepared context", () => {

@@ -181,15 +181,23 @@ export function buildTelemetryClientIdSetCookie(
 
 /**
  * Inline script for the secure connection page.
- * Prefers an existing first-party cookie, then localStorage, else creates a UUID.
- * localStorage is a fallback when cookies are blocked between visits on the same device.
+ * Prefers the server-issued seed (from Set-Cookie / hidden field), then cookie,
+ * then localStorage, else creates a UUID. localStorage is a same-device fallback
+ * when cookies are blocked between visits.
  */
-export function buildTelemetryClientIdPageScript(): string {
+export function buildTelemetryClientIdPageScript(
+  seedClientId?: string
+): string {
+  const seed =
+    seedClientId && isValidTelemetryUuid(seedClientId)
+      ? seedClientId.trim().toLowerCase()
+      : "";
   return `<script>
 (function () {
   var COOKIE = ${JSON.stringify(TELEMETRY_CLIENT_ID_COOKIE)};
   var LS = ${JSON.stringify(TELEMETRY_CLIENT_ID_STORAGE_KEY)};
   var FIELD = ${JSON.stringify(TELEMETRY_CLIENT_ID_FORM_FIELD)};
+  var SERVER_ID = ${JSON.stringify(seed)};
   var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   function readCookie(name) {
@@ -225,7 +233,7 @@ export function buildTelemetryClientIdPageScript(): string {
     });
   }
 
-  var id = readCookie(COOKIE);
+  var id = valid(SERVER_ID) ? SERVER_ID : readCookie(COOKIE);
   try {
     if (!valid(id)) id = localStorage.getItem(LS);
   } catch (e) {}

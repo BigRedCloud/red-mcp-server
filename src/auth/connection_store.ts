@@ -347,6 +347,8 @@ export async function claimConnectionCodeForSession(
   const connectionSessionId = generateConnectionSessionId();
 
   try {
+    // Merge session id into the existing telemetry record (client id from POST
+    // /connect). Never replace the whole record with a session-only object.
     await store.saveConnectionTelemetry(pending.connectionId, {
       connectionSessionId,
     });

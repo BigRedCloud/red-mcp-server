@@ -40,13 +40,35 @@ test("repeat visit reuses the same client ID from cookie", () => {
     headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${id}` },
     body: {},
   });
-  const second = resolveTelemetryClientIdFromRequest({
-    headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${id}` },
-    body: { telemetryClientId: generateTelemetryUuid() },
-  });
   assert.equal(first.clientId, id.toLowerCase());
-  assert.equal(second.clientId, id.toLowerCase());
-  assert.equal(second.fromCookie, true);
+  assert.equal(first.fromCookie, true);
+  assert.equal(first.cookieClientIdPresent, true);
+});
+
+test("valid form body client ID is preferred over cookie (localStorage submit path)", () => {
+  const cookieId = generateTelemetryUuid();
+  const bodyId = generateTelemetryUuid();
+  const result = resolveTelemetryClientIdFromRequest({
+    headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${cookieId}` },
+    body: { telemetryClientId: bodyId },
+  });
+  assert.equal(result.clientId, bodyId.toLowerCase());
+  assert.equal(result.fromBody, true);
+  assert.equal(result.fromCookie, false);
+  assert.equal(result.postClientIdPresent, true);
+  assert.equal(result.postClientIdValid, true);
+  assert.equal(result.cookieClientIdPresent, true);
+});
+
+test("missing client ID gets server fallback UUID", () => {
+  const result = resolveTelemetryClientIdFromRequest({
+    headers: {},
+    body: { telemetryClientId: "" },
+  });
+  assert.equal(isValidTelemetryUuid(result.clientId), true);
+  assert.equal(result.postClientIdPresent, false);
+  assert.equal(result.postClientIdValid, false);
+  assert.equal(result.replacedMalformed, false);
 });
 
 test("malformed client ID is rejected or replaced safely", () => {
@@ -57,6 +79,8 @@ test("malformed client ID is rejected or replaced safely", () => {
   assert.equal(isValidTelemetryUuid(result.clientId), true);
   assert.notEqual(result.clientId, "not-a-uuid");
   assert.equal(result.replacedMalformed, true);
+  assert.equal(result.postClientIdPresent, true);
+  assert.equal(result.postClientIdValid, false);
 
   assert.equal(isValidTelemetryUuid(normaliseTelemetryClientId("")), true);
   assert.equal(isValidTelemetryUuid(normaliseTelemetryClientId("abc")), true);
@@ -78,6 +102,36 @@ test("cookie helper builds SameSite Secure cookie without HttpOnly", () => {
     readTelemetryClientIdFromCookieHeader(cookie.split(";")[0]),
     id.toLowerCase()
   );
+});
+
+test("GET /connect cookie and page HTML use the same client ID", async () => {
+  const { renderConnectPage } = await import("../auth/connection_page.js");
+  const id = generateTelemetryUuid();
+  const cookie = buildTelemetryClientIdSetCookie(id, { secure: false });
+  const html = renderConnectPage("connect-code", { telemetryClientId: id });
+
+  assert.equal(
+    readTelemetryClientIdFromCookieHeader(cookie.split(";")[0]),
+    id.toLowerCase()
+  );
+  assert.match(
+    html,
+    new RegExp(`name="telemetryClientId" value="${id.toLowerCase()}"`)
+  );
+  assert.match(html, new RegExp(`SERVER_ID = "${id.toLowerCase()}"`));
+  assert.match(html, /localStorage\.setItem\(LS, id\)/);
+});
+
+test("form submission body includes telemetryClientId field name", () => {
+  const id = generateTelemetryUuid();
+  const result = resolveTelemetryClientIdFromRequest({
+    headers: {},
+    body: { telemetryClientId: id },
+  });
+  assert.equal(result.clientId, id.toLowerCase());
+  assert.equal(result.fromBody, true);
+  assert.equal(result.postClientIdPresent, true);
+  assert.equal(result.postClientIdValid, true);
 });
 
 test("parseCookieHeader reads multiple cookies", () => {

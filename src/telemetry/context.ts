@@ -31,6 +31,30 @@ import {
 } from "./identity.js";
 import { detectClientPlatform, resolveRedTelemetryEnvironment } from "./platform.js";
 
+export type TelemetryClientIdPathDiagnostics = {
+  cookieClientIdPresent: boolean;
+  localStorageClientIdSubmitted: boolean;
+  postClientIdPresent: boolean;
+  postClientIdValid: boolean;
+  saveTelemetryClientIdPresent: boolean;
+  persistedTelemetryClientIdPresent: boolean;
+  loadedTelemetryClientIdPresent: boolean;
+};
+
+/** Boolean-only diagnostics for the connect-page client ID path. Never log UUIDs. */
+export function logTelemetryClientIdPathDiagnostics(
+  diagnostics: TelemetryClientIdPathDiagnostics
+): void {
+  try {
+    console.info(
+      "Red telemetry client id path:",
+      JSON.stringify(diagnostics)
+    );
+  } catch {
+    // ignore
+  }
+}
+
 export type RedTelemetryDiagnostics = {
   telemetryRecordFound: boolean;
   connectionContextFound: boolean;
@@ -40,37 +64,72 @@ export type RedTelemetryDiagnostics = {
   connectionSessionIdPresent: boolean;
 };
 
+/**
+ * Prefer a valid form/localStorage body value (explicit submit), then cookie,
+ * else generate a safe UUID. Malformed values are never accepted.
+ */
 export function resolveTelemetryClientIdFromRequest(req: {
   headers?: { cookie?: string };
   body?: unknown;
-}): { clientId: string; fromCookie: boolean; replacedMalformed: boolean } {
+}): {
+  clientId: string;
+  fromCookie: boolean;
+  fromBody: boolean;
+  replacedMalformed: boolean;
+  cookieClientIdPresent: boolean;
+  postClientIdPresent: boolean;
+  postClientIdValid: boolean;
+} {
   const cookieId = readTelemetryClientIdFromCookieHeader(req.headers?.cookie);
+  const cookieClientIdPresent = Boolean(cookieId);
   const body =
     req.body && typeof req.body === "object"
       ? (req.body as Record<string, unknown>)
       : {};
   const bodyRaw = body[TELEMETRY_CLIENT_ID_FORM_FIELD] ?? body.telemetry_client_id;
+  const postClientIdPresent =
+    typeof bodyRaw === "string" && bodyRaw.trim() !== "";
   const bodyId =
     typeof bodyRaw === "string" && isValidTelemetryUuid(bodyRaw)
       ? bodyRaw.trim().toLowerCase()
       : undefined;
-
-  if (cookieId) {
-    return { clientId: cookieId, fromCookie: true, replacedMalformed: false };
-  }
+  const postClientIdValid = Boolean(bodyId);
 
   if (bodyId) {
-    return { clientId: bodyId, fromCookie: false, replacedMalformed: false };
+    return {
+      clientId: bodyId,
+      fromCookie: false,
+      fromBody: true,
+      replacedMalformed: false,
+      cookieClientIdPresent,
+      postClientIdPresent,
+      postClientIdValid,
+    };
+  }
+
+  if (cookieId) {
+    return {
+      clientId: cookieId,
+      fromCookie: true,
+      fromBody: false,
+      replacedMalformed: false,
+      cookieClientIdPresent,
+      postClientIdPresent,
+      postClientIdValid,
+    };
   }
 
   const malformed =
-    (typeof bodyRaw === "string" && bodyRaw.trim() !== "") ||
-    Boolean(readRawCookieValue(req.headers?.cookie));
+    postClientIdPresent || Boolean(readRawCookieValue(req.headers?.cookie));
 
   return {
     clientId: normaliseTelemetryClientId(bodyRaw),
     fromCookie: false,
+    fromBody: false,
     replacedMalformed: malformed,
+    cookieClientIdPresent,
+    postClientIdPresent,
+    postClientIdValid,
   };
 }
 

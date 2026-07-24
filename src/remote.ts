@@ -40,6 +40,7 @@ import {
   activatePreparedTelemetry,
   buildRequestTelemetryContext,
   extractConnectionRefFromMcpBody,
+  logTelemetryClientIdPathDiagnostics,
   prepareMcpTelemetryContext,
   resolveTelemetryClientIdFromRequest,
 } from "./telemetry/context.js";
@@ -451,7 +452,8 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   await ensureConnectionStoreInitialized();
 
   const code = String(req.body.code ?? "");
-  const { clientId: telemetryClientId } = resolveTelemetryClientIdFromRequest(req);
+  const resolvedClient = resolveTelemetryClientIdFromRequest(req);
+  const telemetryClientId = resolvedClient.clientId;
   const secureCookie = req.secure || req.protocol === "https";
   res.setHeader(
     "Set-Cookie",
@@ -491,6 +493,38 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     return;
   }
 
+  const pathDiagnostics = {
+    cookieClientIdPresent: resolvedClient.cookieClientIdPresent,
+    localStorageClientIdSubmitted: resolvedClient.postClientIdPresent,
+    postClientIdPresent: resolvedClient.postClientIdPresent,
+    postClientIdValid: resolvedClient.postClientIdValid,
+    saveTelemetryClientIdPresent: Boolean(telemetryClientId),
+    persistedTelemetryClientIdPresent: false,
+    loadedTelemetryClientIdPresent: false,
+  };
+
+  // Persist client id as soon as the pending code is claimed, before credential
+  // validation, so a later session-id write cannot be the first (partial) upsert.
+  try {
+    await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
+      telemetryClientId,
+    });
+    const persisted = await getConnectionStore().getConnectionTelemetry(
+      pending.connectionId
+    );
+    pathDiagnostics.persistedTelemetryClientIdPresent = Boolean(
+      persisted?.telemetryClientId
+    );
+    pathDiagnostics.loadedTelemetryClientIdPresent =
+      pathDiagnostics.persistedTelemetryClientIdPresent;
+  } catch (error) {
+    console.error(
+      "Red telemetry: failed to store telemetry client id:",
+      error instanceof Error ? error.message : error
+    );
+  }
+  logTelemetryClientIdPathDiagnostics(pathDiagnostics);
+
   const telemetryContext = buildRequestTelemetryContext({
     req,
     connectionId: pending.connectionId,
@@ -505,17 +539,6 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         companies,
         expiresAt: Date.now() + getApiKeyExpirationMs(),
       });
-
-      try {
-        await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
-          telemetryClientId,
-        });
-      } catch (error) {
-        console.error(
-          "Red telemetry: failed to store telemetry client id:",
-          error instanceof Error ? error.message : error
-        );
-      }
 
       if (outcome.connectedCompanies.length === 0) {
         const message =
@@ -658,7 +681,7 @@ app.get("/connect", async (req, res) => {
   });
 
   return runWithRedTelemetryContext(telemetryContext, () => {
-    res.send(renderConnectPage(code));
+    res.send(renderConnectPage(code, { telemetryClientId: clientId }));
   });
 });
 
