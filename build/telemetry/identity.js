@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 export const TELEMETRY_CLIENT_ID_COOKIE = "red_telemetry_client_id";
 export const TELEMETRY_CLIENT_ID_STORAGE_KEY = "red.telemetry_client_id";
 export const TELEMETRY_CLIENT_ID_FORM_FIELD = "telemetryClientId";
+/** Experimental OTel attribute mapped to Application Insights anonymous user id. */
+export const ENDUSER_PSEUDO_ID_ATTRIBUTE = "enduser.pseudo.id";
 /** Cookie lifetime: ~1 year. */
 export const TELEMETRY_CLIENT_ID_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

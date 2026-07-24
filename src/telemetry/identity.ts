@@ -14,6 +14,9 @@ export const TELEMETRY_CLIENT_ID_COOKIE = "red_telemetry_client_id";
 export const TELEMETRY_CLIENT_ID_STORAGE_KEY = "red.telemetry_client_id";
 export const TELEMETRY_CLIENT_ID_FORM_FIELD = "telemetryClientId";
 
+/** Experimental OTel attribute mapped to Application Insights anonymous user id. */
+export const ENDUSER_PSEUDO_ID_ATTRIBUTE = "enduser.pseudo.id";
+
 /** Cookie lifetime: ~1 year. */
 export const TELEMETRY_CLIENT_ID_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 

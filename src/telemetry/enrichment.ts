@@ -10,12 +10,12 @@ import type { Context } from "@opentelemetry/api";
 import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import {
   buildTelemetryCustomDimensions,
+  ENDUSER_PSEUDO_ID_ATTRIBUTE,
   getRedTelemetryContext,
   isValidTelemetryUuid,
 } from "./identity.js";
 
-/** Experimental OTel attribute mapped to Application Insights anonymous user id. */
-export const ENDUSER_PSEUDO_ID_ATTRIBUTE = "enduser.pseudo.id";
+export { ENDUSER_PSEUDO_ID_ATTRIBUTE } from "./identity.js";
 
 export class RedTelemetrySpanProcessor implements SpanProcessor {
   forceFlush(): Promise<void> {
@@ -27,7 +27,7 @@ export class RedTelemetrySpanProcessor implements SpanProcessor {
   }
 
   onStart(_span: Span, _parentContext: Context): void {
-    // Dimensions are applied onEnd so request ALS context is populated.
+    // Dimensions are applied onEnd / via applyRedTelemetryToActiveSpan.
   }
 
   onEnd(span: ReadableSpan): void {
@@ -46,6 +46,11 @@ export class RedTelemetrySpanProcessor implements SpanProcessor {
       ) {
         // Anonymous user id only — never authenticated user id without OAuth.
         attrs[ENDUSER_PSEUDO_ID_ATTRIBUTE] = context.telemetryClientId;
+      }
+
+      // Ensure authenticated user id is never set from Red telemetry.
+      if ("enduser.id" in attrs) {
+        delete attrs["enduser.id"];
       }
     } catch {
       // Telemetry enrichment must never throw into the request path.

@@ -20,11 +20,10 @@ import {
   prefixConnectionRef,
 } from "./connection_ref.js";
 import { runWithRedTelemetryContext } from "../telemetry/identity.js";
-import { loadConnectionTelemetryContext } from "../telemetry/context.js";
 import {
-  detectClientPlatform,
-  resolveRedTelemetryEnvironment,
-} from "../telemetry/platform.js";
+  activatePreparedTelemetry,
+  prepareMcpTelemetryContext,
+} from "../telemetry/context.js";
 
 export const MCP_SESSION_HEADER_NAMES = [
   "mcp-session-id",
@@ -384,6 +383,21 @@ export async function runHttpToolSessionFromExtra<T>(
 
   const store = keyStore ?? resolveSessionKeyStore(sessionId);
   const clientKey = buildHttpClientKeyFromExtra(extra);
+  const headers = (extra?.requestInfo?.headers ?? {}) as Record<
+    string,
+    string | string[] | undefined
+  >;
+
+  const prepared = await prepareMcpTelemetryContext({
+    sessionId,
+    keyStore: store,
+    clientKey,
+    connectionRef,
+    headers,
+    toolName: options?.toolName,
+    companyName: options?.companyName,
+  });
+
   const scope = await prepareHttpToolSessionScope(
     sessionId,
     store,
@@ -391,41 +405,28 @@ export async function runHttpToolSessionFromExtra<T>(
     connectionRef
   );
 
-  return runWithActiveConnectionRef(connectionRef, () =>
-    runWithHttpToolSession(scope, async () => {
-      const storedTelemetry = await loadConnectionTelemetryContext(
-        scope.connectionId || undefined
-      );
-      const headers = (extra?.requestInfo?.headers ?? {}) as Record<
-        string,
-        string | string[] | undefined
-      >;
+  if (!scope.connectionId && prepared.connectionId) {
+    scope.connectionId = prepared.connectionId;
+  }
 
-      return runWithRedTelemetryContext(
-        {
+  return runWithActiveConnectionRef(connectionRef, () =>
+    runWithHttpToolSession(scope, async () =>
+      runWithRedTelemetryContext(prepared.context, async () => {
+        activatePreparedTelemetry(prepared);
+        await ensureCredentialsForCurrentSession(options?.companyName);
+        await logToolSessionDiagnosticIfNeeded({
+          transportSessionId,
+          sessionId,
+          keyStore: store,
+          scope,
+          extra,
+          connectionRef,
+          companyName: options?.companyName,
           toolName: options?.toolName,
-          telemetryClientId: storedTelemetry.telemetryClientId,
-          connectionSessionId: storedTelemetry.connectionSessionId,
-          connectedCompanyCount: store.size,
-          clientPlatform: detectClientPlatform(headers),
-          environment: resolveRedTelemetryEnvironment(),
-        },
-        async () => {
-          await ensureCredentialsForCurrentSession(options?.companyName);
-          await logToolSessionDiagnosticIfNeeded({
-            transportSessionId,
-            sessionId,
-            keyStore: store,
-            scope,
-            extra,
-            connectionRef,
-            companyName: options?.companyName,
-            toolName: options?.toolName,
-          });
-          return fn();
-        }
-      );
-    })
+        });
+        return fn();
+      })
+    )
   );
 }
 

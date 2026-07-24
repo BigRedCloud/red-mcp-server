@@ -5,9 +5,8 @@
  * red.telemetry_client_id when available. Does not set enduser.id
  * (authenticated user) because Red has no BRC OAuth yet.
  */
-import { buildTelemetryCustomDimensions, getRedTelemetryContext, isValidTelemetryUuid, } from "./identity.js";
-/** Experimental OTel attribute mapped to Application Insights anonymous user id. */
-export const ENDUSER_PSEUDO_ID_ATTRIBUTE = "enduser.pseudo.id";
+import { buildTelemetryCustomDimensions, ENDUSER_PSEUDO_ID_ATTRIBUTE, getRedTelemetryContext, isValidTelemetryUuid, } from "./identity.js";
+export { ENDUSER_PSEUDO_ID_ATTRIBUTE } from "./identity.js";
 export class RedTelemetrySpanProcessor {
     forceFlush() {
         return Promise.resolve();
@@ -16,7 +15,7 @@ export class RedTelemetrySpanProcessor {
         return Promise.resolve();
     }
     onStart(_span, _parentContext) {
-        // Dimensions are applied onEnd so request ALS context is populated.
+        // Dimensions are applied onEnd / via applyRedTelemetryToActiveSpan.
     }
     onEnd(span) {
         try {
@@ -30,6 +29,10 @@ export class RedTelemetrySpanProcessor {
                 isValidTelemetryUuid(context.telemetryClientId)) {
                 // Anonymous user id only — never authenticated user id without OAuth.
                 attrs[ENDUSER_PSEUDO_ID_ATTRIBUTE] = context.telemetryClientId;
+            }
+            // Ensure authenticated user id is never set from Red telemetry.
+            if ("enduser.id" in attrs) {
+                delete attrs["enduser.id"];
             }
         }
         catch {

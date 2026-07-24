@@ -38,6 +38,22 @@ do not block users.
 - **Connection sessions** = confirmed connection flows (claim successes).
 - Neither equals a verified BRC user account.
 
+## MCP request ordering
+
+Telemetry context is prepared in this order on each MCP request:
+
+1. Resolve MCP session id
+2. Resolve confirmed connection (`connectionRef` from tools/call args, session binding, or client claim)
+3. Rehydrate company credentials into the session key store
+4. Load `saveConnectionTelemetry` record for that connection id
+5. Count companies from the connection store (not an empty in-memory map)
+6. Enter `runWithRedTelemetryContext` and enrich the active span
+7. Handle the MCP/tool request
+
+Safe diagnostics log only booleans and counts (never id values):
+`telemetryRecordFound`, `connectionContextFound`, `companyCount`, `platform`,
+`clientIdPresent`, `connectionSessionIdPresent`.
+
 ## Kusto validation queries
 
 ### Unique anonymous clients

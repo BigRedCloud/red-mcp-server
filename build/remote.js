@@ -12,7 +12,7 @@ import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
 import { buildTelemetryClientIdSetCookie, runWithRedTelemetryContext, } from "./telemetry.js";
-import { buildRequestTelemetryContext, loadConnectionTelemetryContext, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
+import { activatePreparedTelemetry, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, prepareMcpTelemetryContext, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
@@ -84,35 +84,43 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
     const clientKey = buildHttpClientKeyFromRequest(req);
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
-    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey);
-    const storedTelemetry = await loadConnectionTelemetryContext(scope.connectionId || undefined);
-    const telemetryContext = buildRequestTelemetryContext({
-        req,
-        connectionId: scope.connectionId || undefined,
-        telemetryClientId: storedTelemetry.telemetryClientId,
-        connectionSessionId: storedTelemetry.connectionSessionId,
-        connectedCompanyCount: session.keyStore.size,
+    const connectionRef = extractConnectionRefFromMcpBody(body ?? req.body);
+    // Ordered: resolve connection → restore companies → load telemetry → count → context
+    const prepared = await prepareMcpTelemetryContext({
+        sessionId: normalizedSessionId,
+        keyStore: session.keyStore,
+        clientKey,
+        connectionRef,
+        headers: req.headers,
     });
-    return runWithRedTelemetryContext(telemetryContext, () => runWithHttpToolSession(scope, async () => {
-        const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
-        logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
-            transportSessionId: normalizedSessionId,
-            extra: {
-                requestInfo: {
-                    headers: req.headers,
+    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey, connectionRef);
+    // Prefer the prepared connection id when scope resolution lagged behind rehydration.
+    if (!scope.connectionId && prepared.connectionId) {
+        scope.connectionId = prepared.connectionId;
+    }
+    return runWithRedTelemetryContext(prepared.context, () => {
+        activatePreparedTelemetry(prepared);
+        return runWithHttpToolSession(scope, async () => {
+            const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
+            logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
+                transportSessionId: normalizedSessionId,
+                extra: {
+                    requestInfo: {
+                        headers: req.headers,
+                    },
                 },
-            },
-            resolution: scope.resolution,
-            credentialCount: companiesLoaded.length,
-            companiesLoaded,
-        }));
-        if (body !== undefined) {
-            await session.transport.handleRequest(req, res, body);
-        }
-        else {
-            await session.transport.handleRequest(req, res);
-        }
-    }));
+                resolution: scope.resolution,
+                credentialCount: companiesLoaded.length,
+                companiesLoaded,
+            }));
+            if (body !== undefined) {
+                await session.transport.handleRequest(req, res, body);
+            }
+            else {
+                await session.transport.handleRequest(req, res);
+            }
+        });
+    });
 }
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 app.set("trust proxy", true);

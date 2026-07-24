@@ -37,8 +37,10 @@ import {
   runWithRedTelemetryContext,
 } from "./telemetry.js";
 import {
+  activatePreparedTelemetry,
   buildRequestTelemetryContext,
-  loadConnectionTelemetryContext,
+  extractConnectionRefFromMcpBody,
+  prepareMcpTelemetryContext,
   resolveTelemetryClientIdFromRequest,
 } from "./telemetry/context.js";
 
@@ -183,26 +185,33 @@ async function handleMcpRequest(
   const clientKey = buildHttpClientKeyFromRequest(req);
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
 
+  const connectionRef = extractConnectionRefFromMcpBody(body ?? req.body);
+
+  // Ordered: resolve connection → restore companies → load telemetry → count → context
+  const prepared = await prepareMcpTelemetryContext({
+    sessionId: normalizedSessionId,
+    keyStore: session.keyStore,
+    clientKey,
+    connectionRef,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+  });
+
   const scope = await prepareHttpToolSessionScope(
     normalizedSessionId,
     session.keyStore,
-    clientKey
+    clientKey,
+    connectionRef
   );
 
-  const storedTelemetry = await loadConnectionTelemetryContext(
-    scope.connectionId || undefined
-  );
+  // Prefer the prepared connection id when scope resolution lagged behind rehydration.
+  if (!scope.connectionId && prepared.connectionId) {
+    scope.connectionId = prepared.connectionId;
+  }
 
-  const telemetryContext = buildRequestTelemetryContext({
-    req,
-    connectionId: scope.connectionId || undefined,
-    telemetryClientId: storedTelemetry.telemetryClientId,
-    connectionSessionId: storedTelemetry.connectionSessionId,
-    connectedCompanyCount: session.keyStore.size,
-  });
+  return runWithRedTelemetryContext(prepared.context, () => {
+    activatePreparedTelemetry(prepared);
 
-  return runWithRedTelemetryContext(telemetryContext, () =>
-    runWithHttpToolSession(scope, async () => {
+    return runWithHttpToolSession(scope, async () => {
       const companiesLoaded = Array.from(session.keyStore.values()).map(
         (entry) => entry.companyName
       );
@@ -229,8 +238,8 @@ async function handleMcpRequest(
       } else {
         await session.transport.handleRequest(req, res);
       }
-    })
-  );
+    });
+  });
 }
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
