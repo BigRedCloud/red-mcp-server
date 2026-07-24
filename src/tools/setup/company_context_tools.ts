@@ -38,6 +38,7 @@ import {
   getConnectionStore,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
   formatStartConnectionResponse,
@@ -104,6 +105,14 @@ export function registerCompanyContextTools(server: ServerType) {
         await ensureCredentialsForCurrentSession();
 
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
+
+        try {
+          mergeRedTelemetryContext({
+            connectionSessionId: result.connectionSessionId,
+          });
+        } catch {
+          // Telemetry must not block confirmation.
+        }
 
         const customerMessage = buildConfirmConnectionCustomerMessage({
           connectedCompanies: result.connectedCompanies,

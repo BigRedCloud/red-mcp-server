@@ -2,6 +2,10 @@ import { RED_LOGO_URL } from "./red_assets.js";
 import { EXPIRED_CONNECTION_LINK_PAGE_MESSAGE } from "./connection_wording.js";
 import { formatCredentialTtlForUser } from "./connection_presentation.js";
 import type { FailedCompanyConnection } from "./connection_store_types.js";
+import {
+  buildTelemetryClientIdPageScript,
+  TELEMETRY_CLIENT_ID_FORM_FIELD,
+} from "../telemetry/identity.js";
 
 export function escapeHtml(value: string): string {
   return value
@@ -16,7 +20,7 @@ const BRC_RED = "#b5121b";
 const BRC_RED_DARK = "#8f0e16";
 const BRC_RED_LIGHT = "#fdf2f2";
 
-function pageShell(title: string, header: string, content: string): string {
+function pageShell(title: string, header: string, content: string, trailingScript = ""): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -404,6 +408,7 @@ function pageShell(title: string, header: string, content: string): string {
     <main class="page">
       ${content}
     </main>
+    ${trailingScript}
   </body>
 </html>`;
 }
@@ -433,6 +438,7 @@ export function renderConnectPage(code: string): string {
 
         <form method="POST" action="/connect" enctype="multipart/form-data">
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
+          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="" />
           <div class="trust-notes">
             <div class="trust-note">
               <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
@@ -492,7 +498,12 @@ Company B,xxxxxxxx</div>
 
       </div>`;
 
-  return pageShell("Connect — Red", brandBar(), content);
+  return pageShell(
+    "Connect — Red",
+    brandBar(),
+    content,
+    buildTelemetryClientIdPageScript()
+  );
 }
 
 export function renderExpiredLinkPage(): string {

@@ -2,8 +2,41 @@ import { z } from "zod";
 import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "../shared.js";
-import { enforceSalesProductLineProductIdOrThrow } from "../tools/general/payloads_tools.js";
+import { applySalesPriceBasisToRawPayload, enforceSalesProductLineProductIdOrThrow, } from "../tools/general/payloads_tools.js";
+import { buildSalesInvoiceGenRefValidationFailureBody, validateGeneratedReferenceSalesInvoicePayload, } from "../tools/sales-emails/sales_invoice_payload_schemas.js";
 import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "./sales_vat_category.js";
+/**
+ * Validates gen-ref sales invoice payloads before preview-before-posting and
+ * before posting. Returns a structured MCP jsonResponse on failure so missing
+ * or empty nested acEntries never reach BRC or escape as an unhandled error.
+ */
+function validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, args) {
+    if (toolName !== "brc_create_sales_invoice_gen_ref") {
+        return null;
+    }
+    try {
+        const body = getWriteBody(args);
+        const priceBasis = args.priceBasis === "net" || args.priceBasis === "gross"
+            ? args.priceBasis
+            : undefined;
+        const prepared = applySalesPriceBasisToRawPayload({ ...body }, priceBasis);
+        const validation = validateGeneratedReferenceSalesInvoicePayload(prepared);
+        if (validation.valid) {
+            return null;
+        }
+        return jsonResponse(buildSalesInvoiceGenRefValidationFailureBody(companyName ?? "", validation.errors));
+    }
+    catch (error) {
+        return jsonResponse(buildSalesInvoiceGenRefValidationFailureBody(companyName ?? "", [
+            {
+                field: "(root)",
+                message: error instanceof Error
+                    ? error.message
+                    : "Unexpected sales invoice payload validation failure.",
+            },
+        ]));
+    }
+}
 /** Sales invoice write tools where lines must use a Sales VAT rate before any draft preview or post. */
 const SALES_DOCUMENT_VAT_PREFLIGHT_TOOLS = new Set([
     "brc_create_sales_invoice",
@@ -555,6 +588,10 @@ export function wrapWriteToolHandler(toolName, handler) {
         const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
         runSalesDocumentProductIdPreflight(toolName, args);
         await runSalesDocumentSalesVatPreflight(toolName, companyName, args);
+        const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, args);
+        if (genRefValidationBlock) {
+            return genRefValidationBlock;
+        }
         const counterpartyBlock = await validateCounterpartyForWrite({
             toolName,
             companyName,

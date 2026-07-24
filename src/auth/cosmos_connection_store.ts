@@ -6,6 +6,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
@@ -116,6 +117,15 @@ type FailedCompanyValidationDocument = CosmosRecord & {
   reason: FailedCompanyConnection["reason"];
   message: string;
   createdAt: number;
+  ttl: number;
+};
+
+type ConnectionTelemetryDocument = CosmosRecord & {
+  type: "connectionTelemetry";
+  connectionId: string;
+  telemetryClientId?: string;
+  connectionSessionId?: string;
+  updatedAt: number;
   ttl: number;
 };
 
@@ -596,6 +606,53 @@ export class CosmosConnectionStore implements ConnectionStore {
       } catch {
         // already removed
       }
+    }
+  }
+
+  async saveConnectionTelemetry(
+    connectionId: string,
+    patch: {
+      telemetryClientId?: string;
+      connectionSessionId?: string;
+    }
+  ): Promise<void> {
+    const existing = await this.getConnectionTelemetry(connectionId);
+    const doc: ConnectionTelemetryDocument = {
+      pk: connectionPartitionKey(connectionId),
+      id: "telemetry",
+      type: "connectionTelemetry",
+      connectionId,
+      telemetryClientId:
+        patch.telemetryClientId ?? existing?.telemetryClientId,
+      connectionSessionId:
+        patch.connectionSessionId ?? existing?.connectionSessionId,
+      updatedAt: Date.now(),
+      ttl: apiKeyTtlSeconds(),
+    };
+
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getConnectionTelemetry(
+    connectionId: string
+  ): Promise<ConnectionTelemetryRecord | null> {
+    try {
+      const { resource } = await this.getContainer()
+        .item("telemetry", connectionPartitionKey(connectionId))
+        .read<ConnectionTelemetryDocument>();
+
+      if (!resource || resource.type !== "connectionTelemetry") {
+        return null;
+      }
+
+      return {
+        connectionId: resource.connectionId,
+        telemetryClientId: resource.telemetryClientId,
+        connectionSessionId: resource.connectionSessionId,
+        updatedAt: resource.updatedAt,
+      };
+    } catch {
+      return null;
     }
   }
 

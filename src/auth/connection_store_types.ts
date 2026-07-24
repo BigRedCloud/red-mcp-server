@@ -46,6 +46,14 @@ export type ConnectionStoreDiagnostics = {
   connectedCompanyCount: number;
 };
 
+/** Anonymous telemetry IDs associated with a connection (never secrets). */
+export type ConnectionTelemetryRecord = {
+  connectionId: string;
+  telemetryClientId?: string;
+  connectionSessionId?: string;
+  updatedAt: number;
+};
+
 export interface ConnectionStore {
   getStoreType(): string;
 
@@ -120,6 +128,18 @@ export interface ConnectionStore {
   ): Promise<FailedCompanyConnection[]>;
 
   clearFailedCompanyValidations(connectionId: string): Promise<void>;
+
+  saveConnectionTelemetry(
+    connectionId: string,
+    patch: {
+      telemetryClientId?: string;
+      connectionSessionId?: string;
+    }
+  ): Promise<void>;
+
+  getConnectionTelemetry(
+    connectionId: string
+  ): Promise<ConnectionTelemetryRecord | null>;
 
   getDiagnostics(args: {
     connectionId?: string;

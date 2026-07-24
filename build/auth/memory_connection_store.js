@@ -9,6 +9,7 @@ const companiesByConnection = new Map();
 const clientLastClaims = new Map();
 const connectionRefs = new Map();
 const failedValidationsByConnection = new Map();
+const telemetryByConnection = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -183,6 +184,19 @@ export class MemoryConnectionStore {
     }
     async clearFailedCompanyValidations(connectionId) {
         failedValidationsByConnection.delete(connectionId);
+    }
+    async saveConnectionTelemetry(connectionId, patch) {
+        const existing = telemetryByConnection.get(connectionId);
+        telemetryByConnection.set(connectionId, {
+            connectionId,
+            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
+            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
+            updatedAt: Date.now(),
+        });
+    }
+    async getConnectionTelemetry(connectionId) {
+        const record = telemetryByConnection.get(connectionId);
+        return record ? { ...record } : null;
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

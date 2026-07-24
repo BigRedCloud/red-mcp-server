@@ -8,7 +8,6 @@ import {
 } from "./connection_store.js";
 import {
   ensureCredentialsForCurrentSession,
-  getActiveConnectionRef,
   normaliseCompanyName,
   resolveSessionKeyStore,
   runWithActiveConnectionRef,
@@ -20,6 +19,12 @@ import {
   extractConnectionRefFromToolArgs,
   prefixConnectionRef,
 } from "./connection_ref.js";
+import { runWithRedTelemetryContext } from "../telemetry/identity.js";
+import { loadConnectionTelemetryContext } from "../telemetry/context.js";
+import {
+  detectClientPlatform,
+  resolveRedTelemetryEnvironment,
+} from "../telemetry/platform.js";
 
 export const MCP_SESSION_HEADER_NAMES = [
   "mcp-session-id",
@@ -388,18 +393,38 @@ export async function runHttpToolSessionFromExtra<T>(
 
   return runWithActiveConnectionRef(connectionRef, () =>
     runWithHttpToolSession(scope, async () => {
-      await ensureCredentialsForCurrentSession(options?.companyName);
-      await logToolSessionDiagnosticIfNeeded({
-        transportSessionId,
-        sessionId,
-        keyStore: store,
-        scope,
-        extra,
-        connectionRef,
-        companyName: options?.companyName,
-        toolName: options?.toolName,
-      });
-      return fn();
+      const storedTelemetry = await loadConnectionTelemetryContext(
+        scope.connectionId || undefined
+      );
+      const headers = (extra?.requestInfo?.headers ?? {}) as Record<
+        string,
+        string | string[] | undefined
+      >;
+
+      return runWithRedTelemetryContext(
+        {
+          toolName: options?.toolName,
+          telemetryClientId: storedTelemetry.telemetryClientId,
+          connectionSessionId: storedTelemetry.connectionSessionId,
+          connectedCompanyCount: store.size,
+          clientPlatform: detectClientPlatform(headers),
+          environment: resolveRedTelemetryEnvironment(),
+        },
+        async () => {
+          await ensureCredentialsForCurrentSession(options?.companyName);
+          await logToolSessionDiagnosticIfNeeded({
+            transportSessionId,
+            sessionId,
+            keyStore: store,
+            scope,
+            extra,
+            connectionRef,
+            companyName: options?.companyName,
+            toolName: options?.toolName,
+          });
+          return fn();
+        }
+      );
     })
   );
 }

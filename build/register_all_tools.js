@@ -57,10 +57,9 @@ function createFilteredServer(server) {
             return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
         const [description, schema, handler] = args;
-        const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler, { toolName });
         const schemaWithConnectionRef = withConnectionRefSchema(schema);
         if (!requiresWriteConfirmation(toolName)) {
-            return originalTool(toolName, description, schemaWithConnectionRef, httpAwareHandler);
+            return originalTool(toolName, description, schemaWithConnectionRef, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
         const wrappedSchema = {
             ...schemaWithConnectionRef,
@@ -71,8 +70,15 @@ function createFilteredServer(server) {
                 }
                 : {}),
         };
-        const wrappedHandler = wrapWriteToolHandler(toolName, httpAwareHandler);
-        return originalTool(toolName, appendWriteConfirmationDescription(description, toolName), wrappedSchema, wrappedHandler);
+        // connectionRef must be activated BEFORE write-confirmation preflight
+        // (Sales VAT / draft enrichment / credential lookup). If the write wrapper
+        // is outermost, Vibe-supplied connectionRef is ignored during preview and
+        // surfaces as "Vibe did not pass connectionRef".
+        const writeWrappedHandler = wrapWriteToolHandler(toolName, handler);
+        const httpAwareHandler = wrapHttpSessionAwareToolHandler(writeWrappedHandler, {
+            toolName,
+        });
+        return originalTool(toolName, appendWriteConfirmationDescription(description, toolName), wrappedSchema, httpAwareHandler);
     };
     return filteredServer;
 }

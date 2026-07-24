@@ -4,6 +4,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
@@ -35,6 +36,7 @@ const connectionRefs = new Map<
   { connectionId: string; expiresAt: number }
 >();
 const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
+const telemetryByConnection = new Map<string, ConnectionTelemetryRecord>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -286,6 +288,31 @@ export class MemoryConnectionStore implements ConnectionStore {
 
   async clearFailedCompanyValidations(connectionId: string): Promise<void> {
     failedValidationsByConnection.delete(connectionId);
+  }
+
+  async saveConnectionTelemetry(
+    connectionId: string,
+    patch: {
+      telemetryClientId?: string;
+      connectionSessionId?: string;
+    }
+  ): Promise<void> {
+    const existing = telemetryByConnection.get(connectionId);
+    telemetryByConnection.set(connectionId, {
+      connectionId,
+      telemetryClientId:
+        patch.telemetryClientId ?? existing?.telemetryClientId,
+      connectionSessionId:
+        patch.connectionSessionId ?? existing?.connectionSessionId,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async getConnectionTelemetry(
+    connectionId: string
+  ): Promise<ConnectionTelemetryRecord | null> {
+    const record = telemetryByConnection.get(connectionId);
+    return record ? { ...record } : null;
   }
 
   async getDiagnostics(args: {

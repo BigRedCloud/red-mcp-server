@@ -13,6 +13,7 @@ import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 import { issueConnectionRef } from "./connection_ref.js";
 import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
 import type { FailedCompanyConnection } from "./connection_store_types.js";
+import { generateConnectionSessionId } from "../telemetry/identity.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -267,6 +268,8 @@ export type ClaimConnectionResult = {
   companyNames: string[];
   connectionRef: string;
   connectionRefExpiresAt: number;
+  /** Anonymous per-confirm telemetry UUID — never a secret. */
+  connectionSessionId: string;
 };
 
 export class ClaimConnectionError extends Error {
@@ -341,6 +344,19 @@ export async function claimConnectionCodeForSession(
   const { connectionRef, expiresAt: connectionRefExpiresAt } =
     await issueConnectionRef(pending.connectionId);
 
+  const connectionSessionId = generateConnectionSessionId();
+
+  try {
+    await store.saveConnectionTelemetry(pending.connectionId, {
+      connectionSessionId,
+    });
+  } catch (error) {
+    console.error(
+      "Red telemetry: failed to store connection session id:",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   const connectedCompaniesList = connectedCompanies;
 
   return {
@@ -350,6 +366,7 @@ export async function claimConnectionCodeForSession(
     companyNames: connectedCompaniesList,
     connectionRef,
     connectionRefExpiresAt,
+    connectionSessionId,
   };
 }
 

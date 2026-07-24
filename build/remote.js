@@ -11,6 +11,8 @@ import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
+import { buildTelemetryClientIdSetCookie, runWithRedTelemetryContext, } from "./telemetry.js";
+import { buildRequestTelemetryContext, loadConnectionTelemetryContext, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
@@ -83,7 +85,15 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
     const clientKey = buildHttpClientKeyFromRequest(req);
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
     const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey);
-    return runWithHttpToolSession(scope, async () => {
+    const storedTelemetry = await loadConnectionTelemetryContext(scope.connectionId || undefined);
+    const telemetryContext = buildRequestTelemetryContext({
+        req,
+        connectionId: scope.connectionId || undefined,
+        telemetryClientId: storedTelemetry.telemetryClientId,
+        connectionSessionId: storedTelemetry.connectionSessionId,
+        connectedCompanyCount: session.keyStore.size,
+    });
+    return runWithRedTelemetryContext(telemetryContext, () => runWithHttpToolSession(scope, async () => {
         const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
         logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
             transportSessionId: normalizedSessionId,
@@ -102,7 +112,7 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
         else {
             await session.transport.handleRequest(req, res);
         }
-    });
+    }));
 }
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 app.set("trust proxy", true);
@@ -253,6 +263,9 @@ function parseCompanyCsv(buffer) {
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
     await ensureConnectionStoreInitialized();
     const code = String(req.body.code ?? "");
+    const { clientId: telemetryClientId } = resolveTelemetryClientIdFromRequest(req);
+    const secureCookie = req.secure || req.protocol === "https";
+    res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(telemetryClientId, { secure: secureCookie }));
     let companies = [];
     if (req.file?.buffer) {
         companies = parseCompanyCsv(req.file.buffer);
@@ -280,34 +293,50 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
-    try {
-        const outcome = await validateAndPersistConnectedCompanies({
-            connectionId: pending.connectionId,
-            companies,
-            expiresAt: Date.now() + getApiKeyExpirationMs(),
-        });
-        if (outcome.connectedCompanies.length === 0) {
-            const message = outcome.failedCompanies.length > 0
-                ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
-                : "No companies could be connected because the submitted credentials could not be validated.";
-            res.status(400).send(renderConnectionFailedPage(message));
-            return;
-        }
-        for (const session of sessions.values()) {
-            const sessionId = session.transport.sessionId;
-            if (!sessionId)
-                continue;
-            const boundConnectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
-            if (boundConnectionId === pending.connectionId) {
-                await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
+    const telemetryContext = buildRequestTelemetryContext({
+        req,
+        connectionId: pending.connectionId,
+        telemetryClientId,
+        connectedCompanyCount: companies.length,
+    });
+    return runWithRedTelemetryContext(telemetryContext, async () => {
+        try {
+            const outcome = await validateAndPersistConnectedCompanies({
+                connectionId: pending.connectionId,
+                companies,
+                expiresAt: Date.now() + getApiKeyExpirationMs(),
+            });
+            try {
+                await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
+                    telemetryClientId,
+                });
             }
+            catch (error) {
+                console.error("Red telemetry: failed to store telemetry client id:", error instanceof Error ? error.message : error);
+            }
+            if (outcome.connectedCompanies.length === 0) {
+                const message = outcome.failedCompanies.length > 0
+                    ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+                    : "No companies could be connected because the submitted credentials could not be validated.";
+                res.status(400).send(renderConnectionFailedPage(message));
+                return;
+            }
+            for (const session of sessions.values()) {
+                const sessionId = session.transport.sessionId;
+                if (!sessionId)
+                    continue;
+                const boundConnectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
+                if (boundConnectionId === pending.connectionId) {
+                    await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
+                }
+            }
+            res.send(renderSuccessPage(outcome.connectedCompanies, code, outcome.failedCompanies));
         }
-        res.send(renderSuccessPage(outcome.connectedCompanies, code, outcome.failedCompanies));
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        res.status(400).send(renderConnectionFailedPage(message));
-    }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            res.status(400).send(renderConnectionFailedPage(message));
+        }
+    });
 });
 app.post("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();
@@ -379,7 +408,17 @@ app.get("/connect", async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
-    res.send(renderConnectPage(code));
+    const { clientId } = resolveTelemetryClientIdFromRequest(req);
+    const secureCookie = req.secure || req.protocol === "https";
+    res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(clientId, { secure: secureCookie }));
+    const telemetryContext = buildRequestTelemetryContext({
+        req,
+        connectionId: pending.connectionId,
+        telemetryClientId: clientId,
+    });
+    return runWithRedTelemetryContext(telemetryContext, () => {
+        res.send(renderConnectPage(code));
+    });
 });
 app.get("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();

@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSessionWithMeta, runWithMcpSessionContext, } from "./connection_store.js";
 import { ensureCredentialsForCurrentSession, normaliseCompanyName, resolveSessionKeyStore, runWithActiveConnectionRef, runWithHttpClientKey, runWithHttpRequestSessionId, runWithSessionKeyStore, } from "../shared.js";
 import { extractConnectionRefFromToolArgs, prefixConnectionRef, } from "./connection_ref.js";
+import { runWithRedTelemetryContext } from "../telemetry/identity.js";
+import { loadConnectionTelemetryContext } from "../telemetry/context.js";
+import { detectClientPlatform, resolveRedTelemetryEnvironment, } from "../telemetry/platform.js";
 export const MCP_SESSION_HEADER_NAMES = [
     "mcp-session-id",
     "x-mcp-session-id",
@@ -177,26 +180,42 @@ export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, 
         return fn();
     }
     const sessionId = transportSessionId?.trim() || resolveMcpSessionIdFromExtra(extra);
+    const connectionRef = options?.connectionRef;
     if (!sessionId) {
+        // Still honour an explicit connectionRef when the transport did not supply a
+        // session id (Vibe/Mistral session rotation edge cases).
+        if (connectionRef) {
+            return runWithActiveConnectionRef(connectionRef, fn);
+        }
         return fn();
     }
     const store = keyStore ?? resolveSessionKeyStore(sessionId);
     const clientKey = buildHttpClientKeyFromExtra(extra);
-    const connectionRef = options?.connectionRef;
     const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey, connectionRef);
     return runWithActiveConnectionRef(connectionRef, () => runWithHttpToolSession(scope, async () => {
-        await ensureCredentialsForCurrentSession(options?.companyName);
-        await logToolSessionDiagnosticIfNeeded({
-            transportSessionId,
-            sessionId,
-            keyStore: store,
-            scope,
-            extra,
-            connectionRef,
-            companyName: options?.companyName,
+        const storedTelemetry = await loadConnectionTelemetryContext(scope.connectionId || undefined);
+        const headers = (extra?.requestInfo?.headers ?? {});
+        return runWithRedTelemetryContext({
             toolName: options?.toolName,
+            telemetryClientId: storedTelemetry.telemetryClientId,
+            connectionSessionId: storedTelemetry.connectionSessionId,
+            connectedCompanyCount: store.size,
+            clientPlatform: detectClientPlatform(headers),
+            environment: resolveRedTelemetryEnvironment(),
+        }, async () => {
+            await ensureCredentialsForCurrentSession(options?.companyName);
+            await logToolSessionDiagnosticIfNeeded({
+                transportSessionId,
+                sessionId,
+                keyStore: store,
+                scope,
+                extra,
+                connectionRef,
+                companyName: options?.companyName,
+                toolName: options?.toolName,
+            });
+            return fn();
         });
-        return fn();
     }));
 }
 export function buildMcpSessionDiagnostic(args) {

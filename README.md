@@ -297,6 +297,8 @@ Red exposes a focused set of MCP tools, grouped by domain. Exact tool names and 
 
 For a detailed developer guide to the source layout and MCP tool coverage, see [docs/TOOLS.md](docs/TOOLS.md).
 
+Hosted HTTP Application Insights identity (anonymous client vs connection session) is documented in [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
 - **Company setup and readiness** — company setup configuration, financial year, options, readiness checks, transaction date validation, and getting-started guidance.
 - **Customers and suppliers** — list/get/create/update/delete plus opening balances and account transactions.
 - **Products and sales reps** — list/get/create/update/delete and product types.
