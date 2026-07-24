@@ -167,12 +167,12 @@ Credential-requiring tools accept an optional `connectionRef` argument (hosted H
 | MCP tool | Purpose |
 | -------- | ------- |
 | `brc_getting_started` | Onboarding guidance text |
-| `brc_company_readiness_check` | Pre-flight company checks |
+| `brc_company_readiness_check` | Overall company health/readiness (connection, financial year, Sales VAT, Sales Analysis, reference data) |
 | `brc_validate_transaction_date` | Financial-year date validation |
 | `brc_get_deployment_policy` | Active safety flags and policy |
 | `brc_get_company_processing_settings` | Mapped processing settings |
 | `brc_get_company_reference_settings` | Reference auto-generation settings |
-| `brc_check_transaction_settings` | Combined transaction safety check |
+| `brc_check_transaction_settings` | Per-workflow processing-settings warnings (not overall readiness) |
 
 ### Customers and suppliers
 
