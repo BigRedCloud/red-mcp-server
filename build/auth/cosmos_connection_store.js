@@ -403,6 +403,39 @@ export class CosmosConnectionStore {
             }
         }
     }
+    async saveConnectionTelemetry(connectionId, patch) {
+        const existing = await this.getConnectionTelemetry(connectionId);
+        const doc = {
+            pk: connectionPartitionKey(connectionId),
+            id: "telemetry",
+            type: "connectionTelemetry",
+            connectionId,
+            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
+            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
+            updatedAt: Date.now(),
+            ttl: apiKeyTtlSeconds(),
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getConnectionTelemetry(connectionId) {
+        try {
+            const { resource } = await this.getContainer()
+                .item("telemetry", connectionPartitionKey(connectionId))
+                .read();
+            if (!resource || resource.type !== "connectionTelemetry") {
+                return null;
+            }
+            return {
+                connectionId: resource.connectionId,
+                telemetryClientId: resource.telemetryClientId,
+                connectionSessionId: resource.connectionSessionId,
+                updatedAt: resource.updatedAt,
+            };
+        }
+        catch {
+            return null;
+        }
+    }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??
             (args.sessionId

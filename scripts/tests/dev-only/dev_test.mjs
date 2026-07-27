@@ -1228,6 +1228,25 @@ async function main() {
   await run("brc_company_readiness_check", {
     companyName: COMPANY_NAME,
   });
+  {
+    const readinessEntry = results[results.length - 1];
+    const data = readinessEntry?.details || {};
+    if (
+      readinessEntry?.status === "PASS" &&
+      (!data.overallStatus || !data.checks?.salesVatRates || !data.summary)
+    ) {
+      readinessEntry.status = "FAIL";
+      readinessEntry.details = {
+        ...data,
+        smokeFailure: "brc_company_readiness_check missing health fields",
+      };
+      console.log("- brc_company_readiness_check: FAIL (health-check smoke)");
+    } else if (readinessEntry?.status === "PASS") {
+      console.log(
+        `- brc_company_readiness_check smoke ok (overallStatus=${data.overallStatus})`
+      );
+    }
+  }
   await run("brc_list_audit_log", {});
 
   console.log("\n=== Reference data for write tests ===");

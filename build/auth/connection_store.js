@@ -8,6 +8,7 @@ import { MemoryConnectionStore } from "./memory_connection_store.js";
 import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 import { issueConnectionRef } from "./connection_ref.js";
 import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
+import { generateConnectionSessionId } from "../telemetry/identity.js";
 const CLIENT_CLAIM_INHERIT_TTL_MS = redServerConfig.sessionTtlMinutes * 60 * 1000;
 const mcpSessionContextStorage = new AsyncLocalStorage();
 let connectionStore = null;
@@ -214,6 +215,15 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         });
     }
     const { connectionRef, expiresAt: connectionRefExpiresAt } = await issueConnectionRef(pending.connectionId);
+    const connectionSessionId = generateConnectionSessionId();
+    try {
+        await store.saveConnectionTelemetry(pending.connectionId, {
+            connectionSessionId,
+        });
+    }
+    catch (error) {
+        console.error("Red telemetry: failed to store connection session id:", error instanceof Error ? error.message : error);
+    }
     const connectedCompaniesList = connectedCompanies;
     return {
         connectionId: pending.connectionId,
@@ -222,6 +232,7 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         companyNames: connectedCompaniesList,
         connectionRef,
         connectionRefExpiresAt,
+        connectionSessionId,
     };
 }
 export async function createPendingConnection(sessionId) {
