@@ -10,12 +10,14 @@ import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
   getConnectionStoreTargetName,
+  getDeploymentEnvironmentLabel,
   resolveConnectionIdForActiveSessionWithMeta,
 } from "../auth/connection_store.js";
 import { hydrateSessionKeyStoreFromConnectionStore } from "../auth/connection_persistence.js";
 import {
   extractConnectionRefFromToolArgs,
   isConnectionRefFormat,
+  prefixConnectionRef,
 } from "../auth/connection_ref.js";
 import {
   registerHttpSessionKeyStore,
@@ -105,6 +107,118 @@ export function logConnectTelemetryFlowDiagnostics(
         platform: diagnostics.platform,
         connectionCodeHash: diagnostics.connectionCodeHash,
       })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+/** Temporary safe diagnostics for connectionRef resolution — never log secrets. */
+export type ConnectionRefResolutionDiagnostics = {
+  deploymentEnvironment: string;
+  connectionStoreTargetName: string;
+  recordType: "connectionRefLookup";
+  connectionRefPresent: boolean;
+  connectionRefPrefix: string | null;
+  connectionRefLookupResult: "resolved" | "invalid" | "absent";
+  connectionIdPrefix: string | null;
+  partitionKeyName: "pk";
+  partitionKeyValuePrefix: string | null;
+  expiresAt: number | null;
+  ttl: number | null;
+  currentTimestamp: number;
+  recordFound: boolean;
+  credentialCount: number;
+  companyCount: number;
+  sessionBindingFound: boolean;
+  clientClaimInherited: boolean;
+  telemetryMergePerformed: boolean;
+  companiesPreservedAfterMerge: boolean;
+  requestedCompanyLoaded: boolean | null;
+  recordDeletedOrConsumed: false;
+};
+
+function prefixId(value: string | undefined | null, length = 8): string | null {
+  if (!value) return null;
+  return value.slice(0, Math.min(length, value.length));
+}
+
+export async function logConnectionRefResolutionDiagnostics(args: {
+  resolution: {
+    connectionId: string | null;
+    sessionBindingFound: boolean;
+    clientClaimInherited: boolean;
+    connectionRefResolved: boolean;
+    connectionRefInvalid: boolean;
+  };
+  connectionRef?: string;
+  sessionId: string;
+  keyStoreSize: number;
+  companyName?: string;
+}): Promise<void> {
+  try {
+    const ref = args.connectionRef?.trim();
+    const connectionId = args.resolution.connectionId;
+    let companyCount = 0;
+    let expiresAt: number | null = null;
+
+    if (connectionId) {
+      try {
+        const companies = await getConnectionStore().listConnectedCompanies(
+          connectionId
+        );
+        companyCount = companies.length;
+        if (companies.length > 0) {
+          expiresAt = Math.min(...companies.map((c) => c.expiresAt));
+        }
+      } catch {
+        // ignore — diagnostics must not break requests
+      }
+    }
+
+    const requestedCompanyLoaded =
+      typeof args.companyName === "string" && args.companyName.trim()
+        ? args.keyStoreSize > 0
+        : null;
+
+    const lookupResult: ConnectionRefResolutionDiagnostics["connectionRefLookupResult"] =
+      !ref
+        ? "absent"
+        : args.resolution.connectionRefResolved
+          ? "resolved"
+          : "invalid";
+
+    const diagnostics: ConnectionRefResolutionDiagnostics = {
+      deploymentEnvironment: getDeploymentEnvironmentLabel(),
+      connectionStoreTargetName: getConnectionStoreTargetName(),
+      recordType: "connectionRefLookup",
+      connectionRefPresent: Boolean(ref),
+      connectionRefPrefix: prefixConnectionRef(ref) ?? null,
+      connectionRefLookupResult: lookupResult,
+      connectionIdPrefix: prefixId(connectionId),
+      partitionKeyName: "pk",
+      partitionKeyValuePrefix: connectionId
+        ? prefixId(`connection:${connectionId}`, 18)
+        : ref
+          ? prefixId(`ref:${ref}`, 12)
+          : null,
+      expiresAt,
+      ttl: null,
+      currentTimestamp: Date.now(),
+      recordFound: Boolean(connectionId),
+      credentialCount: args.keyStoreSize,
+      companyCount,
+      sessionBindingFound: args.resolution.sessionBindingFound,
+      clientClaimInherited: args.resolution.clientClaimInherited,
+      telemetryMergePerformed: false,
+      companiesPreservedAfterMerge: true,
+      requestedCompanyLoaded,
+      recordDeletedOrConsumed: false,
+    };
+
+    console.info(
+      "Red connectionRef resolution:",
+      JSON.stringify(diagnostics)
     );
   } catch {
     // ignore
@@ -614,14 +728,30 @@ export async function prepareMcpTelemetryContext(args: {
 
   if (connectionId) {
     try {
-      // Hydrate the caller's key store (same map used by tool handlers / diagnostics).
+      // Hydrate into a temp map first — never clear the live key store before a
+      // successful reload (decrypt/store errors must not wipe credentials).
+      const hydrated = new Map<string, CompanyApiContext>();
+      await hydrateSessionKeyStoreFromConnectionStore(connectionId, hydrated);
       args.keyStore.clear();
-      await hydrateSessionKeyStoreFromConnectionStore(connectionId, args.keyStore);
+      for (const [key, value] of hydrated) {
+        args.keyStore.set(key, value);
+      }
       registerHttpSessionKeyStore(args.sessionId, args.keyStore);
-    } catch {
-      // continue with whatever is already loaded
+    } catch (error) {
+      console.error(
+        "Red: failed to hydrate session credentials from connection store:",
+        error instanceof Error ? error.message : error
+      );
     }
   }
+
+  await logConnectionRefResolutionDiagnostics({
+    resolution,
+    connectionRef: args.connectionRef,
+    sessionId: args.sessionId,
+    keyStoreSize: args.keyStore.size,
+    companyName: args.companyName,
+  });
 
   const stored = await loadConnectionTelemetryContext(connectionId || undefined);
   const companyCount = await countCompaniesForConnection(
