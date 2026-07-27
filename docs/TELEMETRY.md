@@ -12,7 +12,7 @@ do not describe them as unique authenticated users.
 | --- | --- |
 | `red.telemetry_client_id` | Stable anonymous UUID for a browser/device, stored as a first-party cookie (`red_telemetry_client_id`) on the secure connection page. `localStorage` is a same-device fallback when cookies are blocked between visits. |
 | `red.connection_session_id` | New server-generated UUID for each successful `brc_confirm_company_connection` claim. Stored with connection telemetry metadata (Cosmos/memory). |
-| `red.client_platform` | `vibe`, `mistral`, `chatgpt`, `claude`, `cursor`, or `unknown` (identity headers preferred over User-Agent). |
+| `red.client_platform` | `mistral`, `chatgpt`, `claude`, or `unknown`. Vibe is normalised to `mistral`. MCP client information is preferred, with stored session context and safe request signals used as fallbacks. |
 | `red.environment` | From `BRC_DEPLOYMENT_ENV` (`staging` / `production`) when set. |
 | `red.connected_company_count` | Count of companies loaded for the request/session. |
 | `red.tool_name` | MCP tool name when a tool handler runs. |
@@ -24,9 +24,9 @@ OpenTelemetry `enduser.pseudo.id`. **Authenticated user id is never set.**
 
 Never sent to telemetry:
 
-- API keys, passwords, emails
-- `connectionRef` / claim codes / raw MCP session IDs
-- Company credentials or customer/supplier payloads
+- API keys, passwords, email addresses, or authenticated user identity
+- `connectionRef`, claim/confirmation codes, authorisation headers, or raw MCP session IDs
+- Company credentials or customer, supplier, invoice, or other accounting payloads
 
 Telemetry failures never block connection or MCP requests. Missing client IDs
 do not block users.
