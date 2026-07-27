@@ -25,14 +25,21 @@ export async function hydrateSessionKeyStoreFromConnectionStore(
   const store = getConnectionStore();
   const companies = await store.listConnectedCompanies(connectionId);
 
+  // Build into a temp map first so a decrypt/store failure cannot wipe an
+  // already-hydrated session key store mid-loop.
+  const next = new Map<string, SessionCompanyContext>();
   for (const company of companies) {
     const key = company.companyName.trim().toLowerCase();
-
-    keyStore.set(key, {
+    next.set(key, {
       companyName: company.companyName,
       apiKey: decodeStoredApiKey(company.encryptedSecret),
       expiresAt: company.expiresAt,
     });
+  }
+
+  keyStore.clear();
+  for (const [key, value] of next) {
+    keyStore.set(key, value);
   }
 
   return companies.length;
