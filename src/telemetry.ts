@@ -41,3 +41,8 @@ export {
   resolveRedTelemetryEnvironment,
   storeSessionPlatform,
 } from "./telemetry/platform.js";
+export {
+  hashConnectionCodeForDiagnostics,
+  resolveAndPersistConnectTelemetryClientId,
+  resolveCanonicalTelemetryClientId,
+} from "./telemetry/context.js";

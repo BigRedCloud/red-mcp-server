@@ -3,6 +3,7 @@
  * Never includes secrets, connectionRef, session IDs, or company data payloads.
  */
 
+import { createHash } from "node:crypto";
 import type { Request } from "express";
 import { trace } from "@opentelemetry/api";
 import {
@@ -23,14 +24,15 @@ import {
 import { ENDUSER_PSEUDO_ID_ATTRIBUTE } from "./identity.js";
 import {
   buildTelemetryCustomDimensions,
+  generateTelemetryUuid,
   isValidTelemetryUuid,
   mergeRedTelemetryContext,
-  normaliseTelemetryClientId,
   readTelemetryClientIdFromCookieHeader,
   TELEMETRY_CLIENT_ID_FORM_FIELD,
   type RedTelemetryContext,
 } from "./identity.js";
 import {
+  detectClientPlatform,
   logPlatformDetectionDiagnostics,
   resolveClientPlatform,
   resolveRedTelemetryEnvironment,
@@ -51,6 +53,19 @@ export type TelemetryClientIdPathDiagnostics = {
   loadedTelemetryClientIdPresent: boolean;
 };
 
+/** Safe connect-flow correlation diagnostics. Never log UUIDs or raw codes. */
+export type ConnectTelemetryFlowDiagnostics = {
+  cookieIdPresent: boolean;
+  localStorageIdPresent: boolean;
+  hiddenFieldIdPresent: boolean;
+  submittedIdValid: boolean;
+  fallbackGenerated: boolean;
+  idsMatched: boolean;
+  requestHost: string;
+  platform: string;
+  connectionCodeHash: string;
+};
+
 /** Boolean-only diagnostics for the connect-page client ID path. Never log UUIDs. */
 export function logTelemetryClientIdPathDiagnostics(
   diagnostics: TelemetryClientIdPathDiagnostics
@@ -65,6 +80,52 @@ export function logTelemetryClientIdPathDiagnostics(
   }
 }
 
+export function hashConnectionCodeForDiagnostics(code: string): string {
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return "none";
+  }
+  return createHash("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+}
+
+export function logConnectTelemetryFlowDiagnostics(
+  diagnostics: ConnectTelemetryFlowDiagnostics
+): void {
+  try {
+    console.info(
+      "Red connect telemetry flow:",
+      JSON.stringify({
+        cookieIdPresent: diagnostics.cookieIdPresent,
+        localStorageIdPresent: diagnostics.localStorageIdPresent,
+        hiddenFieldIdPresent: diagnostics.hiddenFieldIdPresent,
+        submittedIdValid: diagnostics.submittedIdValid,
+        fallbackGenerated: diagnostics.fallbackGenerated,
+        idsMatched: diagnostics.idsMatched,
+        requestHost: diagnostics.requestHost,
+        platform: diagnostics.platform,
+        connectionCodeHash: diagnostics.connectionCodeHash,
+      })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export type CanonicalTelemetryClientIdResolution = {
+  clientId: string;
+  source: "body" | "cookie" | "serverSeed" | "fallback";
+  fromCookie: boolean;
+  fromBody: boolean;
+  fromServerSeed: boolean;
+  fallbackGenerated: boolean;
+  replacedMalformed: boolean;
+  cookieClientIdPresent: boolean;
+  postClientIdPresent: boolean;
+  postClientIdValid: boolean;
+  serverSeedPresent: boolean;
+  idsMatched: boolean;
+};
+
 export type RedTelemetryDiagnostics = {
   telemetryRecordFound: boolean;
   connectionContextFound: boolean;
@@ -78,26 +139,47 @@ export type RedTelemetryDiagnostics = {
 /**
  * Prefer a valid form/localStorage body value (explicit submit), then cookie,
  * else generate a safe UUID. Malformed values are never accepted.
+ *
+ * Prefer {@link resolveCanonicalTelemetryClientId} for /connect so a
+ * server-seeded ID from an earlier GET is reused instead of minting a second
+ * fallback when cookies are missing (common in Mistral embedded browsers).
  */
 export function resolveTelemetryClientIdFromRequest(req: {
-  headers?: { cookie?: string };
+  headers?: Record<string, string | string[] | undefined> & { cookie?: string };
   body?: unknown;
-}): {
-  clientId: string;
-  fromCookie: boolean;
-  fromBody: boolean;
-  replacedMalformed: boolean;
-  cookieClientIdPresent: boolean;
-  postClientIdPresent: boolean;
-  postClientIdValid: boolean;
-} {
-  const cookieId = readTelemetryClientIdFromCookieHeader(req.headers?.cookie);
+}): CanonicalTelemetryClientIdResolution {
+  return resolveCanonicalTelemetryClientId(req);
+}
+
+/**
+ * Canonical connect-flow client ID selection:
+ * 1) valid submitted hidden field
+ * 2) valid first-party cookie
+ * 3) server-seeded ID (persisted for this connection on an earlier GET)
+ * 4) generate one fallback only if all are unavailable
+ *
+ * Never invents a second fallback when a server seed already exists.
+ */
+export function resolveCanonicalTelemetryClientId(args: {
+  headers?: Record<string, string | string[] | undefined> & { cookie?: string };
+  body?: unknown;
+  serverSeed?: string | null;
+}): CanonicalTelemetryClientIdResolution {
+  const cookieHeader = args.headers?.cookie;
+  const cookieId = readTelemetryClientIdFromCookieHeader(
+    typeof cookieHeader === "string"
+      ? cookieHeader
+      : Array.isArray(cookieHeader)
+        ? cookieHeader[0]
+        : undefined
+  );
   const cookieClientIdPresent = Boolean(cookieId);
   const body =
-    req.body && typeof req.body === "object"
-      ? (req.body as Record<string, unknown>)
+    args.body && typeof args.body === "object"
+      ? (args.body as Record<string, unknown>)
       : {};
-  const bodyRaw = body[TELEMETRY_CLIENT_ID_FORM_FIELD] ?? body.telemetry_client_id;
+  const bodyRaw =
+    body[TELEMETRY_CLIENT_ID_FORM_FIELD] ?? body.telemetry_client_id;
   const postClientIdPresent =
     typeof bodyRaw === "string" && bodyRaw.trim() !== "";
   const bodyId =
@@ -105,42 +187,95 @@ export function resolveTelemetryClientIdFromRequest(req: {
       ? bodyRaw.trim().toLowerCase()
       : undefined;
   const postClientIdValid = Boolean(bodyId);
+  const serverSeed =
+    typeof args.serverSeed === "string" && isValidTelemetryUuid(args.serverSeed)
+      ? args.serverSeed.trim().toLowerCase()
+      : undefined;
+  const serverSeedPresent = Boolean(serverSeed);
+
+  const presentIds = [bodyId, cookieId, serverSeed].filter(
+    (value): value is string => Boolean(value)
+  );
+  const idsMatched =
+    presentIds.length <= 1 || presentIds.every((id) => id === presentIds[0]);
 
   if (bodyId) {
     return {
       clientId: bodyId,
+      source: "body",
       fromCookie: false,
       fromBody: true,
+      fromServerSeed: false,
+      fallbackGenerated: false,
       replacedMalformed: false,
       cookieClientIdPresent,
       postClientIdPresent,
       postClientIdValid,
+      serverSeedPresent,
+      idsMatched,
     };
   }
 
   if (cookieId) {
     return {
       clientId: cookieId,
+      source: "cookie",
       fromCookie: true,
       fromBody: false,
+      fromServerSeed: false,
+      fallbackGenerated: false,
       replacedMalformed: false,
       cookieClientIdPresent,
       postClientIdPresent,
       postClientIdValid,
+      serverSeedPresent,
+      idsMatched,
+    };
+  }
+
+  if (serverSeed) {
+    return {
+      clientId: serverSeed,
+      source: "serverSeed",
+      fromCookie: false,
+      fromBody: false,
+      fromServerSeed: true,
+      fallbackGenerated: false,
+      replacedMalformed: false,
+      cookieClientIdPresent,
+      postClientIdPresent,
+      postClientIdValid,
+      serverSeedPresent,
+      idsMatched,
     };
   }
 
   const malformed =
-    postClientIdPresent || Boolean(readRawCookieValue(req.headers?.cookie));
+    postClientIdPresent ||
+    Boolean(
+      readRawCookieValue(
+        typeof cookieHeader === "string"
+          ? cookieHeader
+          : Array.isArray(cookieHeader)
+            ? cookieHeader[0]
+            : undefined
+      )
+    );
+  const clientId = generateTelemetryUuid();
 
   return {
-    clientId: normaliseTelemetryClientId(bodyRaw),
+    clientId,
+    source: "fallback",
     fromCookie: false,
     fromBody: false,
+    fromServerSeed: false,
+    fallbackGenerated: true,
     replacedMalformed: malformed,
     cookieClientIdPresent,
     postClientIdPresent,
     postClientIdValid,
+    serverSeedPresent,
+    idsMatched,
   };
 }
 
@@ -150,6 +285,83 @@ function readRawCookieValue(cookieHeader: string | undefined): string | undefine
     new RegExp(`(?:^|;\\s*)red_telemetry_client_id=([^;]*)`)
   );
   return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
+/**
+ * Resolve the connect-page client ID and persist it on first assignment so
+ * later cookie-less GET/POST for the same connection reuse one canonical UUID.
+ */
+export async function resolveAndPersistConnectTelemetryClientId(args: {
+  connectionId: string;
+  headers?: Record<string, string | string[] | undefined> & { cookie?: string };
+  body?: unknown;
+}): Promise<CanonicalTelemetryClientIdResolution> {
+  const existing = await loadConnectionTelemetryContext(args.connectionId);
+  const resolved = resolveCanonicalTelemetryClientId({
+    headers: args.headers,
+    body: args.body,
+    serverSeed: existing.telemetryClientId,
+  });
+
+  // Never introduce a second fallback for a connection that already has an id.
+  if (resolved.fallbackGenerated && existing.telemetryClientId) {
+    return {
+      ...resolved,
+      clientId: existing.telemetryClientId,
+      source: "serverSeed",
+      fromServerSeed: true,
+      fallbackGenerated: false,
+      serverSeedPresent: true,
+    };
+  }
+
+  const shouldPersist =
+    !existing.telemetryClientId ||
+    resolved.source === "body" ||
+    resolved.source === "cookie";
+
+  if (shouldPersist) {
+    try {
+      await getConnectionStore().saveConnectionTelemetry(args.connectionId, {
+        telemetryClientId: resolved.clientId,
+      });
+    } catch {
+      // continue — response still uses the resolved id
+    }
+  }
+
+  return resolved;
+}
+
+export function buildConnectTelemetryFlowDiagnostics(args: {
+  resolution: CanonicalTelemetryClientIdResolution;
+  code: string;
+  req?: Request;
+  headers?: Record<string, string | string[] | undefined>;
+  /** True when the client reported a prior localStorage id (optional form flag). */
+  localStorageIdPresent?: boolean;
+}): ConnectTelemetryFlowDiagnostics {
+  const headers =
+    args.headers ??
+    ((args.req?.headers ?? {}) as Record<string, string | string[] | undefined>);
+  const hostHeader = headers.host;
+  const requestHost = Array.isArray(hostHeader)
+    ? hostHeader[0] ?? ""
+    : typeof hostHeader === "string"
+      ? hostHeader
+      : "";
+
+  return {
+    cookieIdPresent: args.resolution.cookieClientIdPresent,
+    localStorageIdPresent: Boolean(args.localStorageIdPresent),
+    hiddenFieldIdPresent: args.resolution.postClientIdPresent,
+    submittedIdValid: args.resolution.postClientIdValid,
+    fallbackGenerated: args.resolution.fallbackGenerated,
+    idsMatched: args.resolution.idsMatched,
+    requestHost,
+    platform: detectClientPlatform(headers),
+    connectionCodeHash: hashConnectionCodeForDiagnostics(args.code),
+  };
 }
 
 /**

@@ -120,6 +120,8 @@ test("GET /connect cookie and page HTML use the same client ID", async () => {
   );
   assert.match(html, new RegExp(`SERVER_ID = "${id.toLowerCase()}"`));
   assert.match(html, /localStorage\.setItem\(LS, id\)/);
+  assert.equal(/crypto\.randomUUID\s*\(/.test(html), false);
+  assert.equal(/function createId\s*\(/.test(html), false);
 });
 
 test("form submission body includes telemetryClientId field name", () => {

@@ -39,10 +39,13 @@ import {
 } from "./telemetry.js";
 import {
   activatePreparedTelemetry,
+  buildConnectTelemetryFlowDiagnostics,
   buildRequestTelemetryContext,
   extractConnectionRefFromMcpBody,
+  logConnectTelemetryFlowDiagnostics,
   logTelemetryClientIdPathDiagnostics,
   prepareMcpTelemetryContext,
+  resolveAndPersistConnectTelemetryClientId,
   resolveTelemetryClientIdFromRequest,
 } from "./telemetry/context.js";
 import {
@@ -519,12 +522,33 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   await ensureConnectionStoreInitialized();
 
   const code = String(req.body.code ?? "");
-  const resolvedClient = resolveTelemetryClientIdFromRequest(req);
+  const pendingEarly = code ? await getPendingConnection(code) : null;
+
+  // Prefer connection-scoped seed so cookie-less Mistral POSTs do not mint a
+  // second fallback after GET already assigned one.
+  const resolvedClient = pendingEarly
+    ? await resolveAndPersistConnectTelemetryClientId({
+        connectionId: pendingEarly.connectionId,
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        body: req.body,
+      })
+    : resolveTelemetryClientIdFromRequest(req);
+
   const telemetryClientId = resolvedClient.clientId;
   const secureCookie = req.secure || req.protocol === "https";
   res.setHeader(
     "Set-Cookie",
     buildTelemetryClientIdSetCookie(telemetryClientId, { secure: secureCookie })
+  );
+
+  const lsFlag = String(req.body.telemetryClientIdLsPresent ?? "");
+  logConnectTelemetryFlowDiagnostics(
+    buildConnectTelemetryFlowDiagnostics({
+      resolution: resolvedClient,
+      code,
+      req,
+      localStorageIdPresent: lsFlag === "1" || lsFlag === "true",
+    })
   );
 
   let companies: UploadedCompanyCredential[] = [];
@@ -576,6 +600,8 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
       JSON.stringify({
         telemetryClientIdPresent: Boolean(telemetryClientId),
         telemetryClientIdValid: isValidTelemetryUuid(telemetryClientId),
+        fallbackGenerated: resolvedClient.fallbackGenerated,
+        source: resolvedClient.source,
         targetEnvironment: getDeploymentEnvironmentLabel(),
         targetStoreName: getConnectionStoreTargetName(),
       })
@@ -772,11 +798,27 @@ app.get("/connect", async (req, res) => {
     return;
   }
 
-  const { clientId } = resolveTelemetryClientIdFromRequest(req);
+  // Persist on first GET so duplicate cookie-less opens (Mistral webview /
+  // link previews) reuse one canonical id instead of minting another fallback.
+  const resolvedClient = await resolveAndPersistConnectTelemetryClientId({
+    connectionId: pending.connectionId,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    body: undefined,
+  });
+  const clientId = resolvedClient.clientId;
   const secureCookie = req.secure || req.protocol === "https";
   res.setHeader(
     "Set-Cookie",
     buildTelemetryClientIdSetCookie(clientId, { secure: secureCookie })
+  );
+
+  logConnectTelemetryFlowDiagnostics(
+    buildConnectTelemetryFlowDiagnostics({
+      resolution: resolvedClient,
+      code,
+      req,
+      localStorageIdPresent: false,
+    })
   );
 
   const telemetryContext = buildRequestTelemetryContext({

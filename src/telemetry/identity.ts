@@ -182,8 +182,8 @@ export function buildTelemetryClientIdSetCookie(
 /**
  * Inline script for the secure connection page.
  * Prefers the server-issued seed (from Set-Cookie / hidden field), then cookie,
- * then localStorage, else creates a UUID. localStorage is a same-device fallback
- * when cookies are blocked between visits.
+ * then localStorage. Does not mint a browser-side UUID — the server owns
+ * fallback generation so GET and POST stay on one canonical id.
  */
 export function buildTelemetryClientIdPageScript(
   seedClientId?: string
@@ -197,6 +197,7 @@ export function buildTelemetryClientIdPageScript(
   var COOKIE = ${JSON.stringify(TELEMETRY_CLIENT_ID_COOKIE)};
   var LS = ${JSON.stringify(TELEMETRY_CLIENT_ID_STORAGE_KEY)};
   var FIELD = ${JSON.stringify(TELEMETRY_CLIENT_ID_FORM_FIELD)};
+  var LS_FLAG = "telemetryClientIdLsPresent";
   var SERVER_ID = ${JSON.stringify(seed)};
   var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -222,25 +223,40 @@ export function buildTelemetryClientIdPageScript(
     return typeof id === "string" && UUID_RE.test(id);
   }
 
-  function createId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
-    }
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-      var r = Math.random() * 16 | 0;
-      var v = c === "x" ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
+  var hadLocalStorage = false;
+  try {
+    hadLocalStorage = valid(localStorage.getItem(LS));
+  } catch (e) {}
 
   var id = valid(SERVER_ID) ? SERVER_ID : readCookie(COOKIE);
   try {
     if (!valid(id)) id = localStorage.getItem(LS);
   } catch (e) {}
-  if (!valid(id)) id = createId();
+
+  // Do not call crypto.randomUUID here. If the server seed is missing, leave
+  // the hidden field unchanged so POST can reuse the connection-scoped seed.
+  if (!valid(id)) {
+    document.querySelectorAll("form").forEach(function (form) {
+      ensureLsFlag(form, hadLocalStorage);
+    });
+    return;
+  }
+
   id = String(id).toLowerCase();
   writeCookie(id);
   try { localStorage.setItem(LS, id); } catch (e) {}
+
+  function ensureLsFlag(form, present) {
+    if (!form) return;
+    var flag = form.querySelector('input[name="' + LS_FLAG + '"]');
+    if (!flag) {
+      flag = document.createElement("input");
+      flag.type = "hidden";
+      flag.name = LS_FLAG;
+      form.appendChild(flag);
+    }
+    flag.value = present ? "1" : "0";
+  }
 
   function ensureHiddenField(form) {
     if (!form) return;
@@ -252,6 +268,7 @@ export function buildTelemetryClientIdPageScript(
       form.appendChild(input);
     }
     input.value = id;
+    ensureLsFlag(form, hadLocalStorage);
   }
 
   document.querySelectorAll("form").forEach(ensureHiddenField);
