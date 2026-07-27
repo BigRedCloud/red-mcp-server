@@ -30,7 +30,16 @@ import {
   TELEMETRY_CLIENT_ID_FORM_FIELD,
   type RedTelemetryContext,
 } from "./identity.js";
-import { detectClientPlatform, resolveRedTelemetryEnvironment } from "./platform.js";
+import {
+  logPlatformDetectionDiagnostics,
+  resolveClientPlatform,
+  resolveRedTelemetryEnvironment,
+  storeSessionPlatform,
+  toPlatformDetectionDiagnostics,
+  type McpClientInfo,
+  type PlatformDetectionResult,
+  type RedClientPlatform,
+} from "./platform.js";
 
 export type TelemetryClientIdPathDiagnostics = {
   cookieClientIdPresent: boolean;
@@ -233,15 +242,27 @@ export function buildRequestTelemetryContext(args: {
   connectionSessionId?: string;
   connectedCompanyCount?: number;
   toolName?: string;
+  clientInfo?: McpClientInfo | null;
+  storedPlatform?: string | null;
+  /** When set, skips re-detection and uses this platform directly. */
+  clientPlatform?: RedClientPlatform;
 }): RedTelemetryContext {
   const headers =
     args.headers ??
     ((args.req?.headers ?? {}) as Record<string, string | string[] | undefined>);
 
+  const clientPlatform =
+    args.clientPlatform ??
+    resolveClientPlatform({
+      clientInfo: args.clientInfo,
+      storedPlatform: args.storedPlatform,
+      headers,
+    }).platform;
+
   return {
     telemetryClientId: args.telemetryClientId,
     connectionSessionId: args.connectionSessionId,
-    clientPlatform: detectClientPlatform(headers),
+    clientPlatform,
     environment: resolveRedTelemetryEnvironment(),
     connectedCompanyCount: args.connectedCompanyCount,
     toolName: args.toolName,
@@ -345,6 +366,7 @@ export type PreparedMcpTelemetry = {
   connectionId: string;
   context: RedTelemetryContext;
   diagnostics: RedTelemetryDiagnostics;
+  platformDetection: PlatformDetectionResult;
 };
 
 /**
@@ -353,7 +375,8 @@ export type PreparedMcpTelemetry = {
  * 2) restore company credentials into the session key store
  * 3) load stored connection telemetry
  * 4) count companies for the active connection
- * 5) build Red telemetry context
+ * 5) resolve client platform (clientInfo → stored session → headers → UA)
+ * 6) build Red telemetry context
  */
 export async function prepareMcpTelemetryContext(args: {
   sessionId: string;
@@ -363,6 +386,9 @@ export async function prepareMcpTelemetryContext(args: {
   headers?: Record<string, string | string[] | undefined>;
   toolName?: string;
   companyName?: string;
+  clientInfo?: McpClientInfo | null;
+  /** Platform restored from the MCP session (before telemetry context is built). */
+  storedPlatform?: string | null;
 }): Promise<PreparedMcpTelemetry> {
   await ensureConnectionStoreInitialized();
 
@@ -399,6 +425,22 @@ export async function prepareMcpTelemetryContext(args: {
     sourceStoreName,
   });
 
+  // Platform must be resolved after session rehydration supplies storedPlatform,
+  // and before the telemetry context is built.
+  const platformDetection = resolveClientPlatform({
+    clientInfo: args.clientInfo,
+    storedPlatform: args.storedPlatform,
+    headers: args.headers,
+  });
+
+  logPlatformDetectionDiagnostics(
+    toPlatformDetectionDiagnostics(platformDetection)
+  );
+
+  if (platformDetection.platform !== "unknown") {
+    storeSessionPlatform(args.sessionId, platformDetection.platform);
+  }
+
   const context = buildRequestTelemetryContext({
     headers: args.headers,
     connectionId: connectionId || undefined,
@@ -406,6 +448,7 @@ export async function prepareMcpTelemetryContext(args: {
     connectionSessionId: stored.connectionSessionId,
     connectedCompanyCount: companyCount,
     toolName: args.toolName,
+    clientPlatform: platformDetection.platform,
   });
 
   const diagnostics = buildRedTelemetryDiagnostics(context, {
@@ -418,6 +461,7 @@ export async function prepareMcpTelemetryContext(args: {
     connectionId,
     context,
     diagnostics,
+    platformDetection,
   };
 }
 

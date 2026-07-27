@@ -33,5 +33,11 @@ export {
 } from "./telemetry/identity.js";
 export {
   detectClientPlatform,
+  extractMcpInitializeClientInfo,
+  getStoredSessionPlatform,
+  matchPlatformFromText,
+  normalizeClientPlatform,
+  resolveClientPlatform,
   resolveRedTelemetryEnvironment,
+  storeSessionPlatform,
 } from "./telemetry/platform.js";

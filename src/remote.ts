@@ -45,6 +45,16 @@ import {
   prepareMcpTelemetryContext,
   resolveTelemetryClientIdFromRequest,
 } from "./telemetry/context.js";
+import {
+  clearSessionPlatform,
+  extractMcpInitializeClientInfo,
+  getStoredSessionPlatform,
+  logPlatformDetectionDiagnostics,
+  resolveClientPlatform,
+  storeSessionPlatform,
+  toPlatformDetectionDiagnostics,
+  type RedClientPlatform,
+} from "./telemetry/platform.js";
 
 import {
   completeConnectionCode,
@@ -118,6 +128,8 @@ interface Session {
   keyStore: Map<string, CompanyApiContext>;
   createdAt: number;
   lastSeenAt: number;
+  /** Detected AI platform from initialize / headers; survives later blank UAs. */
+  clientPlatform?: RedClientPlatform;
 }
 
 const sessions = new Map<string, Session>();
@@ -133,7 +145,39 @@ async function closeSession(sessionId: string, session: Session): Promise<void> 
   await session.transport.close().catch(() => {});
   await session.server.close().catch(() => {});
   unregisterHttpSessionKeyStore(sessionId);
+  clearSessionPlatform(sessionId);
   sessions.delete(sessionId);
+}
+
+function rememberSessionPlatform(
+  session: Session,
+  sessionId: string,
+  platform: RedClientPlatform | undefined
+): void {
+  if (!platform || platform === "unknown") {
+    return;
+  }
+
+  session.clientPlatform = platform;
+  storeSessionPlatform(sessionId, platform);
+}
+
+function restoreSessionPlatform(
+  session: Session,
+  sessionId: string
+): RedClientPlatform | undefined {
+  if (session.clientPlatform && session.clientPlatform !== "unknown") {
+    storeSessionPlatform(sessionId, session.clientPlatform);
+    return session.clientPlatform;
+  }
+
+  const stored = getStoredSessionPlatform(sessionId);
+  if (stored) {
+    session.clientPlatform = stored;
+    return stored;
+  }
+
+  return undefined;
 }
 
 function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiContext>): void {
@@ -149,10 +193,14 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
 
   transport.onclose = () => {
     unregisterHttpSessionKeyStore(sessionId);
+    // Keep stored platform so a later resume of the same MCP session id can
+    // restore it before telemetry context is built.
     sessions.delete(sessionId);
   };
 
   await server.connect(transport);
+
+  const clientPlatform = getStoredSessionPlatform(sessionId);
 
   return {
     server,
@@ -160,6 +208,7 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
     keyStore,
     createdAt: Date.now(),
     lastSeenAt: Date.now(),
+    clientPlatform,
   };
 }
 
@@ -189,7 +238,14 @@ async function handleMcpRequest(
   const clientKey = buildHttpClientKeyFromRequest(req);
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
 
-  const connectionRef = extractConnectionRefFromMcpBody(body ?? req.body);
+  const requestBody = body ?? req.body;
+  const connectionRef = extractConnectionRefFromMcpBody(requestBody);
+  const clientInfo = isInitializeRequest(requestBody)
+    ? extractMcpInitializeClientInfo(requestBody)
+    : undefined;
+
+  // Restore stored platform before telemetry context is created (rehydration).
+  const storedPlatform = restoreSessionPlatform(session, normalizedSessionId);
 
   // Ordered: resolve connection → restore companies → load telemetry → count → context
   const prepared = await prepareMcpTelemetryContext({
@@ -198,7 +254,15 @@ async function handleMcpRequest(
     clientKey,
     connectionRef,
     headers: req.headers as Record<string, string | string[] | undefined>,
+    clientInfo,
+    storedPlatform,
   });
+
+  rememberSessionPlatform(
+    session,
+    normalizedSessionId,
+    prepared.platformDetection.platform
+  );
 
   const scope = await prepareHttpToolSessionScope(
     normalizedSessionId,
@@ -627,6 +691,15 @@ app.post("/mcp", async (req: Request, res: Response) => {
     return;
   }
 
+  const initializeClientInfo = extractMcpInitializeClientInfo(req.body);
+  const initializePlatform = resolveClientPlatform({
+    clientInfo: initializeClientInfo,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+  });
+  logPlatformDetectionDiagnostics(
+    toPlatformDetectionDiagnostics(initializePlatform)
+  );
+
   const keyStore = new Map<string, CompanyApiContext>();
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
@@ -637,6 +710,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
     const sid = transport.sessionId;
     if (sid) {
       unregisterHttpSessionKeyStore(sid);
+      // Keep stored platform for same-session resume / rehydration.
       sessions.delete(sid);
     }
   };
@@ -649,12 +723,21 @@ app.post("/mcp", async (req: Request, res: Response) => {
     keyStore,
     createdAt: Date.now(),
     lastSeenAt: Date.now(),
+    clientPlatform:
+      initializePlatform.platform !== "unknown"
+        ? initializePlatform.platform
+        : undefined,
   };
 
   const sidAfterInit = transport.sessionId;
   if (sidAfterInit) {
     sessions.set(sidAfterInit, provisionalSession);
     trackHttpSession(sidAfterInit, keyStore);
+    rememberSessionPlatform(
+      provisionalSession,
+      sidAfterInit,
+      initializePlatform.platform
+    );
     await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
     return;
   }
@@ -667,6 +750,11 @@ app.post("/mcp", async (req: Request, res: Response) => {
   if (sid) {
     sessions.set(sid, provisionalSession);
     trackHttpSession(sid, keyStore);
+    rememberSessionPlatform(
+      provisionalSession,
+      sid,
+      initializePlatform.platform
+    );
     await ensureMcpSessionReady(sid, keyStore);
   }
 });

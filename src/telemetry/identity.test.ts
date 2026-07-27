@@ -172,7 +172,7 @@ test("telemetry dimensions are attached without sensitive fields", () => {
   const dims = buildTelemetryCustomDimensions({
     telemetryClientId: "550e8400-e29b-41d4-a716-446655440000",
     connectionSessionId: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-    clientPlatform: "vibe",
+    clientPlatform: "mistral",
     environment: "staging",
     connectedCompanyCount: 2,
     toolName: "brc_list_customers",
@@ -180,7 +180,7 @@ test("telemetry dimensions are attached without sensitive fields", () => {
 
   assert.equal(dims["red.telemetry_client_id"], "550e8400-e29b-41d4-a716-446655440000");
   assert.equal(dims["red.connection_session_id"], "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
-  assert.equal(dims["red.client_platform"], "vibe");
+  assert.equal(dims["red.client_platform"], "mistral");
   assert.equal(dims["red.environment"], "staging");
   assert.equal(dims["red.connected_company_count"], "2");
   assert.equal(dims["red.tool_name"], "brc_list_customers");
@@ -238,7 +238,7 @@ test("span processor swallows enrichment errors", () => {
 test("platform is set correctly where known", () => {
   assert.equal(
     detectClientPlatform({ "x-vibe-user-id": "abc" }),
-    "vibe"
+    "mistral"
   );
   assert.equal(
     detectClientPlatform({ "x-mistral-user-id": "abc" }),
@@ -252,9 +252,10 @@ test("platform is set correctly where known", () => {
     detectClientPlatform({ "user-agent": "claude-desktop" }),
     "claude"
   );
+  // Cursor is unsupported for customer platform telemetry.
   assert.equal(
     detectClientPlatform({ "user-agent": "Cursor/1.0" }),
-    "cursor"
+    "unknown"
   );
 });
 
@@ -296,7 +297,7 @@ test("buildRequestTelemetryContext stays free of secrets", () => {
     toolName: "brc_list_customers",
   });
   const dims = buildTelemetryCustomDimensions(ctx);
-  assert.equal(dims["red.client_platform"], "vibe");
+  assert.equal(dims["red.client_platform"], "mistral");
   assert.equal(dims["red.connected_company_count"], "3");
   assert.equal(/session/i.test(JSON.stringify(dims).replace(/connection_session/g, "")), false);
 });

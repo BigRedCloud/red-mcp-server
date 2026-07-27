@@ -24,6 +24,10 @@ import {
   activatePreparedTelemetry,
   prepareMcpTelemetryContext,
 } from "../telemetry/context.js";
+import {
+  getStoredSessionPlatform,
+  storeSessionPlatform,
+} from "../telemetry/platform.js";
 
 export const MCP_SESSION_HEADER_NAMES = [
   "mcp-session-id",
@@ -388,6 +392,9 @@ export async function runHttpToolSessionFromExtra<T>(
     string | string[] | undefined
   >;
 
+  // Restore platform before telemetry context so blank UAs keep the initialize result.
+  const storedPlatform = getStoredSessionPlatform(sessionId);
+
   const prepared = await prepareMcpTelemetryContext({
     sessionId,
     keyStore: store,
@@ -396,7 +403,12 @@ export async function runHttpToolSessionFromExtra<T>(
     headers,
     toolName: options?.toolName,
     companyName: options?.companyName,
+    storedPlatform,
   });
+
+  if (prepared.platformDetection.platform !== "unknown") {
+    storeSessionPlatform(sessionId, prepared.platformDetection.platform);
+  }
 
   const scope = await prepareHttpToolSessionScope(
     sessionId,
