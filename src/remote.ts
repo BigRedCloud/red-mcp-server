@@ -32,6 +32,32 @@ import {
   resolveMcpSessionIdFromRequest,
   runWithHttpToolSession,
 } from "./auth/mcp_http_session.js";
+import {
+  buildTelemetryClientIdSetCookie,
+  isValidTelemetryUuid,
+  runWithRedTelemetryContext,
+} from "./telemetry.js";
+import {
+  activatePreparedTelemetry,
+  buildConnectTelemetryFlowDiagnostics,
+  buildRequestTelemetryContext,
+  extractConnectionRefFromMcpBody,
+  logConnectTelemetryFlowDiagnostics,
+  logTelemetryClientIdPathDiagnostics,
+  prepareMcpTelemetryContext,
+  resolveAndPersistConnectTelemetryClientId,
+  resolveTelemetryClientIdFromRequest,
+} from "./telemetry/context.js";
+import {
+  clearSessionPlatform,
+  extractMcpInitializeClientInfo,
+  getStoredSessionPlatform,
+  logPlatformDetectionDiagnostics,
+  resolveClientPlatform,
+  storeSessionPlatform,
+  toPlatformDetectionDiagnostics,
+  type RedClientPlatform,
+} from "./telemetry/platform.js";
 
 import {
   completeConnectionCode,
@@ -40,6 +66,8 @@ import {
 import {
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  getConnectionStoreTargetName,
+  getDeploymentEnvironmentLabel,
 } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
@@ -55,6 +83,41 @@ import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.j
 import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
+import {
+  BRC_EDU_SYNC_SECRET_HEADER,
+  handleBrcEduResourcesSyncRequest,
+} from "./edu/brc_edu_synced_store.js";
+import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
+import {
+  downloadWebinarWorkbookForAdmin,
+  loadWebinarWorkbookForAdmin,
+  saveWebinarWorkbookForAdmin,
+  createConfiguredWorkbookBlobAccess,
+} from "./edu/brc_edu_workbook_store.js";
+import {
+  authorizeBrcEduAdminRequest,
+  BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE,
+  getBrcEduAdminProtectedPath,
+  type BrcEduAdminAuthResult,
+} from "./edu/brc_edu_admin_auth.js";
+import {
+  BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY,
+  BRC_EDU_UPLOAD_FIELD_NAME,
+  BRC_EDU_UPLOAD_MAX_BYTES,
+  createConfiguredBrcEduBlobUploader,
+  handleBrcEduResourceUpload,
+} from "./edu/brc_edu_upload_store.js";
+import {
+  renderBrcEduStaffDeniedPage,
+  renderBrcEduUploadErrorPage,
+  renderBrcEduUploadPage,
+  renderBrcEduUploadPlainError,
+  renderBrcEduUploadSuccessPage,
+  type BrcEduAdminPageAuth,
+  WORKBOOK_API_PATH,
+  WORKBOOK_DOWNLOAD_PATH,
+} from "./edu/brc_edu_upload_page.js";
+import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -68,6 +131,8 @@ interface Session {
   keyStore: Map<string, CompanyApiContext>;
   createdAt: number;
   lastSeenAt: number;
+  /** Detected AI platform from initialize / headers; survives later blank UAs. */
+  clientPlatform?: RedClientPlatform;
 }
 
 const sessions = new Map<string, Session>();
@@ -83,7 +148,39 @@ async function closeSession(sessionId: string, session: Session): Promise<void> 
   await session.transport.close().catch(() => {});
   await session.server.close().catch(() => {});
   unregisterHttpSessionKeyStore(sessionId);
+  clearSessionPlatform(sessionId);
   sessions.delete(sessionId);
+}
+
+function rememberSessionPlatform(
+  session: Session,
+  sessionId: string,
+  platform: RedClientPlatform | undefined
+): void {
+  if (!platform || platform === "unknown") {
+    return;
+  }
+
+  session.clientPlatform = platform;
+  storeSessionPlatform(sessionId, platform);
+}
+
+function restoreSessionPlatform(
+  session: Session,
+  sessionId: string
+): RedClientPlatform | undefined {
+  if (session.clientPlatform && session.clientPlatform !== "unknown") {
+    storeSessionPlatform(sessionId, session.clientPlatform);
+    return session.clientPlatform;
+  }
+
+  const stored = getStoredSessionPlatform(sessionId);
+  if (stored) {
+    session.clientPlatform = stored;
+    return stored;
+  }
+
+  return undefined;
 }
 
 function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiContext>): void {
@@ -99,10 +196,14 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
 
   transport.onclose = () => {
     unregisterHttpSessionKeyStore(sessionId);
+    // Keep stored platform so a later resume of the same MCP session id can
+    // restore it before telemetry context is built.
     sessions.delete(sessionId);
   };
 
   await server.connect(transport);
+
+  const clientPlatform = getStoredSessionPlatform(sessionId);
 
   return {
     server,
@@ -110,6 +211,7 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
     keyStore,
     createdAt: Date.now(),
     lastSeenAt: Date.now(),
+    clientPlatform,
   };
 }
 
@@ -139,36 +241,75 @@ async function handleMcpRequest(
   const clientKey = buildHttpClientKeyFromRequest(req);
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
 
+  const requestBody = body ?? req.body;
+  const connectionRef = extractConnectionRefFromMcpBody(requestBody);
+  const clientInfo = isInitializeRequest(requestBody)
+    ? extractMcpInitializeClientInfo(requestBody)
+    : undefined;
+
+  // Restore stored platform before telemetry context is created (rehydration).
+  const storedPlatform = restoreSessionPlatform(session, normalizedSessionId);
+
+  // Ordered: resolve connection → restore companies → load telemetry → count → context
+  const prepared = await prepareMcpTelemetryContext({
+    sessionId: normalizedSessionId,
+    keyStore: session.keyStore,
+    clientKey,
+    connectionRef,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    clientInfo,
+    storedPlatform,
+  });
+
+  rememberSessionPlatform(
+    session,
+    normalizedSessionId,
+    prepared.platformDetection.platform
+  );
+
   const scope = await prepareHttpToolSessionScope(
     normalizedSessionId,
     session.keyStore,
-    clientKey
+    clientKey,
+    connectionRef
   );
 
-  return runWithHttpToolSession(scope, async () => {
-    const companiesLoaded = Array.from(session.keyStore.values()).map(
-      (entry) => entry.companyName
-    );
+  // Prefer the prepared connection id when scope resolution lagged behind rehydration.
+  if (!scope.connectionId && prepared.connectionId) {
+    scope.connectionId = prepared.connectionId;
+  }
 
-    logMcpSessionDiagnostic(
-      buildMcpSessionDiagnostic({
-        transportSessionId: normalizedSessionId,
-        extra: {
-          requestInfo: {
-            headers: req.headers as Record<string, string | string[] | undefined>,
+  return runWithRedTelemetryContext(prepared.context, () => {
+    activatePreparedTelemetry(prepared);
+
+    return runWithHttpToolSession(scope, async () => {
+      const companiesLoaded = Array.from(session.keyStore.values()).map(
+        (entry) => entry.companyName
+      );
+
+      logMcpSessionDiagnostic(
+        buildMcpSessionDiagnostic({
+          transportSessionId: normalizedSessionId,
+          extra: {
+            requestInfo: {
+              headers: req.headers as Record<
+                string,
+                string | string[] | undefined
+              >,
+            },
           },
-        },
-        resolution: scope.resolution,
-        credentialCount: companiesLoaded.length,
-        companiesLoaded,
-      })
-    );
+          resolution: scope.resolution,
+          credentialCount: companiesLoaded.length,
+          companiesLoaded,
+        })
+      );
 
-    if (body !== undefined) {
-      await session.transport.handleRequest(req, res, body);
-    } else {
-      await session.transport.handleRequest(req, res);
-    }
+      if (body !== undefined) {
+        await session.transport.handleRequest(req, res, body);
+      } else {
+        await session.transport.handleRequest(req, res);
+      }
+    });
   });
 }
 
@@ -181,6 +322,66 @@ const upload = multer({
     fileSize: 1024 * 1024, // 1 MB
   },
 });
+
+const eduResourceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: BRC_EDU_UPLOAD_MAX_BYTES,
+  },
+});
+
+function getBrcEduAdminUploadSecretFromQuery(req: Request): string | undefined {
+  const secret = req.query[BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY];
+  if (Array.isArray(secret)) {
+    return typeof secret[0] === "string" ? secret[0] : undefined;
+  }
+
+  return typeof secret === "string" ? secret : undefined;
+}
+
+function authorizeBrcEduAdminHttpRequest(req: Request): BrcEduAdminAuthResult {
+  return authorizeBrcEduAdminRequest({
+    headers: req.headers,
+    providedSecret: getBrcEduAdminUploadSecretFromQuery(req),
+    returnPath: req.originalUrl || getBrcEduAdminProtectedPath(),
+  });
+}
+
+function brcEduAdminPageAuthFromResult(
+  authResult: Extract<BrcEduAdminAuthResult, { ok: true }>,
+  providedSecret: string | undefined,
+): BrcEduAdminPageAuth {
+  if (authResult.method === "secret" && providedSecret) {
+    return { mode: "secret", secret: providedSecret };
+  }
+
+  return { mode: "session" };
+}
+
+function sendBrcEduAdminAuthFailure(
+  res: Response,
+  authResult: Extract<BrcEduAdminAuthResult, { ok: false }>,
+  options: { asJson?: boolean } = {},
+): void {
+  if (authResult.redirectToLogin) {
+    res.redirect(302, authResult.redirectToLogin);
+    return;
+  }
+
+  if (options.asJson) {
+    res.status(authResult.status).json({ error: authResult.error });
+    return;
+  }
+
+  if (authResult.status === 403) {
+    res
+      .status(403)
+      .send(renderBrcEduStaffDeniedPage(authResult.error || BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE));
+    return;
+  }
+
+  res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+}
 
 type RateLimitBucket = {
   windowStartedAt: number;
@@ -262,6 +463,8 @@ app.get("/favicon.ico", (_req, res) => {
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+registerFreshdeskPublicImageRoute(app);
+
 function isInitializeRequest(body: unknown): boolean {
   if (Array.isArray(body)) {
     return body.some((msg) => msg?.method === "initialize");
@@ -319,6 +522,34 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   await ensureConnectionStoreInitialized();
 
   const code = String(req.body.code ?? "");
+  const pendingEarly = code ? await getPendingConnection(code) : null;
+
+  // Prefer connection-scoped seed so cookie-less Mistral POSTs do not mint a
+  // second fallback after GET already assigned one.
+  const resolvedClient = pendingEarly
+    ? await resolveAndPersistConnectTelemetryClientId({
+        connectionId: pendingEarly.connectionId,
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        body: req.body,
+      })
+    : resolveTelemetryClientIdFromRequest(req);
+
+  const telemetryClientId = resolvedClient.clientId;
+  const secureCookie = req.secure || req.protocol === "https";
+  res.setHeader(
+    "Set-Cookie",
+    buildTelemetryClientIdSetCookie(telemetryClientId, { secure: secureCookie })
+  );
+
+  const lsFlag = String(req.body.telemetryClientIdLsPresent ?? "");
+  logConnectTelemetryFlowDiagnostics(
+    buildConnectTelemetryFlowDiagnostics({
+      resolution: resolvedClient,
+      code,
+      req,
+      localStorageIdPresent: lsFlag === "1" || lsFlag === "true",
+    })
+  );
 
   let companies: UploadedCompanyCredential[] = [];
 
@@ -353,50 +584,107 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     return;
   }
 
-  try {
-    const outcome = await validateAndPersistConnectedCompanies({
-      connectionId: pending.connectionId,
-      companies,
-      expiresAt: Date.now() + getApiKeyExpirationMs(),
-    });
+  const pathDiagnostics = {
+    cookieClientIdPresent: resolvedClient.cookieClientIdPresent,
+    localStorageClientIdSubmitted: resolvedClient.postClientIdPresent,
+    postClientIdPresent: resolvedClient.postClientIdPresent,
+    postClientIdValid: resolvedClient.postClientIdValid,
+    saveTelemetryClientIdPresent: Boolean(telemetryClientId),
+    persistedTelemetryClientIdPresent: false,
+    loadedTelemetryClientIdPresent: false,
+  };
 
-    if (outcome.connectedCompanies.length === 0) {
-      const message =
-        outcome.failedCompanies.length > 0
-          ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
-          : "No companies could be connected because the submitted credentials could not be validated.";
+  try {
+    console.info(
+      "Red telemetry client id save:",
+      JSON.stringify({
+        telemetryClientIdPresent: Boolean(telemetryClientId),
+        telemetryClientIdValid: isValidTelemetryUuid(telemetryClientId),
+        fallbackGenerated: resolvedClient.fallbackGenerated,
+        source: resolvedClient.source,
+        targetEnvironment: getDeploymentEnvironmentLabel(),
+        targetStoreName: getConnectionStoreTargetName(),
+      })
+    );
+  } catch {
+    // ignore
+  }
+
+  // Persist client id as soon as the pending code is claimed, before credential
+  // validation, so a later session-id write cannot be the first (partial) upsert.
+  try {
+    await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
+      telemetryClientId,
+    });
+    const persisted = await getConnectionStore().getConnectionTelemetry(
+      pending.connectionId
+    );
+    pathDiagnostics.persistedTelemetryClientIdPresent = Boolean(
+      persisted?.telemetryClientId
+    );
+    pathDiagnostics.loadedTelemetryClientIdPresent =
+      pathDiagnostics.persistedTelemetryClientIdPresent;
+  } catch (error) {
+    console.error(
+      "Red telemetry: failed to store telemetry client id:",
+      error instanceof Error ? error.message : error
+    );
+  }
+  logTelemetryClientIdPathDiagnostics(pathDiagnostics);
+
+  const telemetryContext = buildRequestTelemetryContext({
+    req,
+    connectionId: pending.connectionId,
+    telemetryClientId,
+    connectedCompanyCount: companies.length,
+  });
+
+  return runWithRedTelemetryContext(telemetryContext, async () => {
+    try {
+      const outcome = await validateAndPersistConnectedCompanies({
+        connectionId: pending.connectionId,
+        companies,
+        expiresAt: Date.now() + getApiKeyExpirationMs(),
+      });
+
+      if (outcome.connectedCompanies.length === 0) {
+        const message =
+          outcome.failedCompanies.length > 0
+            ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+            : "No companies could be connected because the submitted credentials could not be validated.";
+
+        res.status(400).send(renderConnectionFailedPage(message));
+        return;
+      }
+
+      for (const session of sessions.values()) {
+        const sessionId = session.transport.sessionId;
+        if (!sessionId) continue;
+
+        const boundConnectionId =
+          await getConnectionStore().getConnectionIdForSession(sessionId);
+
+        if (boundConnectionId === pending.connectionId) {
+          await reloadSessionCredentialsFromConnectionStore(
+            sessionId,
+            pending.connectionId
+          );
+        }
+      }
+
+      res.send(
+        renderSuccessPage(
+          outcome.connectedCompanies,
+          code,
+          outcome.failedCompanies
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
 
       res.status(400).send(renderConnectionFailedPage(message));
-      return;
     }
-
-    for (const session of sessions.values()) {
-      const sessionId = session.transport.sessionId;
-      if (!sessionId) continue;
-
-      const boundConnectionId =
-        await getConnectionStore().getConnectionIdForSession(sessionId);
-
-      if (boundConnectionId === pending.connectionId) {
-        await reloadSessionCredentialsFromConnectionStore(
-          sessionId,
-          pending.connectionId
-        );
-      }
-    }
-
-    res.send(
-      renderSuccessPage(
-        outcome.connectedCompanies,
-        code,
-        outcome.failedCompanies
-      )
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-
-    res.status(400).send(renderConnectionFailedPage(message));
-  }
+  });
 });
 
 app.post("/mcp", async (req: Request, res: Response) => {
@@ -429,6 +717,15 @@ app.post("/mcp", async (req: Request, res: Response) => {
     return;
   }
 
+  const initializeClientInfo = extractMcpInitializeClientInfo(req.body);
+  const initializePlatform = resolveClientPlatform({
+    clientInfo: initializeClientInfo,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+  });
+  logPlatformDetectionDiagnostics(
+    toPlatformDetectionDiagnostics(initializePlatform)
+  );
+
   const keyStore = new Map<string, CompanyApiContext>();
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
@@ -439,6 +736,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
     const sid = transport.sessionId;
     if (sid) {
       unregisterHttpSessionKeyStore(sid);
+      // Keep stored platform for same-session resume / rehydration.
       sessions.delete(sid);
     }
   };
@@ -451,12 +749,21 @@ app.post("/mcp", async (req: Request, res: Response) => {
     keyStore,
     createdAt: Date.now(),
     lastSeenAt: Date.now(),
+    clientPlatform:
+      initializePlatform.platform !== "unknown"
+        ? initializePlatform.platform
+        : undefined,
   };
 
   const sidAfterInit = transport.sessionId;
   if (sidAfterInit) {
     sessions.set(sidAfterInit, provisionalSession);
     trackHttpSession(sidAfterInit, keyStore);
+    rememberSessionPlatform(
+      provisionalSession,
+      sidAfterInit,
+      initializePlatform.platform
+    );
     await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
     return;
   }
@@ -469,6 +776,11 @@ app.post("/mcp", async (req: Request, res: Response) => {
   if (sid) {
     sessions.set(sid, provisionalSession);
     trackHttpSession(sid, keyStore);
+    rememberSessionPlatform(
+      provisionalSession,
+      sid,
+      initializePlatform.platform
+    );
     await ensureMcpSessionReady(sid, keyStore);
   }
 });
@@ -486,7 +798,38 @@ app.get("/connect", async (req, res) => {
     return;
   }
 
-  res.send(renderConnectPage(code));
+  // Persist on first GET so duplicate cookie-less opens (Mistral webview /
+  // link previews) reuse one canonical id instead of minting another fallback.
+  const resolvedClient = await resolveAndPersistConnectTelemetryClientId({
+    connectionId: pending.connectionId,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    body: undefined,
+  });
+  const clientId = resolvedClient.clientId;
+  const secureCookie = req.secure || req.protocol === "https";
+  res.setHeader(
+    "Set-Cookie",
+    buildTelemetryClientIdSetCookie(clientId, { secure: secureCookie })
+  );
+
+  logConnectTelemetryFlowDiagnostics(
+    buildConnectTelemetryFlowDiagnostics({
+      resolution: resolvedClient,
+      code,
+      req,
+      localStorageIdPresent: false,
+    })
+  );
+
+  const telemetryContext = buildRequestTelemetryContext({
+    req,
+    connectionId: pending.connectionId,
+    telemetryClientId: clientId,
+  });
+
+  return runWithRedTelemetryContext(telemetryContext, () => {
+    res.send(renderConnectPage(code, { telemetryClientId: clientId }));
+  });
 });
 
 
@@ -514,6 +857,196 @@ app.get("/mcp", async (req: Request, res: Response) => {
     jsonrpc: "2.0",
     error: { code: -32000, message: "Bad Request: No valid session for GET." },
     id: null,
+  });
+});
+
+app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret) ? requestSecret[0] : requestSecret;
+  const result = handleBrcEduResourcesSyncRequest(req.body, normalizedSecret);
+
+  if (result.status === 200) {
+    invalidateEduResourcesCache();
+  }
+
+  res.status(result.status).json(result.body);
+});
+
+app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult);
+    return;
+  }
+
+  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
+  res.send(renderBrcEduUploadPage(pageAuth));
+});
+
+app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await loadWebinarWorkbookForAdmin(createConfiguredWorkbookBlobAccess());
+
+  if (!result.ok) {
+    if (result.status === 404) {
+      res.status(200).json({
+        rows: [],
+        etag: "",
+        lastModified: "",
+        rowCount: 0,
+      });
+      return;
+    }
+
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.payload);
+});
+
+app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await downloadWebinarWorkbookForAdmin(
+    createConfiguredWorkbookBlobAccess(),
+  );
+
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="webinar_video_routing_index.xlsx"',
+  );
+  res.send(result.buffer);
+});
+
+app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const body = req.body as {
+    rows?: unknown;
+    ifMatch?: unknown;
+  };
+
+  const rows = Array.isArray(body?.rows) ? body.rows : null;
+  if (!rows) {
+    res.status(400).json({ error: "Workbook rows are required." });
+    return;
+  }
+
+  const result = await saveWebinarWorkbookForAdmin(
+    {
+      rows,
+      ifMatch: typeof body?.ifMatch === "string" ? body.ifMatch : undefined,
+    },
+    createConfiguredWorkbookBlobAccess(),
+  );
+
+  if (!result.ok) {
+    res.status(result.status).json({
+      error: result.error,
+      errors: result.errors,
+    });
+    return;
+  }
+
+  invalidateEduResourcesCache();
+
+  res.json({
+    rows,
+    etag: result.etag,
+    lastModified: result.lastModified,
+    rowCount: result.rowCount,
+    latestBlob: result.latestBlob,
+    archiveBlob: result.archiveBlob,
+    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+  });
+});
+
+app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult);
+    return;
+  }
+
+  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
+
+  eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
+    void (async () => {
+      if (uploadError) {
+        const message =
+          uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE"
+            ? "File exceeds the maximum size of 5 MB."
+            : "Upload failed.";
+
+        res.status(400).send(renderBrcEduUploadErrorPage(message, pageAuth));
+        return;
+      }
+
+      const file = req.file
+        ? {
+            buffer: req.file.buffer,
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size,
+          }
+        : undefined;
+
+      const uploadResult = await handleBrcEduResourceUpload(
+        file,
+        createConfiguredBrcEduBlobUploader(),
+      );
+
+      if (!uploadResult.ok) {
+        res
+          .status(uploadResult.status)
+          .send(renderBrcEduUploadErrorPage(uploadResult.error, pageAuth));
+        return;
+      }
+
+      invalidateEduResourcesCache();
+
+      res.send(
+        renderBrcEduUploadSuccessPage(
+          uploadResult.latestBlob,
+          uploadResult.archiveBlob,
+          pageAuth,
+        ),
+      );
+    })().catch(() => {
+      if (!res.headersSent) {
+        res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", pageAuth));
+      }
+    });
   });
 });
 

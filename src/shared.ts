@@ -9,15 +9,13 @@ import {
   persistCompanyCredentialToConnectionStore,
 } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
-import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE, resolveConnectionIdFromRef } from "./auth/connection_ref.js";
 import {
   CompanyNotConnectedError,
   buildCompanyCredentialInvalidResponse,
   buildCompanyNotConnectedResponse,
 } from "./auth/company_connection_errors.js";
 import {
-  evaluateBrcCredentialResponse,
-  isBrcCredentialHttpFailure,
   responseBodyIndicatesInvalidCredential,
 } from "./auth/credential_validation.js";
 import {
@@ -603,8 +601,16 @@ export async function getCredentialForCompanyAsync(
   await ensureCredentialsForCurrentSession(companyName);
 
   const credential = companyCredentialProvider.getCredential(companyName);
-  if (!credential && getActiveConnectionRef()) {
-    throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+  if (!credential) {
+    const activeRef = getActiveConnectionRef();
+    if (activeRef) {
+      // Only say "invalid/expired" when the ref itself cannot be resolved.
+      // A resolved ref with no loaded company must not destroy the handoff story.
+      const connectionId = await resolveConnectionIdFromRef(activeRef);
+      if (!connectionId) {
+        throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+      }
+    }
   }
 
   return getCredentialForCompany(companyName);
@@ -1287,10 +1293,11 @@ export async function brcFetch(
   const text = await response.text();
 
   if (!response.ok) {
+    // Only remove stored credentials on confirmed authentication failures.
+    // 403/404/422/500 and other non-auth errors must preserve the connection.
     const credentialFailure =
-      isBrcCredentialHttpFailure(response.status) ||
-      responseBodyIndicatesInvalidCredential(text) ||
-      !evaluateBrcCredentialResponse(response.status, text).valid;
+      response.status === 401 ||
+      responseBodyIndicatesInvalidCredential(text);
 
     if (credentialFailure) {
       await invalidateCompanyCredential(companyName);

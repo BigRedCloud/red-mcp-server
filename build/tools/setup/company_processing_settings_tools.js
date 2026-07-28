@@ -65,6 +65,9 @@ export function registerCompanyProcessingSettingsTools(server) {
         "Checks BRC company processing settings before a VAT-sensitive or",
         "payment-terms-sensitive transaction workflow.",
         "Returns warnings that should be shown before creating or changing records.",
+        "Use this for one workflow (sales invoice, purchase, cash receipt, or statement).",
+        "For overall company readiness (connection, financial year, Sales VAT, Sales Analysis, reference data),",
+        "use brc_company_readiness_check instead.",
     ].join(" "), {
         companyName: companyNameSchema,
         workflow: z

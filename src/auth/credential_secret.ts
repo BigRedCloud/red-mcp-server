@@ -5,10 +5,12 @@ import {
   encryptCredentialSecret,
 } from "./credential_encryption.js";
 
-/** Encodes an API key for storage (encrypt when configured, else dev memory encoding). */
+/** Encodes an API key for storage (encrypt when persistent storage is configured). */
 export function encodeStoredApiKey(apiKey: string): string {
-  const encryptionKey = process.env.RED_CONNECT_ENCRYPTION_KEY?.trim();
-  if (encryptionKey) {
+  const encryptionMaterial =
+    process.env.RED_CONNECT_ENCRYPTION_KEY?.trim() ||
+    process.env.RED_CONNECT_COSMOS_CONNECTION_STRING?.trim();
+  if (encryptionMaterial) {
     return `enc:${encryptCredentialSecret(apiKey)}`;
   }
 

@@ -11,6 +11,8 @@ import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
+import { buildTelemetryClientIdSetCookie, runWithRedTelemetryContext, } from "./telemetry.js";
+import { activatePreparedTelemetry, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, prepareMcpTelemetryContext, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
@@ -19,6 +21,13 @@ import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.j
 import multer from "multer";
 import { parse } from "csv-parse/sync";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
+import { BRC_EDU_SYNC_SECRET_HEADER, handleBrcEduResourcesSyncRequest, } from "./edu/brc_edu_synced_store.js";
+import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
+import { downloadWebinarWorkbookForAdmin, loadWebinarWorkbookForAdmin, saveWebinarWorkbookForAdmin, createConfiguredWorkbookBlobAccess, } from "./edu/brc_edu_workbook_store.js";
+import { authorizeBrcEduAdminRequest, BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE, getBrcEduAdminProtectedPath, } from "./edu/brc_edu_admin_auth.js";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY, BRC_EDU_UPLOAD_FIELD_NAME, BRC_EDU_UPLOAD_MAX_BYTES, createConfiguredBrcEduBlobUploader, handleBrcEduResourceUpload, } from "./edu/brc_edu_upload_store.js";
+import { renderBrcEduStaffDeniedPage, renderBrcEduUploadErrorPage, renderBrcEduUploadPage, renderBrcEduUploadPlainError, renderBrcEduUploadSuccessPage, WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH, } from "./edu/brc_edu_upload_page.js";
+import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -75,26 +84,42 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
     const clientKey = buildHttpClientKeyFromRequest(req);
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
-    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey);
-    return runWithHttpToolSession(scope, async () => {
-        const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
-        logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
-            transportSessionId: normalizedSessionId,
-            extra: {
-                requestInfo: {
-                    headers: req.headers,
+    const connectionRef = extractConnectionRefFromMcpBody(body ?? req.body);
+    // Ordered: resolve connection → restore companies → load telemetry → count → context
+    const prepared = await prepareMcpTelemetryContext({
+        sessionId: normalizedSessionId,
+        keyStore: session.keyStore,
+        clientKey,
+        connectionRef,
+        headers: req.headers,
+    });
+    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey, connectionRef);
+    // Prefer the prepared connection id when scope resolution lagged behind rehydration.
+    if (!scope.connectionId && prepared.connectionId) {
+        scope.connectionId = prepared.connectionId;
+    }
+    return runWithRedTelemetryContext(prepared.context, () => {
+        activatePreparedTelemetry(prepared);
+        return runWithHttpToolSession(scope, async () => {
+            const companiesLoaded = Array.from(session.keyStore.values()).map((entry) => entry.companyName);
+            logMcpSessionDiagnostic(buildMcpSessionDiagnostic({
+                transportSessionId: normalizedSessionId,
+                extra: {
+                    requestInfo: {
+                        headers: req.headers,
+                    },
                 },
-            },
-            resolution: scope.resolution,
-            credentialCount: companiesLoaded.length,
-            companiesLoaded,
-        }));
-        if (body !== undefined) {
-            await session.transport.handleRequest(req, res, body);
-        }
-        else {
-            await session.transport.handleRequest(req, res);
-        }
+                resolution: scope.resolution,
+                credentialCount: companiesLoaded.length,
+                companiesLoaded,
+            }));
+            if (body !== undefined) {
+                await session.transport.handleRequest(req, res, body);
+            }
+            else {
+                await session.transport.handleRequest(req, res);
+            }
+        });
     });
 }
 const app = createMcpExpressApp({ host: "0.0.0.0" });
@@ -105,6 +130,49 @@ const upload = multer({
         fileSize: 1024 * 1024, // 1 MB
     },
 });
+const eduResourceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: BRC_EDU_UPLOAD_MAX_BYTES,
+    },
+});
+function getBrcEduAdminUploadSecretFromQuery(req) {
+    const secret = req.query[BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY];
+    if (Array.isArray(secret)) {
+        return typeof secret[0] === "string" ? secret[0] : undefined;
+    }
+    return typeof secret === "string" ? secret : undefined;
+}
+function authorizeBrcEduAdminHttpRequest(req) {
+    return authorizeBrcEduAdminRequest({
+        headers: req.headers,
+        providedSecret: getBrcEduAdminUploadSecretFromQuery(req),
+        returnPath: req.originalUrl || getBrcEduAdminProtectedPath(),
+    });
+}
+function brcEduAdminPageAuthFromResult(authResult, providedSecret) {
+    if (authResult.method === "secret" && providedSecret) {
+        return { mode: "secret", secret: providedSecret };
+    }
+    return { mode: "session" };
+}
+function sendBrcEduAdminAuthFailure(res, authResult, options = {}) {
+    if (authResult.redirectToLogin) {
+        res.redirect(302, authResult.redirectToLogin);
+        return;
+    }
+    if (options.asJson) {
+        res.status(authResult.status).json({ error: authResult.error });
+        return;
+    }
+    if (authResult.status === 403) {
+        res
+            .status(403)
+            .send(renderBrcEduStaffDeniedPage(authResult.error || BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE));
+        return;
+    }
+    res.status(authResult.status).send(renderBrcEduUploadPlainError(authResult.error));
+}
 const rateLimitBuckets = new Map();
 function getClientIp(req) {
     const forwardedFor = req.headers["x-forwarded-for"];
@@ -161,6 +229,7 @@ app.get("/favicon.ico", (_req, res) => {
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+registerFreshdeskPublicImageRoute(app);
 function isInitializeRequest(body) {
     if (Array.isArray(body)) {
         return body.some((msg) => msg?.method === "initialize");
@@ -202,6 +271,9 @@ function parseCompanyCsv(buffer) {
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
     await ensureConnectionStoreInitialized();
     const code = String(req.body.code ?? "");
+    const { clientId: telemetryClientId } = resolveTelemetryClientIdFromRequest(req);
+    const secureCookie = req.secure || req.protocol === "https";
+    res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(telemetryClientId, { secure: secureCookie }));
     let companies = [];
     if (req.file?.buffer) {
         companies = parseCompanyCsv(req.file.buffer);
@@ -229,34 +301,50 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
-    try {
-        const outcome = await validateAndPersistConnectedCompanies({
-            connectionId: pending.connectionId,
-            companies,
-            expiresAt: Date.now() + getApiKeyExpirationMs(),
-        });
-        if (outcome.connectedCompanies.length === 0) {
-            const message = outcome.failedCompanies.length > 0
-                ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
-                : "No companies could be connected because the submitted credentials could not be validated.";
-            res.status(400).send(renderConnectionFailedPage(message));
-            return;
-        }
-        for (const session of sessions.values()) {
-            const sessionId = session.transport.sessionId;
-            if (!sessionId)
-                continue;
-            const boundConnectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
-            if (boundConnectionId === pending.connectionId) {
-                await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
+    const telemetryContext = buildRequestTelemetryContext({
+        req,
+        connectionId: pending.connectionId,
+        telemetryClientId,
+        connectedCompanyCount: companies.length,
+    });
+    return runWithRedTelemetryContext(telemetryContext, async () => {
+        try {
+            const outcome = await validateAndPersistConnectedCompanies({
+                connectionId: pending.connectionId,
+                companies,
+                expiresAt: Date.now() + getApiKeyExpirationMs(),
+            });
+            try {
+                await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
+                    telemetryClientId,
+                });
             }
+            catch (error) {
+                console.error("Red telemetry: failed to store telemetry client id:", error instanceof Error ? error.message : error);
+            }
+            if (outcome.connectedCompanies.length === 0) {
+                const message = outcome.failedCompanies.length > 0
+                    ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
+                    : "No companies could be connected because the submitted credentials could not be validated.";
+                res.status(400).send(renderConnectionFailedPage(message));
+                return;
+            }
+            for (const session of sessions.values()) {
+                const sessionId = session.transport.sessionId;
+                if (!sessionId)
+                    continue;
+                const boundConnectionId = await getConnectionStore().getConnectionIdForSession(sessionId);
+                if (boundConnectionId === pending.connectionId) {
+                    await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
+                }
+            }
+            res.send(renderSuccessPage(outcome.connectedCompanies, code, outcome.failedCompanies));
         }
-        res.send(renderSuccessPage(outcome.connectedCompanies, code, outcome.failedCompanies));
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        res.status(400).send(renderConnectionFailedPage(message));
-    }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            res.status(400).send(renderConnectionFailedPage(message));
+        }
+    });
 });
 app.post("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();
@@ -328,7 +416,17 @@ app.get("/connect", async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
-    res.send(renderConnectPage(code));
+    const { clientId } = resolveTelemetryClientIdFromRequest(req);
+    const secureCookie = req.secure || req.protocol === "https";
+    res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(clientId, { secure: secureCookie }));
+    const telemetryContext = buildRequestTelemetryContext({
+        req,
+        connectionId: pending.connectionId,
+        telemetryClientId: clientId,
+    });
+    return runWithRedTelemetryContext(telemetryContext, () => {
+        res.send(renderConnectPage(code));
+    });
 });
 app.get("/mcp", async (req, res) => {
     await ensureConnectionStoreInitialized();
@@ -351,6 +449,137 @@ app.get("/mcp", async (req, res) => {
         jsonrpc: "2.0",
         error: { code: -32000, message: "Bad Request: No valid session for GET." },
         id: null,
+    });
+});
+app.post("/internal/brc-edu/resources/sync", (req, res) => {
+    const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+    const normalizedSecret = Array.isArray(requestSecret) ? requestSecret[0] : requestSecret;
+    const result = handleBrcEduResourcesSyncRequest(req.body, normalizedSecret);
+    if (result.status === 200) {
+        invalidateEduResourcesCache();
+    }
+    res.status(result.status).json(result.body);
+});
+app.get("/internal/brc-edu/resources/upload", (req, res) => {
+    const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult);
+        return;
+    }
+    const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
+    res.send(renderBrcEduUploadPage(pageAuth));
+});
+app.get(WORKBOOK_API_PATH, async (req, res) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const result = await loadWebinarWorkbookForAdmin(createConfiguredWorkbookBlobAccess());
+    if (!result.ok) {
+        if (result.status === 404) {
+            res.status(200).json({
+                rows: [],
+                etag: "",
+                lastModified: "",
+                rowCount: 0,
+            });
+            return;
+        }
+        res.status(result.status).json({ error: result.error });
+        return;
+    }
+    res.json(result.payload);
+});
+app.get(WORKBOOK_DOWNLOAD_PATH, async (req, res) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const result = await downloadWebinarWorkbookForAdmin(createConfiguredWorkbookBlobAccess());
+    if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+    }
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="webinar_video_routing_index.xlsx"');
+    res.send(result.buffer);
+});
+app.put(WORKBOOK_API_PATH, async (req, res) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const body = req.body;
+    const rows = Array.isArray(body?.rows) ? body.rows : null;
+    if (!rows) {
+        res.status(400).json({ error: "Workbook rows are required." });
+        return;
+    }
+    const result = await saveWebinarWorkbookForAdmin({
+        rows,
+        ifMatch: typeof body?.ifMatch === "string" ? body.ifMatch : undefined,
+    }, createConfiguredWorkbookBlobAccess());
+    if (!result.ok) {
+        res.status(result.status).json({
+            error: result.error,
+            errors: result.errors,
+        });
+        return;
+    }
+    invalidateEduResourcesCache();
+    res.json({
+        rows,
+        etag: result.etag,
+        lastModified: result.lastModified,
+        rowCount: result.rowCount,
+        latestBlob: result.latestBlob,
+        archiveBlob: result.archiveBlob,
+        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+    });
+});
+app.post("/internal/brc-edu/resources/upload", (req, res) => {
+    const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult);
+        return;
+    }
+    const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
+    eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
+        void (async () => {
+            if (uploadError) {
+                const message = uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE"
+                    ? "File exceeds the maximum size of 5 MB."
+                    : "Upload failed.";
+                res.status(400).send(renderBrcEduUploadErrorPage(message, pageAuth));
+                return;
+            }
+            const file = req.file
+                ? {
+                    buffer: req.file.buffer,
+                    originalname: req.file.originalname,
+                    mimetype: req.file.mimetype,
+                    size: req.file.size,
+                }
+                : undefined;
+            const uploadResult = await handleBrcEduResourceUpload(file, createConfiguredBrcEduBlobUploader());
+            if (!uploadResult.ok) {
+                res
+                    .status(uploadResult.status)
+                    .send(renderBrcEduUploadErrorPage(uploadResult.error, pageAuth));
+                return;
+            }
+            invalidateEduResourcesCache();
+            res.send(renderBrcEduUploadSuccessPage(uploadResult.latestBlob, uploadResult.archiveBlob, pageAuth));
+        })().catch(() => {
+            if (!res.headersSent) {
+                res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", pageAuth));
+            }
+        });
     });
 });
 app.delete("/mcp", async (req, res) => {

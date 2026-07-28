@@ -10,6 +10,11 @@ import {
     type JsonRecord,
   }  from "../../shared.js";
   import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, resolveSalesInvoiceVatTypeId, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
+  import {
+    buildSalesInvoiceGenRefValidationFailureBody,
+    generatedReferenceSalesInvoicePayloadObjectSchema,
+    validateGeneratedReferenceSalesInvoicePayload,
+  } from "./sales_invoice_payload_schemas.js";
 
   import {
     getTransactionSafetyWarnings,
@@ -18,6 +23,132 @@ import {
   import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
   import { enforceSalesVatCategoryOrThrow } from "../../guards/sales_vat_category.js";
   import { resolveCustomerVatType } from "../../guards/customer_vat_type.js";
+  import { runWithActiveConnectionRef } from "../../shared.js";
+  import { extractConnectionRefFromToolArgs } from "../../auth/connection_ref.js";
+
+  export type CreateSalesInvoiceGenRefDeps = {
+    brcJsonRequest: typeof brcJsonRequest;
+    resolveCustomerVatType: typeof resolveCustomerVatType;
+    loadAndEnforceTransactionSettings: typeof loadAndEnforceTransactionSettings;
+    loadAndEnforceReferenceSettings: typeof loadAndEnforceReferenceSettings;
+    enforceSalesVatCategoryOrThrow: typeof enforceSalesVatCategoryOrThrow;
+  };
+
+  const defaultCreateSalesInvoiceGenRefDeps: CreateSalesInvoiceGenRefDeps = {
+    brcJsonRequest,
+    resolveCustomerVatType,
+    loadAndEnforceTransactionSettings,
+    loadAndEnforceReferenceSettings,
+    enforceSalesVatCategoryOrThrow,
+  };
+
+  /**
+   * Core handler for brc_create_sales_invoice_gen_ref. Exported for unit tests
+   * so brcJsonRequest can be stubbed when payload validation fails.
+   *
+   * Never throws for payload validation failures — returns an MCP jsonResponse
+   * with valid:false and field errors so the connector does not surface a
+   * generic "server isn't responding" failure.
+   */
+  export async function createSalesInvoiceWithGeneratingReference(
+    args: {
+      companyName: string;
+      payload: Record<string, unknown>;
+      priceBasis?: "net" | "gross";
+      confirmCrAnalysisCategory?: boolean;
+      connectionRef?: string;
+    },
+    deps: CreateSalesInvoiceGenRefDeps = defaultCreateSalesInvoiceGenRefDeps
+  ) {
+    const { companyName, payload, priceBasis, confirmCrAnalysisCategory } = args;
+    const connectionRef = args.connectionRef?.trim() || undefined;
+
+    const run = async () => {
+    try {
+      const finalPayload = applySalesPriceBasisToRawPayload(payload, priceBasis);
+
+      const validation = validateGeneratedReferenceSalesInvoicePayload(finalPayload);
+      if (!validation.valid) {
+        return jsonResponse(
+          buildSalesInvoiceGenRefValidationFailureBody(companyName, validation.errors)
+        );
+      }
+
+      // Default the invoice VAT type from the selected customer (BRC manual
+      // entry behaviour) only when the raw payload did not already supply a
+      // valid vatTypeId. An explicit vatTypeId in the payload is respected. VAT
+      // rate / percentage selection is unchanged.
+      const existingVatTypeId = Number(finalPayload.vatTypeId);
+      if (!(Number.isFinite(existingVatTypeId) && existingVatTypeId > 0)) {
+        const customerVatType = await deps.resolveCustomerVatType(
+          String(companyName),
+          finalPayload.customerId as number | string | undefined
+        );
+        finalPayload.vatTypeId = resolveSalesInvoiceVatTypeId(customerVatType);
+      }
+
+      requireSalesRepInPayload(finalPayload);
+      enforceSalesProductLineProductIdOrThrow(finalPayload);
+      await deps.enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
+      enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
+        confirmCrAnalysisCategory,
+      });
+
+      const processingSettings = await deps.loadAndEnforceTransactionSettings(
+        String(companyName),
+        "sales_invoice",
+        finalPayload,
+        { priceBasis }
+      );
+      const { warnings: referenceWarnings } =
+        await deps.loadAndEnforceReferenceSettings(
+          String(companyName),
+          "sales_invoice",
+          finalPayload,
+          "generated"
+        );
+
+      const settingsWarnings = [
+        ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
+        ...referenceWarnings,
+      ];
+
+      const response = await deps.brcJsonRequest(
+        companyName,
+        "POST",
+        "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
+        finalPayload
+      );
+
+      return jsonResponse({
+        message: "Sales invoice created with generated reference.",
+        companyName,
+        payloadSent: finalPayload,
+        settingsWarnings:
+          settingsWarnings.length > 0 ? settingsWarnings : undefined,
+        response,
+      });
+    } catch (error) {
+      return jsonResponse({
+        message: "Error creating sales invoice with generated reference.",
+        companyName,
+        valid: false,
+        errors: [
+          {
+            field: "(root)",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    };
+
+    if (connectionRef) {
+      return runWithActiveConnectionRef(connectionRef, run);
+    }
+    return run();
+  }
 
   export function registerSalesEntryInvoiceTools(server:ServerType){
 // Sales entry tools ----------------------------------------------------------
@@ -194,9 +325,13 @@ server.tool(
     `Creates a BRC sales invoice with an auto-generated reference using a raw BRC payload. Use when the company is configured for auto-generated sales references. Previews before posting include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. Nothing is written to Big Red Cloud until you confirm. In the raw payload, the BRC "Note" field (JSON \`note\`) defaults to the customer name (BRC customer "Name" / JSON \`name\`) when omitted and must never be set to the product name; the BRC "Delivery To" address (JSON \`deliveryTo\`) is only included when explicitly provided. ${SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION} ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`,
     {
       companyName: companyNameSchema,
-      payload: z
-        .record(z.string(), z.unknown())
-        .describe(SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION),
+      // Structural schema documents BRC fields for the model. Cross-field
+      // reconciliation runs via safeParse after applySalesPriceBasisToRawPayload
+      // so priceBasis can set useTaxInclusiveUnitPrice before those checks, and
+      // so validation failures return a structured valid:false response.
+      payload: generatedReferenceSalesInvoicePayloadObjectSchema.describe(
+        SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION
+      ),
       priceBasis: z
         .enum(["net", "gross"])
         .optional()
@@ -208,66 +343,16 @@ server.tool(
           "Set true only after the user confirms a CR sales analysis account code is intentional for this product line."
         ),
     },
-    async ({ companyName, payload, priceBasis, confirmCrAnalysisCategory }) => {
-      const finalPayload = applySalesPriceBasisToRawPayload(
-        payload as Record<string, unknown>,
-        priceBasis
-      );
-
-      // Default the invoice VAT type from the selected customer (BRC manual
-      // entry behaviour) only when the raw payload did not already supply a
-      // valid vatTypeId. An explicit vatTypeId in the payload is respected. VAT
-      // rate / percentage selection is unchanged.
-      const existingVatTypeId = Number(finalPayload.vatTypeId);
-      if (!(Number.isFinite(existingVatTypeId) && existingVatTypeId > 0)) {
-        const customerVatType = await resolveCustomerVatType(
-          String(companyName),
-          finalPayload.customerId as number | string | undefined
-        );
-        finalPayload.vatTypeId = resolveSalesInvoiceVatTypeId(customerVatType);
-      }
-
-      requireSalesRepInPayload(finalPayload);
-      enforceSalesProductLineProductIdOrThrow(finalPayload);
-      await enforceSalesVatCategoryOrThrow(String(companyName), finalPayload);
-      enforceSalesProductLineAnalysisOrThrow(finalPayload, "sales_invoice", {
-        confirmCrAnalysisCategory,
-      });
-
-      const processingSettings = await loadAndEnforceTransactionSettings(
-        String(companyName),
-        "sales_invoice",
-        finalPayload,
-        { priceBasis }
-      );
-      const { warnings: referenceWarnings } = await loadAndEnforceReferenceSettings(
-        String(companyName),
-        "sales_invoice",
-        finalPayload,
-        "generated"
-      );
-    
-      const settingsWarnings = [
-        ...getTransactionSafetyWarnings(processingSettings, "sales_invoice"),
-        ...referenceWarnings,
-      ];
-    
-      const response = await brcJsonRequest(
-        companyName,
-        "POST",
-        "/v1/salesInvoices/createSaleInvoiceWithGeneratingReference",
-        finalPayload
-      );
-    
-      return jsonResponse({
-        message: "Sales invoice created with generated reference.",
-        companyName,
-        payloadSent: finalPayload,
-        settingsWarnings:
-          settingsWarnings.length > 0 ? settingsWarnings : undefined,
-        response,
-      });
-    }
+    async (args) =>
+      createSalesInvoiceWithGeneratingReference({
+        companyName: String(args.companyName),
+        payload: args.payload as Record<string, unknown>,
+        priceBasis: args.priceBasis,
+        confirmCrAnalysisCategory: args.confirmCrAnalysisCategory,
+        connectionRef: extractConnectionRefFromToolArgs(
+          args as Record<string, unknown>
+        ),
+      })
   );
   
   server.tool(

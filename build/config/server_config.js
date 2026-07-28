@@ -85,6 +85,9 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_clear_all_company_api_keys",
     "brc_getting_started",
     "brc_get_deployment_policy",
+    "brc_find_help_resources",
+    "brc_get_help_resource_details",
+    "brc_open_edu_admin",
 ]);
 const DEV_TOOL_NAMES = new Set([
     "brc_set_company_api_key",

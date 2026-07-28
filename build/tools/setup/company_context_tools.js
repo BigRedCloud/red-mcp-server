@@ -4,6 +4,7 @@ import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, enterMcpSessionContext, } from "../../auth/connection_store.js";
+import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import { formatStartConnectionResponse, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, } from "../../auth/connection_wording.js";
 export function registerCompanyContextTools(server) {
@@ -42,6 +43,14 @@ export function registerCompanyContextTools(server) {
             });
             await ensureCredentialsForCurrentSession();
             enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
+            try {
+                mergeRedTelemetryContext({
+                    connectionSessionId: result.connectionSessionId,
+                });
+            }
+            catch {
+                // Telemetry must not block confirmation.
+            }
             const customerMessage = buildConfirmConnectionCustomerMessage({
                 connectedCompanies: result.connectedCompanies,
                 failedCompanies: result.failedCompanies,

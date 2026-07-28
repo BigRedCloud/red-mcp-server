@@ -22,6 +22,8 @@ import { registerAllocationResolverTools } from "./tools/alloc_tools.js";
 import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
+import { registerHelpResourcesTools } from "./tools/edu/help_resources_tools.js";
+import { registerEduAdminTools } from "./tools/edu/edu_admin_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
@@ -51,6 +53,9 @@ export function withConnectionRefSchema(
 export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_getting_started",
   "brc_get_deployment_policy",
+  "brc_find_help_resources",
+  "brc_get_help_resource_details",
+  "brc_open_edu_admin",
 ]);
 
 function createFilteredServer(server: McpServer): McpServer {
@@ -88,11 +93,15 @@ function createFilteredServer(server: McpServer): McpServer {
       (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
     ];
 
-    const httpAwareHandler = wrapHttpSessionAwareToolHandler(handler, { toolName });
     const schemaWithConnectionRef = withConnectionRefSchema(schema);
 
     if (!requiresWriteConfirmation(toolName)) {
-      return originalTool(toolName, description, schemaWithConnectionRef, httpAwareHandler);
+      return originalTool(
+        toolName,
+        description,
+        schemaWithConnectionRef,
+        wrapHttpSessionAwareToolHandler(handler, { toolName })
+      );
     }
 
     const wrappedSchema = {
@@ -106,13 +115,20 @@ function createFilteredServer(server: McpServer): McpServer {
         : {}),
     };
 
-    const wrappedHandler = wrapWriteToolHandler(toolName, httpAwareHandler);
+    // connectionRef must be activated BEFORE write-confirmation preflight
+    // (Sales VAT / draft enrichment / credential lookup). If the write wrapper
+    // is outermost, Vibe-supplied connectionRef is ignored during preview and
+    // surfaces as "Vibe did not pass connectionRef".
+    const writeWrappedHandler = wrapWriteToolHandler(toolName, handler);
+    const httpAwareHandler = wrapHttpSessionAwareToolHandler(writeWrappedHandler, {
+      toolName,
+    });
 
     return originalTool(
       toolName,
       appendWriteConfirmationDescription(description, toolName),
       wrappedSchema,
-      wrappedHandler
+      httpAwareHandler
     );
   };
 
@@ -137,6 +153,8 @@ export function registerAllTools(server: McpServer): void {
   registerBatchTools(filteredServer);
   registerSalesVatTools(filteredServer);
   registerDeploymentTools(filteredServer);
+  registerHelpResourcesTools(filteredServer);
+  registerEduAdminTools(filteredServer);
   registerAuditTools(filteredServer);
   registerEmailTools(filteredServer);
   registerCompanyProcessingSettingsTools(filteredServer);

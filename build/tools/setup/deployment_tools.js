@@ -1,134 +1,8 @@
 import { z } from "zod";
-import { getCompanyProcessingSettings } from "../../guards/company_processing_settings.js";
-import { formatReferenceMode, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
-import { brcFetch, companyNameSchema, extractListItems, getCompanyApiContexts, jsonResponse, normaliseCompanyName, textResponse, } from "../../shared.js";
+import { brcFetch, companyNameSchema, jsonResponse, textResponse, } from "../../shared.js";
 import { getCustomerDeploymentCapabilities, redServerConfig, } from "../../config/server_config.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
-function asNumber(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-}
-function pad2(value) {
-    return String(value).padStart(2, "0");
-}
-function lastDayOfMonth(year, month) {
-    return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-function findNumberByKeys(obj, keys) {
-    if (!obj || typeof obj !== "object")
-        return null;
-    for (const [key, value] of Object.entries(obj)) {
-        if (keys.includes(key)) {
-            const n = asNumber(value);
-            if (n !== null)
-                return n;
-        }
-        if (value && typeof value === "object") {
-            const nested = findNumberByKeys(value, keys);
-            if (nested !== null)
-                return nested;
-        }
-    }
-    return null;
-}
-function findDateByLikelyKeys(obj, keys) {
-    if (!obj || typeof obj !== "object")
-        return null;
-    for (const [key, value] of Object.entries(obj)) {
-        if (keys.includes(key) && (typeof value === "string" || typeof value === "number")) {
-            const match = String(value).match(/\d{4}-\d{2}-\d{2}/);
-            if (match)
-                return match[0];
-        }
-        if (value && typeof value === "object") {
-            const nested = findDateByLikelyKeys(value, keys);
-            if (nested)
-                return nested;
-        }
-    }
-    return null;
-}
-function transactionNeedsPreflightChecks(settings, referenceSettings) {
-    if (referenceSettings) {
-        const referenceModes = [
-            referenceSettings.salesAutoGenerateReference,
-            referenceSettings.purchasesAutoGenerateReference,
-            referenceSettings.quotesAutoGenerateReference,
-            referenceSettings.debtorsJournalAutoGenerateReference,
-            referenceSettings.creditorsJournalAutoGenerateReference,
-        ];
-        if (referenceModes.some((mode) => mode === undefined)) {
-            return true;
-        }
-    }
-    if (settings.vatOnCashReceiptsEnabled === undefined) {
-        return true;
-    }
-    if (settings.vatOnCashReceiptsEnabled === false) {
-        return false;
-    }
-    return (settings.cashReceiptVatMode === "manual" ||
-        settings.cashReceiptVatMode === "allocation" ||
-        settings.cashReceiptVatMode === "unknown");
-}
-function deriveFinancialYear(financialYearData, setupData) {
-    const sources = [financialYearData, setupData];
-    const explicitStart = findDateByLikelyKeys(sources, [
-        "startDate",
-        "financialYearStartDate",
-        "financialYearStart",
-        "fromDate",
-        "periodStart",
-    ]);
-    const explicitEnd = findDateByLikelyKeys(sources, [
-        "endDate",
-        "financialYearEndDate",
-        "financialYearEnd",
-        "toDate",
-        "periodEnd",
-    ]);
-    if (explicitStart) {
-        return {
-            start: explicitStart,
-            end: explicitEnd,
-            method: "explicit-date-fields",
-        };
-    }
-    for (const source of sources) {
-        const startMonth = findNumberByKeys(source, [
-            "startMonth",
-            "firstMonth",
-            "financialYearStartMonth",
-            "fYearStartMonth",
-        ]);
-        const startYear = findNumberByKeys(source, [
-            "startYear",
-            "financialYearStartYear",
-            "fYearStartYear",
-        ]);
-        if (startMonth && startMonth >= 1 && startMonth <= 12 && startYear && startYear > 1900) {
-            const start = `${startYear}-${pad2(startMonth)}-01`;
-            const endMonth = startMonth === 1 ? 12 : startMonth - 1;
-            const endYear = startMonth === 1 ? startYear : startYear + 1;
-            const end = `${endYear}-${pad2(endMonth)}-${pad2(lastDayOfMonth(endYear, endMonth))}`;
-            return {
-                start,
-                end,
-                method: "start-year-start-month",
-            };
-        }
-    }
-    return {
-        start: null,
-        end: null,
-        method: "not-detected",
-    };
-}
-function dateWithinRange(dateOnly, start, end) {
-    if (!dateOnly || !start || !end)
-        return null;
-    return dateOnly >= start && dateOnly <= end;
-}
+import { dateWithinRange, deriveFinancialYear, runCompanyReadinessCheck, } from "./company_readiness.js";
 /**
  * Builds the customer-facing transaction date validation result. Returns a
  * success message when the date is within the current financial year, and an
@@ -447,8 +321,9 @@ Useful prompts:
 }
 export function registerDeploymentTools(server) {
     server.tool("brc_getting_started", [
-        "Use this whenever the user asks how to start, says start, says getting started, or asks for help using Big Red Cloud.",
+        "Use this whenever the user asks how to start, says start, says getting started, or wants to connect or reconnect companies in Red.",
         "Return simple customer-friendly setup steps and example prompts.",
+        "Do not use for tutorial, webinar, or video how-to questions — use brc_find_help_resources for those.",
         "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
     ].join(" "), {}, async () => textResponse(buildGettingStartedText()));
     server.tool("brc_get_deployment_policy", [
@@ -483,127 +358,17 @@ export function registerDeploymentTools(server) {
             message: validation.message,
         });
     });
-    server.tool("brc_company_readiness_check", "Checks whether a connected Big Red Cloud company appears ready for read-only and transaction workflows. Highlights financial-year, VAT and reference-data considerations.", {
+    server.tool("brc_company_readiness_check", [
+        "Read-only company health and readiness check for a connected Big Red Cloud company.",
+        "Reports connection status, financial year, sample reference data (customers, products, suppliers, sales reps),",
+        "Sales VAT rates, Sales Analysis categories, processing settings, and reference settings.",
+        "Use this for overall company readiness before starting work.",
+        "For warnings about a specific VAT-sensitive workflow (sales invoice, purchase, cash receipt, statement),",
+        "use brc_check_transaction_settings instead — that tool checks one workflow's processing settings,",
+        "while this tool scores overall company readiness.",
+    ].join(" "), {
         companyName: companyNameSchema,
-    }, async ({ companyName }) => {
-        const today = new Date().toISOString().slice(0, 10);
-        const [financialYearData, setupData, customersData, productsData, suppliersData, vatRatesData] = await Promise.all([
-            brcFetch(companyName, "/v1/companySetupConfig/getFinancialYear"),
-            brcFetch(companyName, "/v1/companySetupConfig"),
-            brcFetch(companyName, "/v1/customers?page=1&pageSize=5"),
-            brcFetch(companyName, "/v1/products?page=1&pageSize=5"),
-            brcFetch(companyName, "/v1/suppliers?page=1&pageSize=5"),
-            brcFetch(companyName, "/v1/vatRates?page=1&pageSize=20"),
-        ]);
-        const financialYear = deriveFinancialYear(financialYearData, setupData);
-        const todayInFinancialYear = dateWithinRange(today, financialYear.start, financialYear.end);
-        const customers = extractListItems(customersData);
-        const products = extractListItems(productsData);
-        const suppliers = extractListItems(suppliersData);
-        const vatRates = extractListItems(vatRatesData);
-        const processingSettings = await getCompanyProcessingSettings(companyName);
-        const referenceSettings = await getCompanyReferenceSettings(companyName);
-        const warnings = [];
-        if (todayInFinancialYear === false) {
-            warnings.push("Today's date is outside this company's current financial year. Some actions may fail unless the company financial year is updated or a valid transaction date is used.");
-        }
-        if (customers.length === 0)
-            warnings.push("No customers were returned on page 1; customer workflows may need setup data.");
-        if (products.length === 0)
-            warnings.push("No products were returned on page 1; product-based invoice/quote workflows may need setup data.");
-        if (vatRates.length === 0)
-            warnings.push("No VAT rates were returned; VAT-bearing transactions may fail.");
-        if (processingSettings.vatOnCashReceiptsEnabled === false) {
-            warnings.push("VAT on Cash Receipts is not enabled in BRC. Cash receipt tools should not treat receipts as receipt-basis VAT unless the user confirms otherwise.");
-        }
-        else if (processingSettings.vatOnCashReceiptsEnabled === true) {
-            if (processingSettings.cashReceiptVatMode === "manual") {
-                warnings.push("VAT on Cash Receipts is enabled with manual cash receipt VAT mode. Red will require VAT details before posting VAT-sensitive cash receipts.");
-            }
-            else if (processingSettings.cashReceiptVatMode === "allocation") {
-                warnings.push("VAT on Cash Receipts is enabled with allocation cash receipt VAT mode. Red may require allocation details before posting VAT-sensitive cash receipts.");
-            }
-            else if (processingSettings.cashReceiptVatMode === "unknown") {
-                warnings.push("VAT on Cash Receipts is enabled, but Red could not determine the cash receipt VAT mode from company options.");
-            }
-        }
-        else {
-            warnings.push("Red could not confirm the VAT on Cash Receipts setting from company options.");
-        }
-        if (referenceSettings.salesAutoGenerateReference === undefined) {
-            warnings.push("Red could not confirm whether sales references are auto-generated or manual.");
-        }
-        else if (referenceSettings.salesAutoGenerateReference === false) {
-            warnings.push("Sales references are configured as manual. Red will require a reference before posting sales invoices or sales credit notes.");
-        }
-        if (referenceSettings.purchasesAutoGenerateReference === undefined) {
-            warnings.push("Red could not confirm whether purchase references are auto-generated or manual.");
-        }
-        else if (referenceSettings.purchasesAutoGenerateReference === false) {
-            warnings.push("Purchase references are configured as manual. Red will require a reference before posting purchases.");
-        }
-        if (referenceSettings.quotesAutoGenerateReference === undefined) {
-            warnings.push("Red could not confirm whether quote references are auto-generated or manual. Do not assume auto-generate for quotes; ask for a quote reference or user confirmation before preparing a postable quote.");
-        }
-        else if (referenceSettings.quotesAutoGenerateReference === false) {
-            warnings.push("Quote references are configured as manual. Red will require a reference before posting quotes.");
-        }
-        if (referenceSettings.debtorsJournalAutoGenerateReference === undefined) {
-            warnings.push("Red could not confirm whether debtors journal references are auto-generated or manual.");
-        }
-        if (referenceSettings.creditorsJournalAutoGenerateReference === undefined) {
-            warnings.push("Red could not confirm whether creditors journal references are auto-generated or manual.");
-        }
-        const transactionReadyBase = Boolean(financialYear.start && vatRates.length > 0);
-        const needsPreflight = transactionNeedsPreflightChecks(processingSettings, referenceSettings);
-        const readiness = {
-            readOnlyReady: true,
-            createCustomerSupplierProductReady: true,
-            transactionReady: transactionReadyBase,
-            transactionReadyStatus: !transactionReadyBase
-                ? "Not ready"
-                : needsPreflight
-                    ? "Ready with preflight checks"
-                    : "Ready",
-            generatedDocumentReady: todayInFinancialYear !== false,
-        };
-        const readinessNote = transactionReadyBase && needsPreflight
-            ? "Some transaction workflows may be blocked until required VAT/allocation details or reference numbers are supplied."
-            : undefined;
-        return jsonResponse({
-            companyName,
-            connectedContextFound: getCompanyApiContexts().has(normaliseCompanyName(companyName)),
-            today,
-            financialYear,
-            todayInFinancialYear,
-            vatOnCashReceiptsEnabled: processingSettings.vatOnCashReceiptsEnabled,
-            cashReceiptVatMode: processingSettings.cashReceiptVatMode,
-            referenceSettings: {
-                salesReferences: formatReferenceMode(referenceSettings.salesAutoGenerateReference),
-                purchasesReferences: formatReferenceMode(referenceSettings.purchasesAutoGenerateReference),
-                quotesReferences: formatReferenceMode(referenceSettings.quotesAutoGenerateReference),
-                debtorsJournalReferences: formatReferenceMode(referenceSettings.debtorsJournalAutoGenerateReference),
-                creditorsJournalReferences: formatReferenceMode(referenceSettings.creditorsJournalAutoGenerateReference),
-            },
-            referenceDataSampleCounts: {
-                customersOnFirstPage: customers.length,
-                productsOnFirstPage: products.length,
-                suppliersOnFirstPage: suppliers.length,
-                vatRatesOnFirstPage: vatRates.length,
-            },
-            readiness,
-            readinessNote,
-            warnings,
-            deploymentCapabilities: getCustomerDeploymentCapabilities(),
-            recommendedNextPrompts: [
-                "Show me my customers.",
-                "Check whether a transaction date is valid.",
-                "Show me my VAT rates.",
-                "Show me recent sales invoices.",
-                "Prepare a quote preview before posting, but do not create it yet.",
-            ],
-        });
-    });
+    }, async ({ companyName }) => jsonResponse(await runCompanyReadinessCheck(companyName)));
     server.registerResource("brc_help", "brc://help", {
         title: "Big Red Cloud Help",
         description: "Simple getting-started guide for using Big Red Cloud in chat.",

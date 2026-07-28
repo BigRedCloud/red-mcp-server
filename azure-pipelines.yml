@@ -37,6 +37,7 @@ stages:
 
     - script: |
         npm install
+        npm install --prefix functions/brc-edu-resource-processor
         npm run build --if-present
         npm run test --if-present
       displayName: 'npm install, build and test'
@@ -59,7 +60,7 @@ stages:
   condition: succeeded()
   jobs:
   - deployment: Deploy
-    displayName: Deploy
+    displayName: Deploy v2
     environment: $(environmentName)
     pool:
       vmImage: $(vmImageName)

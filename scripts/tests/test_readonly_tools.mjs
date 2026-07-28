@@ -645,6 +645,59 @@ async function main() {
 
     const outcome = await run(toolName, args, options);
 
+    if (toolName === "brc_company_readiness_check" && outcome.status === "PASS") {
+      const data = outcome.data || {};
+      const required = [
+        "overallStatus",
+        "checks",
+        "summary",
+        "warnings",
+        "blockers",
+        "recommendedActions",
+        "readiness",
+        "connectedContextFound",
+        "financialYear",
+        "referenceDataSampleCounts",
+      ];
+      const missing = required.filter((key) => !(key in data));
+      const checkKeys = [
+        "connection",
+        "financialYear",
+        "customers",
+        "products",
+        "suppliers",
+        "salesReps",
+        "salesVatRates",
+        "salesAnalysisCategories",
+        "processingSettings",
+        "referenceSettings",
+      ];
+      const missingChecks = checkKeys.filter((key) => !data.checks?.[key]);
+      const blob = JSON.stringify(data);
+      const leaked =
+        /"apiKey"\s*:/i.test(blob) ||
+        /connectionRef/i.test(blob) ||
+        /redconn_/i.test(blob);
+
+      if (missing.length || missingChecks.length || leaked) {
+        const entry = results[results.length - 1];
+        entry.status = "FAIL";
+        entry.details = {
+          ...(typeof data === "object" ? data : {}),
+          smokeFailure: {
+            missingFields: missing,
+            missingChecks,
+            sensitiveDataLeaked: leaked,
+          },
+        };
+        console.log(`- ${toolName}: FAIL (health-check smoke assertion)`);
+      } else {
+        console.log(
+          `- ${toolName}: smoke ok (overallStatus=${data.overallStatus})`
+        );
+      }
+    }
+
     if (
       toolName === "brc_get_company_logo" &&
       outcome.status === "FAIL" &&

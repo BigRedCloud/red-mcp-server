@@ -1,0 +1,386 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import net from "node:net";
+import test from "node:test";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "../edu/brc_edu_upload_store.js";
+const SERVER_READY_LOG_MARKER = "BRC MCP server";
+const SERVER_START_TIMEOUT_MS = 60_000;
+const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
+const WORKBOOK_PATH = `${UPLOAD_PATH}/workbook`;
+const WORKBOOK_DOWNLOAD_PATH = `${UPLOAD_PATH}/workbook/download`;
+async function getFreePort() {
+    return await new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            if (!address || typeof address === "string") {
+                server.close();
+                reject(new Error("Could not allocate a test port."));
+                return;
+            }
+            const port = address.port;
+            server.close(() => resolve(port));
+        });
+        server.on("error", reject);
+    });
+}
+async function probeServerHttpReady(port) {
+    try {
+        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+            method: "GET",
+            signal: AbortSignal.timeout(750),
+        });
+        return response.status === 400;
+    }
+    catch {
+        return false;
+    }
+}
+async function waitForServerReady(child, port, timeoutMs = SERVER_START_TIMEOUT_MS) {
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+        output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+        output += chunk.toString();
+    });
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (output.includes(SERVER_READY_LOG_MARKER)) {
+            return;
+        }
+        if (child.exitCode !== null) {
+            throw new Error(`Server exited early:\n${output}`);
+        }
+        if (await probeServerHttpReady(port)) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`Server did not start within ${timeoutMs}ms:\n${output}`);
+}
+async function startTestServer(t, port, envOverrides = {}) {
+    const child = spawn(process.execPath, ["build/remote.js"], {
+        cwd: process.cwd(),
+        env: {
+            ...process.env,
+            PORT: String(port),
+            RED_CONNECT_CONNECTION_STORE: "memory",
+            RED_CONNECT_SESSION_DEBUG: "false",
+            APPLICATIONINSIGHTS_CONNECTION_STRING: "",
+            BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
+            BRC_ALLOW_DEV_MODE: "false",
+            // Keep secret-only tests isolated unless a case opts into Entra.
+            BRC_EDU_ADMIN_ENTRA_TENANT_ID: "",
+            BRC_EDU_ADMIN_ENTRA_GROUP_ID: "",
+            BRC_EDU_ADMIN_ENTRA_APP_ROLE: "",
+            BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "true",
+            ...envOverrides,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    t.after(() => {
+        if (!child.killed) {
+            child.kill("SIGTERM");
+        }
+    });
+    await waitForServerReady(child, port);
+    return child;
+}
+function uploadUrl(port, secret) {
+    const base = `http://127.0.0.1:${port}${UPLOAD_PATH}`;
+    if (!secret) {
+        return base;
+    }
+    return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+}
+function workbookUrl(port, secret) {
+    const base = `http://127.0.0.1:${port}${WORKBOOK_PATH}`;
+    if (!secret) {
+        return base;
+    }
+    return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+}
+function workbookDownloadUrl(port, secret) {
+    const base = `http://127.0.0.1:${port}${WORKBOOK_DOWNLOAD_PATH}`;
+    if (!secret) {
+        return base;
+    }
+    return `${base}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`;
+}
+function buildMultipartBody(fieldName, filename, content, contentType) {
+    const boundary = `----brc-edu-upload-${Date.now()}`;
+    const preamble = Buffer.from(`--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+        `Content-Type: ${contentType}\r\n\r\n`);
+    const closing = Buffer.from(`\r\n--${boundary}--\r\n`);
+    return {
+        body: Buffer.concat([preamble, content, closing]),
+        contentType: `multipart/form-data; boundary=${boundary}`,
+    };
+}
+function toFetchBody(buffer, contentType) {
+    return new Blob([Uint8Array.from(buffer)], { type: contentType });
+}
+test("GET /internal/brc-edu/resources/upload returns 503 when admin secret is not configured", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "",
+    });
+    const response = await fetch(uploadUrl(port, "any-secret"));
+    assert.equal(response.status, 503);
+});
+test("GET /internal/brc-edu/resources/upload returns 401 for missing or wrong secret", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const missingSecretResponse = await fetch(uploadUrl(port));
+    const wrongSecretResponse = await fetch(uploadUrl(port, "wrong-secret"));
+    assert.equal(missingSecretResponse.status, 401);
+    assert.equal(wrongSecretResponse.status, 401);
+});
+test("GET /internal/brc-edu/resources/upload returns form with correct secret", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const response = await fetch(uploadUrl(port, "configured-secret"));
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /BRC Edu webinar resources/i);
+    assert.match(html, /Refresh from Azure/i);
+    assert.match(html, /Save &amp; Publish/i);
+    assert.match(html, /multipart\/form-data/i);
+    assert.match(html, /\.xlsx/);
+    assert.match(html, /\.csv/);
+    assert.match(html, /5 MB/);
+    assert.match(html, /name="file"/);
+});
+test("workbook admin endpoints require admin secret", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const missingGet = await fetch(workbookUrl(port));
+    const wrongGet = await fetch(workbookUrl(port, "wrong-secret"));
+    const missingDownload = await fetch(workbookDownloadUrl(port));
+    const wrongDownload = await fetch(workbookDownloadUrl(port, "wrong-secret"));
+    const missingPut = await fetch(workbookUrl(port), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rows: [] }),
+    });
+    const wrongPut = await fetch(workbookUrl(port, "wrong-secret"), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rows: [] }),
+    });
+    assert.equal(missingGet.status, 401);
+    assert.equal(wrongGet.status, 401);
+    assert.equal(missingDownload.status, 401);
+    assert.equal(wrongDownload.status, 401);
+    assert.equal(missingPut.status, 401);
+    assert.equal(wrongPut.status, 401);
+});
+test("GET workbook returns 503 when upload storage is not configured", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const response = await fetch(workbookUrl(port, "configured-secret"));
+    assert.equal(response.status, 503);
+    const body = (await response.json());
+    assert.match(body.error, /not configured/i);
+    assert.equal(body.error.includes("configured-secret"), false);
+});
+test("POST /internal/brc-edu/resources/upload rejects missing or wrong secret", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const csv = Buffer.from("Video Title,Video URL,Help-Routing Category\n");
+    const multipart = buildMultipartBody("file", "webinar_video_routing_index.csv", csv, "text/csv");
+    const missingSecretResponse = await fetch(uploadUrl(port), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    const wrongSecretResponse = await fetch(uploadUrl(port, "wrong-secret"), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    assert.equal(missingSecretResponse.status, 401);
+    assert.equal(wrongSecretResponse.status, 401);
+});
+test("POST /internal/brc-edu/resources/upload rejects missing file", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+    });
+    const boundary = "----brc-edu-empty";
+    const response = await fetch(uploadUrl(port, "configured-secret"), {
+        method: "POST",
+        headers: {
+            "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        body: `--${boundary}--\r\n`,
+    });
+    assert.equal(response.status, 400);
+    const html = await response.text();
+    assert.match(html, /required/i);
+});
+test("POST /internal/brc-edu/resources/upload rejects invalid file type", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+        BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING: "UseDevelopmentStorage=true",
+        BRC_EDU_UPLOAD_CONTAINER: "brc-edu-uploads",
+    });
+    const multipart = buildMultipartBody("file", "notes.txt", Buffer.from("hello"), "text/plain");
+    const response = await fetch(uploadUrl(port, "configured-secret"), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    assert.equal(response.status, 400);
+    const html = await response.text();
+    assert.match(html, /\.xlsx and \.csv/i);
+});
+test("POST /internal/brc-edu/resources/upload rejects file over 5MB", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "configured-secret",
+        BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING: "UseDevelopmentStorage=true",
+        BRC_EDU_UPLOAD_CONTAINER: "brc-edu-uploads",
+    });
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+    const multipart = buildMultipartBody("file", "webinar_video_routing_index.csv", oversized, "text/csv");
+    const response = await fetch(uploadUrl(port, "configured-secret"), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    assert.equal(response.status, 400);
+    const html = await response.text();
+    assert.match(html, /5 MB/i);
+});
+test("GET and POST /internal/brc-edu/resources/upload do not log secrets in server output", async (t) => {
+    const port = await getFreePort();
+    const secret = "integration-upload-secret-value";
+    const child = await startTestServer(t, port, {
+        BRC_EDU_ADMIN_UPLOAD_SECRET: secret,
+    });
+    await fetch(uploadUrl(port, secret));
+    await fetch(uploadUrl(port, "wrong-secret"));
+    const csv = Buffer.from("Video Title,Video URL,Help-Routing Category\n");
+    const multipart = buildMultipartBody("file", "webinar_video_routing_index.csv", csv, "text/csv");
+    await fetch(uploadUrl(port, secret), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    await fetch(uploadUrl(port, "wrong-secret"), {
+        method: "POST",
+        headers: {
+            "content-type": multipart.contentType,
+        },
+        body: toFetchBody(multipart.body, multipart.contentType),
+    });
+    const output = await new Promise((resolve) => {
+        let combined = "";
+        child.stdout.on("data", (chunk) => {
+            combined += chunk.toString();
+        });
+        child.stderr.on("data", (chunk) => {
+            combined += chunk.toString();
+        });
+        setTimeout(() => resolve(combined), 250);
+    });
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes(BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY), false);
+});
+function encodeEasyAuthPrincipal(claims) {
+    return Buffer.from(JSON.stringify({
+        auth_typ: "aad",
+        claims,
+    }), "utf8").toString("base64");
+}
+test("GET /internal/brc-edu/resources/upload redirects unauthenticated users to Microsoft sign-in when Entra is configured", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+        BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "",
+        BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "false",
+    });
+    const response = await fetch(uploadUrl(port), { redirect: "manual" });
+    assert.equal(response.status, 302);
+    const location = response.headers.get("location") ?? "";
+    assert.match(location, /\/\.auth\/login\/aad\?/);
+    assert.match(location, /post_login_redirect_uri=/);
+});
+test("GET /internal/brc-edu/resources/upload allows approved Entra staff without a secret", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+        BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+        BRC_EDU_ADMIN_UPLOAD_SECRET: "must-never-appear-in-html",
+    });
+    const principal = encodeEasyAuthPrincipal([
+        {
+            typ: "http://schemas.microsoft.com/identity/claims/tenantid",
+            val: "tenant-a",
+        },
+        { typ: "groups", val: "group-edu-admins" },
+        { typ: "preferred_username", val: "staff@bigredbook.com" },
+    ]);
+    const response = await fetch(uploadUrl(port), {
+        headers: {
+            "x-ms-client-principal": principal,
+            "x-ms-client-principal-name": "staff@bigredbook.com",
+        },
+    });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /BRC Edu webinar resources/i);
+    assert.match(html, /Refresh from Azure/i);
+    assert.match(html, /Save &amp; Publish/i);
+    assert.equal(html.includes("must-never-appear-in-html"), false);
+    assert.equal(html.includes(`${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=`), false);
+});
+test("GET /internal/brc-edu/resources/upload denies authenticated users outside the approved group", async (t) => {
+    const port = await getFreePort();
+    await startTestServer(t, port, {
+        BRC_EDU_ADMIN_ENTRA_TENANT_ID: "tenant-a",
+        BRC_EDU_ADMIN_ENTRA_GROUP_ID: "group-edu-admins",
+    });
+    const principal = encodeEasyAuthPrincipal([
+        {
+            typ: "http://schemas.microsoft.com/identity/claims/tenantid",
+            val: "tenant-a",
+        },
+        { typ: "groups", val: "some-other-group" },
+        { typ: "preferred_username", val: "external@example.com" },
+    ]);
+    const response = await fetch(uploadUrl(port), {
+        headers: {
+            "x-ms-client-principal": principal,
+            "x-ms-client-principal-name": "external@example.com",
+        },
+    });
+    assert.equal(response.status, 403);
+    const body = await response.text();
+    assert.match(body, /This area is available only to authorised Big Red Cloud staff\./);
+});

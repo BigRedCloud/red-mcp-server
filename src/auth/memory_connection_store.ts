@@ -1,9 +1,11 @@
 import { encodeStoredApiKey } from "./credential_secret.js";
 import { isPendingConnectionExpired } from "./connection_pending.js";
+import { mergeConnectionTelemetryRecord } from "./connection_telemetry_merge.js";
 import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
   StoredCompanyCredential,
@@ -35,6 +37,7 @@ const connectionRefs = new Map<
   { connectionId: string; expiresAt: number }
 >();
 const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
+const telemetryByConnection = new Map<string, ConnectionTelemetryRecord>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -286,6 +289,25 @@ export class MemoryConnectionStore implements ConnectionStore {
 
   async clearFailedCompanyValidations(connectionId: string): Promise<void> {
     failedValidationsByConnection.delete(connectionId);
+  }
+
+  async saveConnectionTelemetry(
+    connectionId: string,
+    patch: {
+      telemetryClientId?: string;
+      connectionSessionId?: string;
+    }
+  ): Promise<void> {
+    const existing = telemetryByConnection.get(connectionId) ?? null;
+    const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+    telemetryByConnection.set(connectionId, merged);
+  }
+
+  async getConnectionTelemetry(
+    connectionId: string
+  ): Promise<ConnectionTelemetryRecord | null> {
+    const record = telemetryByConnection.get(connectionId);
+    return record ? { ...record } : null;
   }
 
   async getDiagnostics(args: {

@@ -1,0 +1,179 @@
+import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "./freshdesk-index-store.js";
+import { isSupportedFreshdeskImageMimeType, normalizeFreshdeskImageMimeType, normalizeFreshdeskSyncedImages, } from "./freshdesk-image-metadata.js";
+import { FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES, } from "./freshdesk-image-load.js";
+import { resolveFreshdeskImageKey, verifyFreshdeskPublicImageToken, } from "./freshdesk-public-image-token.js";
+import { buildFreshdeskPublicImageViewerHtml, prefersFreshdeskPublicImageViewer, } from "./freshdesk-public-image-viewer.js";
+import { createConfiguredFreshdeskImageContainer } from "./image-sync.js";
+export const FRESHDESK_PUBLIC_IMAGE_ROUTE = "/public/brc-edu/freshdesk-images/:articleId/:imageToken";
+export const FRESHDESK_PUBLIC_IMAGE_MAX_BYTES = FRESHDESK_IMAGE_LOAD_MAX_IMAGE_BYTES;
+const SECRET_PATTERNS = [
+    /AccountKey=/i,
+    /DefaultEndpointsProtocol=/i,
+    /SharedAccessSignature/i,
+    /\bsig=[A-Za-z0-9%+/=]+/i,
+    /blob\.core\.windows\.net/i,
+];
+const SAFE_LOG_IDENTIFIER_PATTERN = /^[a-z0-9-]+$/i;
+function setFreshdeskPublicImageSecurityHeaders(res, options = {}) {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", options.viewer
+        ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        : "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+}
+function sendNotFound(res) {
+    setFreshdeskPublicImageSecurityHeaders(res);
+    res.status(404).end();
+}
+function isSafeArticleId(value) {
+    return /^\d+$/.test(value.trim());
+}
+function findSyncedImageByKey(article, imageKey) {
+    const syncedImages = normalizeFreshdeskSyncedImages(article.syncedImages, article.images);
+    return (syncedImages.find((image) => resolveFreshdeskImageKey(image) === imageKey) ?? null);
+}
+async function findFreshdeskArticleById(articleId, indexContainer) {
+    if (!indexContainer) {
+        return null;
+    }
+    try {
+        const index = await loadFreshdeskArticlesIndex(indexContainer);
+        return (index?.articles.find((article) => String(article.freshdeskArticleId) === articleId) ?? null);
+    }
+    catch {
+        return null;
+    }
+}
+async function readBlobBytes(container, blobName) {
+    try {
+        const blobClient = container.getBlockBlobClient(blobName);
+        const exists = await blobClient.exists();
+        if (!exists) {
+            return null;
+        }
+        const response = await blobClient.download(0);
+        const chunks = [];
+        for await (const chunk of response.readableStreamBody ?? []) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const buffer = Buffer.concat(chunks);
+        return buffer.byteLength > 0 ? buffer : null;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (SECRET_PATTERNS.some((pattern) => pattern.test(message))) {
+            return null;
+        }
+        return null;
+    }
+}
+function safeLogIdentifier(articleId, imageKey) {
+    const articlePart = SAFE_LOG_IDENTIFIER_PATTERN.test(articleId) ? articleId : "invalid";
+    const imagePart = imageKey.slice(0, 8);
+    return `freshdesk-image:${articlePart}:${imagePart}`;
+}
+export async function handleFreshdeskPublicImageRequest(req, res, deps = {}) {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+        res.status(405).end();
+        return;
+    }
+    const articleId = String(req.params.articleId ?? "").trim();
+    const imageToken = String(req.params.imageToken ?? "").trim();
+    if (!isSafeArticleId(articleId) || !imageToken) {
+        sendNotFound(res);
+        return;
+    }
+    const tokenPayload = verifyFreshdeskPublicImageToken(imageToken);
+    if (!tokenPayload || tokenPayload.articleId !== articleId) {
+        sendNotFound(res);
+        return;
+    }
+    const indexContainer = deps.freshdeskIndexContainer === undefined
+        ? createConfiguredFreshdeskIndexContainer()
+        : deps.freshdeskIndexContainer;
+    const imageContainer = deps.freshdeskImageContainer === undefined
+        ? createConfiguredFreshdeskImageContainer()
+        : deps.freshdeskImageContainer;
+    if (!imageContainer) {
+        console.info("Freshdesk public image request:", JSON.stringify({
+            identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
+            status: 404,
+            reason: "image_container_unconfigured",
+        }));
+        sendNotFound(res);
+        return;
+    }
+    const article = await findFreshdeskArticleById(articleId, indexContainer);
+    if (!article) {
+        console.info("Freshdesk public image request:", JSON.stringify({
+            identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
+            status: 404,
+            reason: "article_not_found",
+        }));
+        sendNotFound(res);
+        return;
+    }
+    const syncedImage = findSyncedImageByKey(article, tokenPayload.imageKey);
+    if (!syncedImage) {
+        console.info("Freshdesk public image request:", JSON.stringify({
+            identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
+            status: 404,
+            reason: "image_not_found",
+        }));
+        sendNotFound(res);
+        return;
+    }
+    const mimeType = normalizeFreshdeskImageMimeType(syncedImage.mimeType);
+    if (!mimeType || !isSupportedFreshdeskImageMimeType(mimeType)) {
+        sendNotFound(res);
+        return;
+    }
+    const buffer = await readBlobBytes(imageContainer, syncedImage.blobName);
+    if (!buffer || buffer.byteLength > FRESHDESK_PUBLIC_IMAGE_MAX_BYTES) {
+        console.info("Freshdesk public image request:", JSON.stringify({
+            identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
+            status: 404,
+            reason: "blob_unavailable",
+        }));
+        sendNotFound(res);
+        return;
+    }
+    const serveViewer = req.method === "GET" && prefersFreshdeskPublicImageViewer(req);
+    console.info("Freshdesk public image request:", JSON.stringify({
+        identifier: safeLogIdentifier(articleId, tokenPayload.imageKey),
+        status: 200,
+        bytes: buffer.byteLength,
+        mimeType,
+        viewer: serveViewer,
+    }));
+    if (serveViewer) {
+        const imageSrc = req.originalUrl.split("?")[0] ?? req.url.split("?")[0] ?? req.url;
+        const html = buildFreshdeskPublicImageViewerHtml({
+            imageSrc,
+            caption: syncedImage.altText,
+        });
+        setFreshdeskPublicImageSecurityHeaders(res, { viewer: true });
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.status(200).send(html);
+        return;
+    }
+    setFreshdeskPublicImageSecurityHeaders(res);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Content-Length", String(buffer.byteLength));
+    if (req.method === "HEAD") {
+        res.status(200).end();
+        return;
+    }
+    res.status(200).send(buffer);
+}
+export function registerFreshdeskPublicImageRoute(app) {
+    const handler = (req, res) => {
+        void handleFreshdeskPublicImageRequest(req, res).catch(() => {
+            if (!res.headersSent) {
+                sendNotFound(res);
+            }
+        });
+    };
+    app.route(FRESHDESK_PUBLIC_IMAGE_ROUTE).get(handler).head(handler);
+}
