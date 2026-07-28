@@ -1,6 +1,8 @@
 # Red MCP Server
 
-Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants and MCP clients, including Claude, ChatGPT, and [Vibe](https://chat.mistral.ai/chat), to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
+Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants and MCP clients to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
+
+Supported customer platforms today are **ChatGPT**, **Claude**, and **Mistral** (including [Vibe](https://chat.mistral.ai/chat)). Other MCP clients may work technically, but they are not treated as officially supported platforms. Red uses platform detection only for anonymous operational telemetry (see [Privacy-safe telemetry](#privacy-safe-telemetry)).
 
 Instead of calling the Big Red Cloud REST API directly, users work in plain language. The server translates requests into structured API calls and applies safety checks around anything that changes data.
 
@@ -9,6 +11,7 @@ With Red, a connected user can:
 - **Review** Big Red Cloud data with read-only lookups (customers, suppliers, products, invoices, quotes, nominal reports, and more).
 - **Review before posting** — see a plain-English preview of new records before anything is written to Big Red Cloud.
 - **Create, update, or delete** records only after explicit confirmation.
+- **Ask Big Red Cloud how-to and training questions** — Red answers using official support articles, customer documentation, screenshots, and webinar resources. These help tools do not require a connected company.
 
 ---
 
@@ -24,17 +27,20 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 
 ## Features
 
-- Secure company connection flow (session-scoped, no credentials in chat)
-- Pre-confirm validation of company connection credentials on the connection page (form and CSV upload)
+- Secure company connection flow (one-time connection page; no credentials in chat)
+- Pre-confirm validation of company connection credentials on the connection page (single-company form or multi-company CSV upload)
 - Partial connection results — invalid keys are rejected before confirm and reported in `failedCompanies`
-- Hosted HTTP `connectionRef` for MCP clients that rotate session IDs (for example Vibe/Mistral); kept in tool JSON, not shown to end users
+- Hosted HTTP `connectionRef` / `activeConnectionRef` so MCP clients can silently reuse a confirmed connection across supported session changes; kept in tool JSON, not shown to end users
+- Privacy-safe anonymous operational telemetry (platform, environment, tool name, connected-company count) — see [docs/TELEMETRY.md](docs/TELEMETRY.md)
+- Company readiness check (`brc_company_readiness_check`) for connected companies
 - Read-only Big Red Cloud lookups
 - Customer, supplier, product, sales rep, VAT, and analysis category tools
 - Sales quotes, invoices, credit notes, purchases, payments, and cash tools
 - Preview-before-posting confirmation flow for create, update, delete, batch, and email actions
 - VAT and transaction safety checks
-- Sales invoice safeguards, including Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
+- Sales invoice safeguards, including multi-line generated-reference validation, Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
 - Session audit log of writes made through the MCP session
+- Official Big Red Cloud help answers from Freshdesk articles, customer documentation, screenshots, and webinars — no company connection required
 - Local stdio and hosted HTTP transports
 
 ---
@@ -45,8 +51,9 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 
 - **No credentials in the repository.** Company connection credentials and secrets are never committed. Configuration is supplied at runtime through environment variables.
 - **No credentials in chat.** Company connection credentials must not be pasted into chat. Companies are connected through the secure Red connection page, where credentials are entered directly — not in the chat window.
-- **Session-scoped connections.** A connected company is available only within the current MCP session and is held in session memory (or an optional shared connection store in hosted deployments), not persisted to disk in normal operation.
+- **Session-scoped connections.** A connected company stays available for about the configured session duration and is held in session memory (or an optional shared connection store in hosted deployments). Where supported, connection handling is resilient across MCP session rotation so clients can reuse `connectionRef` / `activeConnectionRef` without asking the user to reconnect.
 - **Pre-confirm validation.** Company connection credentials submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired credentials are not saved; they appear in `failedCompanies` at confirmation time.
+- **Credential invalidation.** Only confirmed authentication failures clear a stored company credential. Endpoint, validation, permission, timeout, and server failures are not treated as an expired API key.
 - **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless dev mode is enabled or the user explicitly asks for technical details.
 - **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, connection status) is derived from that value — not hardcoded.
 - **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a preview before posting has been shown.
@@ -57,11 +64,12 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 
 ### Sales invoice safety checks
 
-Recent work hardened sales invoice handling:
+Sales invoice handling includes:
 
 - **Gross Price Entry** requires an explicit `priceBasis` of `gross` or `net` so VAT is never guessed.
 - **Sales VAT rates only.** Sales invoices must use a Sales VAT category; purchase VAT rates are blocked, even when the percentage matches.
 - **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before preview-before-posting and post.
+- **Multi-line generated-reference invoices** (`brc_create_sales_invoice_gen_ref`) require each `productTrans` line to include its own `acEntries` analysis allocation. Line net/VAT/gross reconciliation, analysis allocation totals, header totals, and required product/VAT/analysis fields are validated before posting; failures return structured field-level errors.
 - **`note`** defaults to the customer name unless a note is explicitly provided, and is never set to a product name.
 - **`deliveryTo`** is included only when a delivery address is explicitly provided.
 - **Plain-language results.** Technical HTTP status codes are translated into plain-language messages for users.
@@ -89,6 +97,10 @@ Key shared modules:
 - `src/auth/credential_validation.ts` — BRC read validation before storing company connection credentials
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
+- `src/telemetry/` — anonymous client/session identity and platform detection for hosted operational telemetry
+- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, screenshots, and unified help search
+- `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
+- `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -277,11 +289,11 @@ The flow is:
 4. Return to the chat and provide the **confirmation code** shown on the success page.
 5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid credentials appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
 
-Connection links are **one-time use**. Connected companies stay available for the configured session duration (`BRC_API_KEY_TTL_MINUTES`, for example 240 minutes → about four hours), unless you start a new chat or reconnect.
+Connection links are **one-time use**. Connected companies stay available for about the configured session duration (`BRC_API_KEY_TTL_MINUTES`, for example 240 minutes → about four hours), unless you disconnect or the connection expires.
 
 ### Hosted HTTP and `connectionRef`
 
-In hosted HTTP mode (for example Vibe/Mistral), `brc_confirm_company_connection` returns an opaque `connectionRef` in the tool JSON so the MCP client can pass it on later tool calls when the platform rotates session IDs. This is an implementation detail for the client — **assistants should not show `connectionRef` or `redconn_…` values to end users**. Tool responses include `assistantInstruction` / `presentationHint` fields to reinforce that rule.
+In hosted HTTP mode (for example Mistral/Vibe), `brc_confirm_company_connection` returns an opaque `connectionRef` in the tool JSON. MCP clients should preserve and silently reuse `connectionRef` / `activeConnectionRef` on later tool calls when the platform rotates session IDs. Connection persistence survives MCP session rotation where supported. This is an implementation detail for the client — **assistants should not show `connectionRef` or `redconn_…` values to end users**. Tool responses include `assistantInstruction` / `presentationHint` fields to reinforce that rule.
 
 Helper tools:
 
@@ -291,13 +303,21 @@ Helper tools:
 
 ---
 
+## Privacy-safe telemetry
+
+On hosted deployments, Red may record anonymous operational telemetry so operators can understand approximate usage. Typical dimensions include anonymous client and connection-session identifiers, detected platform, deployment environment, tool name, and connected-company count.
+
+Telemetry does **not** include API keys, credentials, raw `connectionRef` values, authorisation headers, customer data, or invoice data. These metrics are not verified Big Red Cloud user identities (OAuth user identity is not implemented).
+
+Details for operators and developers: [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
+---
+
 ## Tool coverage
 
 Red exposes a focused set of MCP tools, grouped by domain. Exact tool names and their endpoint mappings live in the source code under `src/tools/`.
 
 For a detailed developer guide to the source layout and MCP tool coverage, see [docs/TOOLS.md](docs/TOOLS.md).
-
-Hosted HTTP Application Insights identity (anonymous client vs connection session) is documented in [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 - **Company setup and readiness** — company setup configuration, financial year, options, readiness checks, transaction date validation, and getting-started guidance.
 - **Customers and suppliers** — list/get/create/update/delete plus opening balances and account transactions.
@@ -307,9 +327,43 @@ Hosted HTTP Application Insights identity (anonymous client vs connection sessio
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
 - **Audit and session** — session connection management and the session audit log.
-- **Under development or deployment-gated** — bank account writes and email sending are available only where enabled by tenant configuration and deployment flags; read-only bank lookups are available for payments workflows.
+- **Help and training** — Freshdesk articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
+
+### Company readiness check
+
+`brc_company_readiness_check` is a read-only overall health check for a connected company. Overall statuses are:
+
+- `ready`
+- `ready_with_warnings`
+- `not_ready`
+- `connection_problem`
+
+It reviews connection status plus relevant setup such as financial year, transaction date position, active Sales VAT rates, Sales Analysis categories, products, and sales representatives. Missing suppliers is reported as a purchase-setup warning and does **not** block sales-invoice readiness. Manual reference settings are treated as a warning / preflight consideration, not necessarily a blocker.
+
+For a specific VAT-sensitive workflow (sales invoice, purchase, cash receipt, statement), use `brc_check_transaction_settings` instead — that tool checks one workflow’s processing settings, while readiness scores overall company readiness. Narrower helpers such as `brc_validate_transaction_date`, `brc_get_company_processing_settings`, and `brc_get_company_reference_settings` remain available for focused lookups.
+
+---
+
+## Help and training resources
+
+Red includes two read-only MCP tools for Big Red Cloud help and training questions:
+
+- `brc_find_help_resources` — searches official articles, customer documentation, recorded webinars, and upcoming webinars.
+- `brc_get_help_resource_details` — returns the full details for a selected resource, including step-by-step guidance and relevant screenshot links where available.
+
+These tools do not require a connected Big Red Cloud company.
+
+Help answers may include:
+
+- official Freshdesk articles;
+- customer documentation;
+- relevant screenshots;
+- recorded YouTube training videos;
+- upcoming webinar links.
+
+Help-resource indexes are supplied by the deployment operator. The public repository does not include Big Red Cloud’s internal content-management or resource-upload workflow.
 
 ---
 
@@ -319,6 +373,9 @@ Batch variants exist for the main create workflows and apply the same safety che
 - Email sending and bank write operations may require additional tenant configuration and may be disabled by deployment flags.
 - Generated-reference behaviour can depend on Big Red Cloud tenant settings, and some generated-document endpoints may apply the tenant's current transaction date.
 - Tool availability may vary by deployment policy.
+- Anonymous telemetry counts approximate clients (for example browser/device cookies), not verified individual people.
+- Platform detection may be `unknown` when a client does not provide enough identifying information.
+- Officially supported customer platforms are ChatGPT, Claude, and Mistral/Vibe; other MCP clients are not claimed as supported platforms.
 
 ---
 
