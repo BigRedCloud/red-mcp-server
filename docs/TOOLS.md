@@ -74,8 +74,11 @@ src/
 - **`src/auth/credential_validation.ts`** — Validates each API key with the same class of BRC read access as live tools (`GET /v1/customers?page=1&pageSize=1`, plus financial year). Failed keys are not stored.
 - **`src/auth/connection_persistence.ts`** — `validateAndPersistConnectedCompanies()` used by `POST /connect`; clears stale per-company entries before re-validating on CSV resubmit.
 - **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory or Cosmos), connection codes, connectionRef, and credential handling. API keys are never returned to clients.
+<<<<<<< HEAD
 - **`src/telemetry/`** — Anonymous `telemetry_client_id` / `connection_session_id`, platform detection (`claude` | `chatgpt` | `mistral` | `unknown`), and span enrichment for hosted Application Insights. See [TELEMETRY.md](TELEMETRY.md).
 - **`src/tools/sales-emails/sales_invoice_payload_schemas.ts`** — Multi-line generated-reference sales invoice payload schema and field-level reconciliation (`acEntries`, line totals, header totals).
+=======
+>>>>>>> company-github/main
 - **`src/brc-edu/help/`** — Unified search across Freshdesk articles, customer documentation, recorded webinars, and upcoming webinars.
 - **`src/brc-edu/freshdesk/`** — Freshdesk article processing, screenshot metadata, signed public image links, and help-answer formatting.
 - **`src/tools/edu/help_resources_tools.ts`** — Registers `brc_find_help_resources` and `brc_get_help_resource_details`. These read-only tools do not require a connected company.
@@ -186,6 +189,27 @@ These tools are read-only and do not require a connected Big Red Cloud company.
 | `brc_find_help_resources` | Search Freshdesk support articles, customer documentation, recorded webinars, and upcoming webinars |
 | `brc_get_help_resource_details` | Load the full details for a selected resource, including article steps and relevant screenshot links where available |
 | `brc_open_edu_admin` | Staff helper: returns the protected BRC Edu admin page URL (Microsoft Entra sign-in still required). Never returns upload secrets or bypass links. Not a customer company-data tool. |
+
+`brc_find_help_resources` supports source filtering so callers can search all help sources or a specific source.
+
+Freshdesk resource details may include:
+
+- official article links;
+- step-by-step instructions;
+- screenshot links;
+- related recorded videos;
+- a Big Red Cloud support fallback.
+
+These tools are intended for product help and training questions, not for accessing a customer’s accounting data.
+
+### Help and training resources
+
+These tools are read-only and do not require a connected Big Red Cloud company.
+
+| MCP tool | Purpose |
+| -------- | ------- |
+| `brc_find_help_resources` | Search Freshdesk support articles, customer documentation, recorded webinars, and upcoming webinars |
+| `brc_get_help_resource_details` | Load the full details for a selected resource, including article steps and relevant screenshot links where available |
 
 `brc_find_help_resources` supports source filtering so callers can search all help sources or a specific source.
 
@@ -452,7 +476,11 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:config` — deployment/config tests.
 - `npm run test:integration` — integration tests.
 
+<<<<<<< HEAD
 Representative coverage includes sales invoice safeguards (including multi-line generated-reference `acEntries` validation), transaction date validation, transaction settings warnings, company readiness scoring, the secure connection flow, connectionRef persistence/presentation rules, TTL wording, response wording, unified help search, Freshdesk article ranking, screenshot links, recorded webinar matching, and help-resource details.
+=======
+Representative coverage includes sales invoice safeguards, transaction date validation, transaction settings warnings, the secure connection flow, connectionRef presentation rules, TTL wording, response wording, unified help search, Freshdesk article ranking, screenshot links, recorded webinar matching, and help-resource details.
+>>>>>>> company-github/main
 
 ---
 

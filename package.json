@@ -11,7 +11,7 @@
     "brc-company-mcp-server": "build/index.js"
   },
   "scripts": {
-    "build": "tsc && npm run build --prefix functions/brc-edu-resource-processor",
+    "build": "tsc",
     "postinstall": "npm install --prefix functions/brc-edu-resource-processor && npm run build",
     "start": "node build/remote.js",
     "start:local": "node build/index.js",

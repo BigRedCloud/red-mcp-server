@@ -1,4 +1,4 @@
-import { getBrcEduUploadStorageConnectionString } from "../../edu/brc_edu_upload_store.js";
+import { getBrcEduUploadStorageConnectionString } from "../../edu/brc_edu_storage_config.js";
 
 export const DEFAULT_FRESHDESK_KB_IMAGE_CONTAINER = "brc-edu-images";
 

@@ -1,1 +1,0 @@
-import "./brcEduResourceProcessor.js";

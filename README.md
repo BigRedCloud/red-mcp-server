@@ -97,7 +97,10 @@ Key shared modules:
 - `src/auth/credential_validation.ts` — BRC read validation before storing company connection credentials
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
+<<<<<<< HEAD
 - `src/telemetry/` — anonymous client/session identity and platform detection for hosted operational telemetry
+=======
+>>>>>>> company-github/main
 - `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, screenshots, and unified help search
 - `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
 - `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
@@ -327,7 +330,12 @@ For a detailed developer guide to the source layout and MCP tool coverage, see [
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
 - **Audit and session** — session connection management and the session audit log.
+<<<<<<< HEAD
 - **Help and training** — Freshdesk articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
+=======
+- **Help and training** — Freshdesk  articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
+
+>>>>>>> company-github/main
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
 
@@ -358,6 +366,27 @@ These tools do not require a connected Big Red Cloud company.
 Help answers may include:
 
 - official Freshdesk articles;
+- customer documentation;
+- relevant screenshots;
+- recorded YouTube training videos;
+- upcoming webinar links.
+
+Help-resource indexes are supplied by the deployment operator. The public repository does not include Big Red Cloud’s internal content-management or resource-upload workflow.
+
+---
+
+## Help and training resources
+
+Red includes two read-only MCP tools for Big Red Cloud help and training questions:
+
+- `brc_find_help_resources` — searches official  articles, customer documentation, recorded webinars, and upcoming webinars.
+- `brc_get_help_resource_details` — returns the full details for a selected resource, including step-by-step guidance and relevant screenshot links where available.
+
+These tools do not require a connected Big Red Cloud company.
+
+Help answers may include:
+
+- official Freshdesk  articles;
 - customer documentation;
 - relevant screenshots;
 - recorded YouTube training videos;

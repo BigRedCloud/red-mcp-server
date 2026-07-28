@@ -6,7 +6,6 @@ import {
   normaliseSupportEduRows,
   parseSupportEduCsv,
 } from "./brc_edu_enrichment.js";
-import { renderBrcEduUploadPage } from "./brc_edu_upload_page.js";
 import {
   adminRowsToSupportCsvText,
   buildWorkbookBufferFromAdminRows,
@@ -442,16 +441,6 @@ test("buildWorkbookBufferFromAdminRows round-trips optional columns", async () =
   assert.equal(parsed[0]?.resourceType, "webinar");
   assert.equal(parsed[0]?.startDate, "2026-01-01");
   assert.equal(parsed[0]?.endDate, "2026-12-31");
-});
-
-test("renderBrcEduUploadPage escapes user-controlled HTML", () => {
-  const maliciousSecret = 'safe-secret"><script>alert(1)</script>';
-  const html = renderBrcEduUploadPage(maliciousSecret);
-
-  assert.equal(html.includes('<script>alert(1)</script>'), false);
-  assert.match(html, /safe-secret%22%3E%3Cscript%3Ealert\(1\)%3C%2Fscript%3E/);
-  assert.match(html, /Refresh from Azure/);
-  assert.match(html, /Save &amp; Publish/);
 });
 
 test("xlsxBufferToCsvText converts generated workbook to CSV text", async () => {

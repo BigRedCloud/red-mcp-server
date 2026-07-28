@@ -3,7 +3,7 @@ import type { ContainerClient } from "@azure/storage-blob";
 import {
   getBrcEduUploadContainer,
   getBrcEduUploadStorageConnectionString,
-} from "../../edu/brc_edu_upload_store.js";
+} from "../../edu/brc_edu_storage_config.js";
 import {
   buildVersionedHelpIndex,
   createHelpIndexContainer,

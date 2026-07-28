@@ -4,11 +4,12 @@ import {
   normaliseSupportEduRows,
   parseSupportEduCsv,
 } from "./brc_edu_enrichment.js";
-import { BRC_EDU_UPLOAD_MAX_BYTES } from "./brc_edu_upload_store.js";
 import { xlsxBufferToCsvText } from "./brc_edu_xlsx.js";
 
 export const WEBINAR_WORKBOOK_LATEST_BLOB =
   "brc-edu/latest/webinar_video_routing_index.xlsx";
+
+const WORKBOOK_MAX_BYTES = 5 * 1024 * 1024;
 
 export const WEBINAR_WORKBOOK_CORE_HEADERS = [
   "Video Title",
@@ -355,7 +356,7 @@ export function validateWebinarAdminRows(
 export async function validateWorkbookBufferSize(
   buffer: Buffer,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (buffer.byteLength > BRC_EDU_UPLOAD_MAX_BYTES) {
+  if (buffer.byteLength > WORKBOOK_MAX_BYTES) {
     return {
       ok: false,
       error: "Workbook exceeds the maximum size of 5 MB.",

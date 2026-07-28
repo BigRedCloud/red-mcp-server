@@ -23,7 +23,6 @@ import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journ
 import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { registerHelpResourcesTools } from "./tools/edu/help_resources_tools.js";
-import { registerEduAdminTools } from "./tools/edu/edu_admin_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
@@ -55,7 +54,6 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_get_deployment_policy",
   "brc_find_help_resources",
   "brc_get_help_resource_details",
-  "brc_open_edu_admin",
 ]);
 
 function createFilteredServer(server: McpServer): McpServer {
@@ -154,7 +152,6 @@ export function registerAllTools(server: McpServer): void {
   registerSalesVatTools(filteredServer);
   registerDeploymentTools(filteredServer);
   registerHelpResourcesTools(filteredServer);
-  registerEduAdminTools(filteredServer);
   registerAuditTools(filteredServer);
   registerEmailTools(filteredServer);
   registerCompanyProcessingSettingsTools(filteredServer);

@@ -14,11 +14,9 @@ import {
   type WebinarWorkbookPayload,
 } from "./brc_edu_workbook.js";
 import {
-  buildBrcEduBlobNames,
-  contentTypeForUploadExtension,
   getBrcEduUploadContainer,
   getBrcEduUploadStorageConnectionString,
-} from "./brc_edu_upload_store.js";
+} from "./brc_edu_storage_config.js";
 
 const SECRET_ERROR_PATTERNS = [
   /AccountKey=/i,
@@ -28,6 +26,39 @@ const SECRET_ERROR_PATTERNS = [
   /Authorization:\s*Basic/i,
   /Basic [A-Za-z0-9+/=]{8,}/,
 ];
+
+type AcceptedWorkbookExtension = "csv" | "xlsx";
+
+function contentTypeForUploadExtension(extension: AcceptedWorkbookExtension): string {
+  if (extension === "csv") {
+    return "text/csv";
+  }
+
+  return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
+
+function formatArchiveTimestamp(date: Date): string {
+  const year = String(date.getUTCFullYear());
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hours = String(date.getUTCHours()).padStart(2, "0");
+  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+  const seconds = String(date.getUTCSeconds()).padStart(2, "0");
+
+  return `${year}${month}${day}_${hours}${minutes}${seconds}`;
+}
+
+function buildBrcEduBlobNames(
+  extension: AcceptedWorkbookExtension,
+  now: Date = new Date(),
+): { latest: string; archive: string } {
+  const timestamp = formatArchiveTimestamp(now);
+
+  return {
+    latest: `brc-edu/latest/webinar_video_routing_index.${extension}`,
+    archive: `brc-edu/archive/webinar_video_routing_index_${timestamp}.${extension}`,
+  };
+}
 
 export type WorkbookDownloadResult = {
   buffer: Buffer;
