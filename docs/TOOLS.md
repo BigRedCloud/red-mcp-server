@@ -25,6 +25,7 @@ src/
 │   ├── connection_wording.ts      Shared connection-flow tool descriptions
 │   ├── memory_connection_store.ts In-process connection store
 │   └── cosmos_connection_store.ts Optional shared Cosmos DB connection store
+├── telemetry/                     Anonymous client/session identity and platform detection
 ├── config/
 │   ├── server_config.ts           Deployment skill gating (BRC_ALLOW_* flags)
 │   ├── mcp_config.ts              MCP server instructions and connection-safety rules
@@ -73,6 +74,11 @@ src/
 - **`src/auth/credential_validation.ts`** — Validates each API key with the same class of BRC read access as live tools (`GET /v1/customers?page=1&pageSize=1`, plus financial year). Failed keys are not stored.
 - **`src/auth/connection_persistence.ts`** — `validateAndPersistConnectedCompanies()` used by `POST /connect`; clears stale per-company entries before re-validating on CSV resubmit.
 - **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory or Cosmos), connection codes, connectionRef, and credential handling. API keys are never returned to clients.
+<<<<<<< HEAD
+- **`src/telemetry/`** — Anonymous `telemetry_client_id` / `connection_session_id`, platform detection (`claude` | `chatgpt` | `mistral` | `unknown`), and span enrichment for hosted Application Insights. See [TELEMETRY.md](TELEMETRY.md).
+- **`src/tools/sales-emails/sales_invoice_payload_schemas.ts`** — Multi-line generated-reference sales invoice payload schema and field-level reconciliation (`acEntries`, line totals, header totals).
+=======
+>>>>>>> company-github/main
 - **`src/brc-edu/help/`** — Unified search across Freshdesk articles, customer documentation, recorded webinars, and upcoming webinars.
 - **`src/brc-edu/freshdesk/`** — Freshdesk article processing, screenshot metadata, signed public image links, and help-answer formatting.
 - **`src/tools/edu/help_resources_tools.ts`** — Registers `brc_find_help_resources` and `brc_get_help_resource_details`. These read-only tools do not require a connected company.
@@ -118,8 +124,10 @@ brc_confirm_company_connection(code)
 Later tool calls (hosted HTTP)
   → optional connectionRef argument on credential-requiring tools
   → enrichToolResponseData() echoes activeConnectionRef + presentation hints
-Runtime auth failure (401/403 on a company)
+Runtime auth failure (confirmed 401 / invalid-credential body only)
   → invalidateCompanyCredential(); company_credential_invalid response
+Other non-2xx (403/404/422/500, timeouts, validation/permission failures)
+  → preserve stored credential; surface as an API/request error (not “expired API key”)
 ```
 
 **CSV and partial success.** Each row is validated independently. A bad key for Company A does not prevent Companies B/C/D from connecting. Stale store entries for a resubmitted company name are cleared before validation.
@@ -127,6 +135,10 @@ Runtime auth failure (401/403 on a company)
 **Presentation.** `customerMessage` and MCP instructions tell assistants to use plain language for users. `connectionRef`, `redconn_…`, and session diagnostics stay in structured tool output for MCP clients only.
 
 **Session duration.** `BRC_API_KEY_TTL_MINUTES` controls credential expiry and user-facing duration text via `connection_presentation.ts` (for example `240` → “about 4 hours”).
+
+**connectionRef reuse.** Credential-requiring tools accept an optional `connectionRef` (see `src/auth/connection_ref.ts` and `withConnectionRefSchema` in `register_all_tools.ts`). MCP clients should preserve and silently reuse `connectionRef` / `activeConnectionRef` when platforms rotate MCP session IDs. Where a shared connection store is configured, connection persistence survives MCP session rotation. Tools that never need company credentials omit the argument (`CONNECTION_REF_SCHEMA_EXEMPT_TOOLS`: getting started, deployment policy, help tools, and `brc_open_edu_admin`).
+
+Operator/developer telemetry identity (anonymous only) is documented in [TELEMETRY.md](TELEMETRY.md).
 
 ---
 
@@ -145,6 +157,7 @@ Sales invoice safeguards (summary):
 - Gross Price Entry requires an explicit `priceBasis` of `gross` or `net`.
 - Sales invoices must use a Sales VAT category; purchase VAT rates are blocked.
 - `productId` `0` and `1` are treated as placeholders and blocked before preview-before-posting and post.
+- For `brc_create_sales_invoice_gen_ref`, each `productTrans` line must include its own nested `acEntries` analysis allocation. Cross-field checks cover line net/VAT/gross reconciliation, analysis allocation totals, header totals, and required product/VAT/analysis fields. Failures return structured field-level validation errors (`valid: false`) before preview-before-posting and before posting.
 - `note` defaults to the customer name unless explicitly provided, and is never a product name.
 - `deliveryTo` is included only when explicitly provided.
 
@@ -165,7 +178,29 @@ Endpoint paths are relative to the configured Big Red Cloud API base URL. Write 
 | `brc_clear_company_api_key` | Clear one company connection |
 | `brc_clear_all_company_api_keys` | Clear all company connections |
 
-Credential-requiring tools accept an optional `connectionRef` argument (hosted HTTP). See `src/auth/connection_ref.ts` and `register_all_tools.ts`.
+Credential-requiring tools accept an optional `connectionRef` argument (hosted HTTP). Describe that behaviour once here — it is not repeated on every tool row below. See section 4 and `src/auth/connection_ref.ts`.
+
+### Help and training resources
+
+These tools are read-only and do not require a connected Big Red Cloud company.
+
+| MCP tool | Purpose |
+| -------- | ------- |
+| `brc_find_help_resources` | Search Freshdesk support articles, customer documentation, recorded webinars, and upcoming webinars |
+| `brc_get_help_resource_details` | Load the full details for a selected resource, including article steps and relevant screenshot links where available |
+| `brc_open_edu_admin` | Staff helper: returns the protected BRC Edu admin page URL (Microsoft Entra sign-in still required). Never returns upload secrets or bypass links. Not a customer company-data tool. |
+
+`brc_find_help_resources` supports source filtering so callers can search all help sources or a specific source.
+
+Freshdesk resource details may include:
+
+- official article links;
+- step-by-step instructions;
+- screenshot links;
+- related recorded videos;
+- a Big Red Cloud support fallback.
+
+These tools are intended for product help and training questions, not for accessing a customer’s accounting data.
 
 ### Help and training resources
 
@@ -200,12 +235,18 @@ These tools are intended for product help and training questions, not for access
 | MCP tool | Purpose |
 | -------- | ------- |
 | `brc_getting_started` | Onboarding guidance text |
-| `brc_company_readiness_check` | Pre-flight company checks |
+| `brc_company_readiness_check` | Overall company health/readiness for a connected company |
 | `brc_validate_transaction_date` | Financial-year date validation |
 | `brc_get_deployment_policy` | Active safety flags and policy |
 | `brc_get_company_processing_settings` | Mapped processing settings |
 | `brc_get_company_reference_settings` | Reference auto-generation settings |
-| `brc_check_transaction_settings` | Combined transaction safety check |
+| `brc_check_transaction_settings` | Combined transaction safety check for one VAT-sensitive workflow |
+
+**`brc_company_readiness_check` overall statuses:** `ready`, `ready_with_warnings`, `not_ready`, `connection_problem`.
+
+Checks include connection status, financial year / transaction date position, customers, products, suppliers, sales reps, active Sales VAT rates, Sales Analysis categories, processing settings, and reference settings. Missing suppliers is a purchase-setup warning and does **not** block sales-invoice readiness. Manual reference modes are warnings / preflight considerations, not necessarily blockers.
+
+Use readiness for overall setup health. Use `brc_check_transaction_settings` (and the narrower date/processing/reference helpers) when preparing a specific workflow.
 
 ### Customers and suppliers
 
@@ -294,6 +335,8 @@ These tools are intended for product help and training questions, not for access
 | `brc_create_payment` | POST | `/v1/payments` |
 | `brc_update_payment` | PUT | `/v1/payments/{id}` |
 | `brc_delete_payment` | DELETE | `/v1/payments/{id}` |
+| `brc_list_bank_accounts` | GET | `/v1/bankAccounts` |
+| `brc_get_bank_account` | GET | `/v1/bankAccounts/{id}` |
 | `brc_list_cash_payments` | GET | `/v1/cashPayments` |
 | `brc_get_cash_payment` | GET | `/v1/cashPayments/{id}` |
 | `brc_create_cash_payment` | POST | `/v1/cashPayments` |
@@ -409,6 +452,7 @@ Considerations:
 
 - Whether references are auto-generated or manual depends on the company's reference settings; the reference guard (`company_reference_settings.ts`) chooses or blocks the appropriate workflow.
 - Some generated-document endpoints may apply the tenant's current transaction date, so the active financial year affects whether they succeed. Use `brc_validate_transaction_date` first where relevant.
+- **`brc_create_sales_invoice_gen_ref` multi-line behaviour.** The raw BRC payload may contain multiple `productTrans` lines. Each line must include its own nested `acEntries` analysis allocation (at least one entry). Before preview-before-posting and before posting, Red validates line net/VAT/gross reconciliation, analysis allocation totals against line net, header totals, and required product/VAT/analysis fields. Validation failures return structured field-level errors (for example `productTrans.1.acEntries`) and do not call Big Red Cloud. Placeholder `productId` values `0` and `1` are blocked; Sales VAT category validation still applies. Write tools still require explicit confirmation after a successful preview — nothing is written until confirmed. Previews before posting are not drafts stored in Big Red Cloud.
 
 ---
 
@@ -416,7 +460,7 @@ Considerations:
 
 - **Bank account writes.** Read-only `brc_list_bank_accounts` and `brc_get_bank_account` are available for payment workflows. Bank create/update/delete may require additional tenant configuration and can be gated by deployment flags.
 - **Email sending.** `brc_send_sales_invoice_email`, `brc_send_email_statement`, and `brc_send_quote_email` (endpoints under `/v1/email/...`) require a send confirmation and depend on tenant email configuration; they may be disabled by deployment flags.
-- **Operator/dev diagnostics.** Diagnostic tools are available only when dev mode is explicitly enabled and are intended for operators, not end users.
+- **Operator/dev diagnostics.** Tools such as `brc_set_company_api_key`, `brc_get_dev_mode_details`, `brc_dev_diagnose_company_processing_settings`, and `brc_get_connection_store_diagnostics` are available only when `BRC_ALLOW_DEV_MODE` is enabled. They are operator/development aids, not normal customer tools. Do not document or present them as customer-facing company workflows.
 
 Skill groups (read, update, delete, email, batch, dev) are toggled by the `BRC_ALLOW_*` environment variables. When a group is disabled, its tools return a permission message instead of calling Big Red Cloud. Use `brc_get_deployment_policy` to inspect the active policy.
 
@@ -432,7 +476,11 @@ Tests use the Node.js built-in test runner and live alongside the source as `*.t
 - `npm run test:config` — deployment/config tests.
 - `npm run test:integration` — integration tests.
 
+<<<<<<< HEAD
+Representative coverage includes sales invoice safeguards (including multi-line generated-reference `acEntries` validation), transaction date validation, transaction settings warnings, company readiness scoring, the secure connection flow, connectionRef persistence/presentation rules, TTL wording, response wording, unified help search, Freshdesk article ranking, screenshot links, recorded webinar matching, and help-resource details.
+=======
 Representative coverage includes sales invoice safeguards, transaction date validation, transaction settings warnings, the secure connection flow, connectionRef presentation rules, TTL wording, response wording, unified help search, Freshdesk article ranking, screenshot links, recorded webinar matching, and help-resource details.
+>>>>>>> company-github/main
 
 ---
 

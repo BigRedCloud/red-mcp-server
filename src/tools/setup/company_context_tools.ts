@@ -29,6 +29,7 @@ import {
   assertApiKeyAllowed,
   getApiKeyExpirationMs,
   getPublicBaseUrl,
+  getConnectUrlHostMismatch,
 } from "../../config/server_config.js";
 import {
   claimConnectionCodeForSession,
@@ -36,8 +37,11 @@ import {
   createPendingConnection,
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  getConnectionStoreTargetName,
+  getDeploymentEnvironmentLabel,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
   formatStartConnectionResponse,
@@ -67,6 +71,20 @@ export function registerCompanyContextTools(server: ServerType) {
 
       const { code } = await createPendingConnection(sessionId);
       const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
+
+      try {
+        const hostMismatch = getConnectUrlHostMismatch();
+        console.info(
+          "Red connect URL host check:",
+          JSON.stringify({
+            ...hostMismatch,
+            targetEnvironment: getDeploymentEnvironmentLabel(),
+            targetStoreName: getConnectionStoreTargetName(),
+          })
+        );
+      } catch {
+        // ignore
+      }
 
       return textResponse(formatStartConnectionResponse(url));
     }
@@ -104,6 +122,14 @@ export function registerCompanyContextTools(server: ServerType) {
         await ensureCredentialsForCurrentSession();
 
         enterMcpSessionContext({ sessionId, connectionId: result.connectionId });
+
+        try {
+          mergeRedTelemetryContext({
+            connectionSessionId: result.connectionSessionId,
+          });
+        } catch {
+          // Telemetry must not block confirmation.
+        }
 
         const customerMessage = buildConfirmConnectionCustomerMessage({
           connectedCompanies: result.connectedCompanies,

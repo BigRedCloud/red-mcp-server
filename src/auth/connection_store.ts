@@ -13,6 +13,7 @@ import { FRESH_CONNECTION_LINK_CLAIM_GUIDANCE } from "./connection_wording.js";
 import { issueConnectionRef } from "./connection_ref.js";
 import { revalidateStoredConnectionCompanies } from "./connection_persistence.js";
 import type { FailedCompanyConnection } from "./connection_store_types.js";
+import { generateConnectionSessionId } from "../telemetry/identity.js";
 
 export type ConnectionStoreKind = "memory" | "cosmos";
 
@@ -55,6 +56,30 @@ function resolveCosmosDatabaseId(): string {
 
 function resolveCosmosContainerId(): string {
   return process.env.RED_CONNECT_COSMOS_CONTAINER?.trim() || "connections";
+}
+
+/**
+ * Safe store label for diagnostics (kind + db/container names only — never the
+ * connection string). Example: `cosmos:red-connect/connections` or `memory`.
+ */
+export function getConnectionStoreTargetName(): string {
+  const kind = getConnectionStoreKind();
+  if (kind === "cosmos") {
+    return `cosmos:${resolveCosmosDatabaseId()}/${resolveCosmosContainerId()}`;
+  }
+  return "memory";
+}
+
+export function getDeploymentEnvironmentLabel(): string {
+  const configured = process.env.BRC_DEPLOYMENT_ENV?.trim().toLowerCase();
+  if (configured) {
+    return configured;
+  }
+  const slot = process.env.WEBSITE_SLOT_NAME?.trim().toLowerCase();
+  if (slot) {
+    return slot;
+  }
+  return "unknown";
 }
 
 export function getConnectionStore(): ConnectionStore {
@@ -267,6 +292,8 @@ export type ClaimConnectionResult = {
   companyNames: string[];
   connectionRef: string;
   connectionRefExpiresAt: number;
+  /** Anonymous per-confirm telemetry UUID — never a secret. */
+  connectionSessionId: string;
 };
 
 export class ClaimConnectionError extends Error {
@@ -341,6 +368,21 @@ export async function claimConnectionCodeForSession(
   const { connectionRef, expiresAt: connectionRefExpiresAt } =
     await issueConnectionRef(pending.connectionId);
 
+  const connectionSessionId = generateConnectionSessionId();
+
+  try {
+    // Merge session id into the existing telemetry record (client id from POST
+    // /connect). Never replace the whole record with a session-only object.
+    await store.saveConnectionTelemetry(pending.connectionId, {
+      connectionSessionId,
+    });
+  } catch (error) {
+    console.error(
+      "Red telemetry: failed to store connection session id:",
+      error instanceof Error ? error.message : error
+    );
+  }
+
   const connectedCompaniesList = connectedCompanies;
 
   return {
@@ -350,6 +392,7 @@ export async function claimConnectionCodeForSession(
     companyNames: connectedCompaniesList,
     connectionRef,
     connectionRefExpiresAt,
+    connectionSessionId,
   };
 }
 
