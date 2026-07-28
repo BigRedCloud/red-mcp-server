@@ -98,7 +98,7 @@ export function registerHelpResourcesTools(server: ServerType): void {
         .enum([...HELP_RESOURCE_SOURCES, "all"])
         .optional()
         .describe(
-          "Optional source filter: freshdesk, customer_docs, recorded_webinar, upcoming_webinar, or all.",
+          "Optional source filter: freshdesk, customer_docs, recorded_webinar, youtube_video, upcoming_webinar, or all.",
         ),
     },
     async ({ question, category, maxResults, source }) => {

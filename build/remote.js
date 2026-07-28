@@ -11,10 +11,11 @@ import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
 import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
-import { buildTelemetryClientIdSetCookie, runWithRedTelemetryContext, } from "./telemetry.js";
-import { activatePreparedTelemetry, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, prepareMcpTelemetryContext, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
+import { buildTelemetryClientIdSetCookie, isValidTelemetryUuid, runWithRedTelemetryContext, } from "./telemetry.js";
+import { activatePreparedTelemetry, buildConnectTelemetryFlowDiagnostics, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, logConnectTelemetryFlowDiagnostics, logTelemetryClientIdPathDiagnostics, prepareMcpTelemetryContext, resolveAndPersistConnectTelemetryClientId, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
+import { clearSessionPlatform, extractMcpInitializeClientInfo, getStoredSessionPlatform, logPlatformDetectionDiagnostics, resolveClientPlatform, storeSessionPlatform, toPlatformDetectionDiagnostics, } from "./telemetry/platform.js";
 import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
-import { ensureConnectionStoreInitialized, getConnectionStore, } from "./auth/connection_store.js";
+import { ensureConnectionStoreInitialized, getConnectionStore, getConnectionStoreTargetName, getDeploymentEnvironmentLabel, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 import { renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
@@ -28,6 +29,7 @@ import { authorizeBrcEduAdminRequest, BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE, getBrc
 import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY, BRC_EDU_UPLOAD_FIELD_NAME, BRC_EDU_UPLOAD_MAX_BYTES, createConfiguredBrcEduBlobUploader, handleBrcEduResourceUpload, } from "./edu/brc_edu_upload_store.js";
 import { renderBrcEduStaffDeniedPage, renderBrcEduUploadErrorPage, renderBrcEduUploadPage, renderBrcEduUploadPlainError, renderBrcEduUploadSuccessPage, WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH, } from "./edu/brc_edu_upload_page.js";
 import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
+import { authorizeYouTubeServiceSyncSecret, handleYouTubeAdminListVideos, handleYouTubeAdminManualSync, handleYouTubeServiceSync, handleYouTubeVisibilityUpdate, handleYouTubeWebhookRequest, } from "./brc-edu/youtube/youtube-admin-http.js";
 function createMcpServer() {
     const server = createBrcMcpServer();
     registerAllTools(server);
@@ -44,7 +46,27 @@ async function closeSession(sessionId, session) {
     await session.transport.close().catch(() => { });
     await session.server.close().catch(() => { });
     unregisterHttpSessionKeyStore(sessionId);
+    clearSessionPlatform(sessionId);
     sessions.delete(sessionId);
+}
+function rememberSessionPlatform(session, sessionId, platform) {
+    if (!platform || platform === "unknown") {
+        return;
+    }
+    session.clientPlatform = platform;
+    storeSessionPlatform(sessionId, platform);
+}
+function restoreSessionPlatform(session, sessionId) {
+    if (session.clientPlatform && session.clientPlatform !== "unknown") {
+        storeSessionPlatform(sessionId, session.clientPlatform);
+        return session.clientPlatform;
+    }
+    const stored = getStoredSessionPlatform(sessionId);
+    if (stored) {
+        session.clientPlatform = stored;
+        return stored;
+    }
+    return undefined;
 }
 function trackHttpSession(sessionId, keyStore) {
     registerHttpSessionKeyStore(sessionId, keyStore);
@@ -57,15 +79,19 @@ async function createResumedMcpSession(sessionId) {
     });
     transport.onclose = () => {
         unregisterHttpSessionKeyStore(sessionId);
+        // Keep stored platform so a later resume of the same MCP session id can
+        // restore it before telemetry context is built.
         sessions.delete(sessionId);
     };
     await server.connect(transport);
+    const clientPlatform = getStoredSessionPlatform(sessionId);
     return {
         server,
         transport,
         keyStore,
         createdAt: Date.now(),
         lastSeenAt: Date.now(),
+        clientPlatform,
     };
 }
 async function cleanupExpiredSessions() {
@@ -84,7 +110,13 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
     const clientKey = buildHttpClientKeyFromRequest(req);
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
-    const connectionRef = extractConnectionRefFromMcpBody(body ?? req.body);
+    const requestBody = body ?? req.body;
+    const connectionRef = extractConnectionRefFromMcpBody(requestBody);
+    const clientInfo = isInitializeRequest(requestBody)
+        ? extractMcpInitializeClientInfo(requestBody)
+        : undefined;
+    // Restore stored platform before telemetry context is created (rehydration).
+    const storedPlatform = restoreSessionPlatform(session, normalizedSessionId);
     // Ordered: resolve connection → restore companies → load telemetry → count → context
     const prepared = await prepareMcpTelemetryContext({
         sessionId: normalizedSessionId,
@@ -92,7 +124,10 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
         clientKey,
         connectionRef,
         headers: req.headers,
+        clientInfo,
+        storedPlatform,
     });
+    rememberSessionPlatform(session, normalizedSessionId, prepared.platformDetection.platform);
     const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey, connectionRef);
     // Prefer the prepared connection id when scope resolution lagged behind rehydration.
     if (!scope.connectionId && prepared.connectionId) {
@@ -228,6 +263,7 @@ app.get("/favicon.ico", (_req, res) => {
     res.type("png").sendFile(RED_FAVICON_PATH);
 });
 app.use(express.urlencoded({ extended: false }));
+app.use("/internal/brc-edu/youtube/webhook", express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }));
 app.use(express.json());
 registerFreshdeskPublicImageRoute(app);
 function isInitializeRequest(body) {
@@ -271,9 +307,26 @@ function parseCompanyCsv(buffer) {
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
     await ensureConnectionStoreInitialized();
     const code = String(req.body.code ?? "");
-    const { clientId: telemetryClientId } = resolveTelemetryClientIdFromRequest(req);
+    const pendingEarly = code ? await getPendingConnection(code) : null;
+    // Prefer connection-scoped seed so cookie-less Mistral POSTs do not mint a
+    // second fallback after GET already assigned one.
+    const resolvedClient = pendingEarly
+        ? await resolveAndPersistConnectTelemetryClientId({
+            connectionId: pendingEarly.connectionId,
+            headers: req.headers,
+            body: req.body,
+        })
+        : resolveTelemetryClientIdFromRequest(req);
+    const telemetryClientId = resolvedClient.clientId;
     const secureCookie = req.secure || req.protocol === "https";
     res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(telemetryClientId, { secure: secureCookie }));
+    const lsFlag = String(req.body.telemetryClientIdLsPresent ?? "");
+    logConnectTelemetryFlowDiagnostics(buildConnectTelemetryFlowDiagnostics({
+        resolution: resolvedClient,
+        code,
+        req,
+        localStorageIdPresent: lsFlag === "1" || lsFlag === "true",
+    }));
     let companies = [];
     if (req.file?.buffer) {
         companies = parseCompanyCsv(req.file.buffer);
@@ -301,6 +354,43 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
+    const pathDiagnostics = {
+        cookieClientIdPresent: resolvedClient.cookieClientIdPresent,
+        localStorageClientIdSubmitted: resolvedClient.postClientIdPresent,
+        postClientIdPresent: resolvedClient.postClientIdPresent,
+        postClientIdValid: resolvedClient.postClientIdValid,
+        saveTelemetryClientIdPresent: Boolean(telemetryClientId),
+        persistedTelemetryClientIdPresent: false,
+        loadedTelemetryClientIdPresent: false,
+    };
+    try {
+        console.info("Red telemetry client id save:", JSON.stringify({
+            telemetryClientIdPresent: Boolean(telemetryClientId),
+            telemetryClientIdValid: isValidTelemetryUuid(telemetryClientId),
+            fallbackGenerated: resolvedClient.fallbackGenerated,
+            source: resolvedClient.source,
+            targetEnvironment: getDeploymentEnvironmentLabel(),
+            targetStoreName: getConnectionStoreTargetName(),
+        }));
+    }
+    catch {
+        // ignore
+    }
+    // Persist client id as soon as the pending code is claimed, before credential
+    // validation, so a later session-id write cannot be the first (partial) upsert.
+    try {
+        await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
+            telemetryClientId,
+        });
+        const persisted = await getConnectionStore().getConnectionTelemetry(pending.connectionId);
+        pathDiagnostics.persistedTelemetryClientIdPresent = Boolean(persisted?.telemetryClientId);
+        pathDiagnostics.loadedTelemetryClientIdPresent =
+            pathDiagnostics.persistedTelemetryClientIdPresent;
+    }
+    catch (error) {
+        console.error("Red telemetry: failed to store telemetry client id:", error instanceof Error ? error.message : error);
+    }
+    logTelemetryClientIdPathDiagnostics(pathDiagnostics);
     const telemetryContext = buildRequestTelemetryContext({
         req,
         connectionId: pending.connectionId,
@@ -314,14 +404,6 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
                 companies,
                 expiresAt: Date.now() + getApiKeyExpirationMs(),
             });
-            try {
-                await getConnectionStore().saveConnectionTelemetry(pending.connectionId, {
-                    telemetryClientId,
-                });
-            }
-            catch (error) {
-                console.error("Red telemetry: failed to store telemetry client id:", error instanceof Error ? error.message : error);
-            }
             if (outcome.connectedCompanies.length === 0) {
                 const message = outcome.failedCompanies.length > 0
                     ? outcome.failedCompanies.map((failure) => failure.message).join(" ")
@@ -371,6 +453,12 @@ app.post("/mcp", async (req, res) => {
         });
         return;
     }
+    const initializeClientInfo = extractMcpInitializeClientInfo(req.body);
+    const initializePlatform = resolveClientPlatform({
+        clientInfo: initializeClientInfo,
+        headers: req.headers,
+    });
+    logPlatformDetectionDiagnostics(toPlatformDetectionDiagnostics(initializePlatform));
     const keyStore = new Map();
     const server = createMcpServer();
     const transport = new StreamableHTTPServerTransport({
@@ -380,6 +468,7 @@ app.post("/mcp", async (req, res) => {
         const sid = transport.sessionId;
         if (sid) {
             unregisterHttpSessionKeyStore(sid);
+            // Keep stored platform for same-session resume / rehydration.
             sessions.delete(sid);
         }
     };
@@ -390,11 +479,15 @@ app.post("/mcp", async (req, res) => {
         keyStore,
         createdAt: Date.now(),
         lastSeenAt: Date.now(),
+        clientPlatform: initializePlatform.platform !== "unknown"
+            ? initializePlatform.platform
+            : undefined,
     };
     const sidAfterInit = transport.sessionId;
     if (sidAfterInit) {
         sessions.set(sidAfterInit, provisionalSession);
         trackHttpSession(sidAfterInit, keyStore);
+        rememberSessionPlatform(provisionalSession, sidAfterInit, initializePlatform.platform);
         await handleMcpRequest(provisionalSession, sidAfterInit, req, res, req.body);
         return;
     }
@@ -405,6 +498,7 @@ app.post("/mcp", async (req, res) => {
     if (sid) {
         sessions.set(sid, provisionalSession);
         trackHttpSession(sid, keyStore);
+        rememberSessionPlatform(provisionalSession, sid, initializePlatform.platform);
         await ensureMcpSessionReady(sid, keyStore);
     }
 });
@@ -416,16 +510,29 @@ app.get("/connect", async (req, res) => {
         res.status(400).send(renderExpiredLinkPage());
         return;
     }
-    const { clientId } = resolveTelemetryClientIdFromRequest(req);
+    // Persist on first GET so duplicate cookie-less opens (Mistral webview /
+    // link previews) reuse one canonical id instead of minting another fallback.
+    const resolvedClient = await resolveAndPersistConnectTelemetryClientId({
+        connectionId: pending.connectionId,
+        headers: req.headers,
+        body: undefined,
+    });
+    const clientId = resolvedClient.clientId;
     const secureCookie = req.secure || req.protocol === "https";
     res.setHeader("Set-Cookie", buildTelemetryClientIdSetCookie(clientId, { secure: secureCookie }));
+    logConnectTelemetryFlowDiagnostics(buildConnectTelemetryFlowDiagnostics({
+        resolution: resolvedClient,
+        code,
+        req,
+        localStorageIdPresent: false,
+    }));
     const telemetryContext = buildRequestTelemetryContext({
         req,
         connectionId: pending.connectionId,
         telemetryClientId: clientId,
     });
     return runWithRedTelemetryContext(telemetryContext, () => {
-        res.send(renderConnectPage(code));
+        res.send(renderConnectPage(code, { telemetryClientId: clientId }));
     });
 });
 app.get("/mcp", async (req, res) => {
@@ -581,6 +688,80 @@ app.post("/internal/brc-edu/resources/upload", (req, res) => {
             }
         });
     });
+});
+app.get("/internal/brc-edu/youtube/videos", async (req, res) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const result = await handleYouTubeAdminListVideos();
+    res.status(result.status).json(result.body);
+});
+app.post("/internal/brc-edu/youtube/sync", async (req, res) => {
+    const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+    const normalizedSecret = Array.isArray(requestSecret)
+        ? requestSecret[0]
+        : requestSecret;
+    const serviceAuth = authorizeYouTubeServiceSyncSecret(typeof normalizedSecret === "string" ? normalizedSecret : undefined);
+    if (serviceAuth.ok) {
+        const sourceHeader = req.headers["x-red-youtube-sync-source"];
+        const sourceValue = Array.isArray(sourceHeader) ? sourceHeader[0] : sourceHeader;
+        const source = sourceValue === "webhook" || sourceValue === "timer" ? sourceValue : "timer";
+        const result = await handleYouTubeServiceSync(source);
+        res.status(result.status).json(result.body);
+        return;
+    }
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const result = await handleYouTubeAdminManualSync();
+    res.status(result.status).json(result.body);
+});
+app.post("/internal/brc-edu/youtube/videos/:videoId/visibility", async (req, res) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+        sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+        return;
+    }
+    const result = await handleYouTubeVisibilityUpdate({
+        videoId: String(req.params.videoId ?? ""),
+        body: req.body,
+        excludedBy: authResult.identity,
+    });
+    res.status(result.status).json(result.body);
+});
+app.all("/internal/brc-edu/youtube/webhook", async (req, res) => {
+    const configuredSecret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim();
+    if (configuredSecret) {
+        const headerSecret = req.headers["x-red-youtube-webhook-secret"];
+        const provided = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
+        const querySecret = typeof req.query.token === "string" ? req.query.token : undefined;
+        const candidate = (provided || querySecret || "").trim();
+        if (candidate !== configuredSecret) {
+            // For hub verification GET, allow hub.verify_token path inside handler.
+            if (req.method.toUpperCase() !== "GET") {
+                res.status(401).send("Unauthorized.");
+                return;
+            }
+        }
+    }
+    const handled = handleYouTubeWebhookRequest(req);
+    if (handled.contentType) {
+        res.setHeader("Content-Type", handled.contentType);
+    }
+    if (handled.shouldSync) {
+        void handleYouTubeServiceSync("webhook").catch(() => {
+            // Webhook acknowledgements should not fail the publisher; timer sync recovers.
+        });
+    }
+    if (handled.status === 204) {
+        res.status(204).end();
+        return;
+    }
+    res.status(handled.status).send(handled.body ?? "");
 });
 app.delete("/mcp", async (req, res) => {
     const sessionId = resolveMcpSessionIdFromRequest(req);

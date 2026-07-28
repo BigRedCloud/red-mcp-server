@@ -15,4 +15,5 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
     }
 }
 export { buildTelemetryClientIdSetCookie, buildTelemetryCustomDimensions, generateConnectionSessionId, generateTelemetryUuid, getRedTelemetryContext, isValidTelemetryUuid, mergeRedTelemetryContext, normaliseTelemetryClientId, runWithRedTelemetryContext, TELEMETRY_CLIENT_ID_COOKIE, TELEMETRY_CLIENT_ID_FORM_FIELD, } from "./telemetry/identity.js";
-export { detectClientPlatform, resolveRedTelemetryEnvironment, } from "./telemetry/platform.js";
+export { detectClientPlatform, extractMcpInitializeClientInfo, getStoredSessionPlatform, matchPlatformFromText, normalizeClientPlatform, resolveClientPlatform, resolveRedTelemetryEnvironment, storeSessionPlatform, } from "./telemetry/platform.js";
+export { hashConnectionCodeForDiagnostics, resolveAndPersistConnectTelemetryClientId, resolveCanonicalTelemetryClientId, } from "./telemetry/context.js";

@@ -216,6 +216,17 @@ function sourceBoost(
     return baseScore + 5;
   }
 
+  if (source === "youtube_video") {
+    if (/\b(video|recording|watch|tutorial|how\s*to)\b/i.test(question)) {
+      return baseScore + 12;
+    }
+    // Prefer recorded webinars over ordinary channel videos for webinar queries.
+    if (/\bwebinar\b/i.test(question)) {
+      return Math.max(0, baseScore - 5);
+    }
+    return baseScore + 5;
+  }
+
   if (source === "upcoming_webinar") {
     if (isTrainingOrLiveHelpQuery(question)) {
       return baseScore + 18;
@@ -238,13 +249,34 @@ function fromUpcomingWebinarResource(
   return resource;
 }
 
+function resolveVideoHelpSource(
+  resource: EnrichedEduResource,
+): "recorded_webinar" | "youtube_video" {
+  return resource.youtubeCategory === "youtube_video"
+    ? "youtube_video"
+    : "recorded_webinar";
+}
+
+function buildVideoHelpResourceId(
+  resource: EnrichedEduResource,
+  source: "recorded_webinar" | "youtube_video",
+): string {
+  if (resource.videoId) {
+    return `${source}:${resource.videoId}`;
+  }
+
+  return `${source}:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`;
+}
+
 function fromRecordedWebinarResource(
   resource: EnrichedEduResource,
   syncedAt: string,
 ): NormalizedHelpResource {
+  const source = resolveVideoHelpSource(resource);
+
   return {
-    resourceId: `recorded_webinar:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`,
-    source: "recorded_webinar",
+    resourceId: buildVideoHelpResourceId(resource, source),
+    source,
     title: resource.title,
     summary: resource.description || resource.title,
     bodyText: resource.description,
@@ -463,15 +495,24 @@ export function searchUnifiedHelpResources(
       }
     }
 
-    if (includeSource("recorded_webinar")) {
+    if (includeSource("recorded_webinar") || includeSource("youtube_video")) {
       for (const resource of sources.recordedWebinars ?? []) {
         if (!resource.isActive) {
           continue;
         }
 
         const normalized = fromRecordedWebinarResource(resource, syncedAt);
+        if (
+          (normalized.source === "recorded_webinar" &&
+            !includeSource("recorded_webinar")) ||
+          (normalized.source === "youtube_video" &&
+            !includeSource("youtube_video"))
+        ) {
+          continue;
+        }
+
         let score = sourceBoost(
-          "recorded_webinar",
+          normalized.source,
           query,
           scoreTextMatch(query, questionTokens, [
             normalized.title,
@@ -499,7 +540,7 @@ export function searchUnifiedHelpResources(
         }
 
         consider(
-          `recorded_webinar:${normalized.url}`,
+          `${normalized.source}:${normalized.url}`,
           score,
           toHelpSearchResult(normalized, score),
         );

@@ -1,6 +1,7 @@
 import { escapeHtml } from "../auth/connection_page.js";
 import { RED_LOGO_URL } from "../auth/red_assets.js";
 import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY, BRC_EDU_UPLOAD_FIELD_NAME, } from "./brc_edu_upload_store.js";
+import { renderYouTubeAdminSectionHtml, youtubeAdminSectionCss, YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS, } from "../brc-edu/youtube/youtube-admin-page.js";
 const BRC_RED = "#b5121b";
 const BRC_RED_DARK = "#8f0e16";
 const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
@@ -19,6 +20,7 @@ export const BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS = [
     "add-btn",
     "save-btn",
     "cancel-btn",
+    ...YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS,
 ];
 /** Element IDs referenced by the admin script but safe to omit. */
 export const BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS = [
@@ -283,6 +285,8 @@ function pageShell(title, content, extraHead = "") {
         .toolbar { flex-direction: column; }
         .btn { width: 100%; }
       }
+
+      ${youtubeAdminSectionCss()}
     </style>
   </head>
   <body>
@@ -622,14 +626,14 @@ export function renderBrcEduUploadPage(secretOrAuth) {
       <div class="card instructions">
         <h2>How to manage Red webinar resources</h2>
         <ol class="lead">
-          <li>Refresh from Azure before editing.</li>
-          <li>Add or update resource rows in the table below.</li>
-          <li>Use public URLs for each video resource. Each Video URL must be unique; titles may repeat when URLs differ.</li>
-          <li>Set Active to control visibility in Red.</li>
-          <li>Save &amp; Publish when finished.</li>
-          <li>Previous versions are archived automatically.</li>
+          <li>Prefer the YouTube video management section below for channel and webinar videos — visibility exclusions are permanent across syncs.</li>
+          <li>The Excel workbook is regenerated automatically from YouTube and remains available for download and inspection.</li>
+          <li>Manual Excel edits are still supported for exceptional cases, but normal YouTube updates no longer require editing the workbook.</li>
+          <li>Previous workbook versions are archived automatically when published.</li>
         </ol>
       </div>
+
+      ${renderYouTubeAdminSectionHtml(auth)}
 
       <div class="card">
         <div class="meta-bar">

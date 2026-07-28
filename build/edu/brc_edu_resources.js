@@ -4,6 +4,7 @@ import { enrichSupportEduRows, normaliseSupportEduRows, parseSupportEduCsv, } fr
 import { downloadSupportCsvFromGraph, getBrcEduGraphConfig } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
 import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
+import { loadVisibleYouTubeResourcesForHelpSearch } from "../brc-edu/youtube/youtube-help-loader.js";
 import { freshdeskHelpResultDedupeKey, normaliseHelpSearchText, scoreFreshdeskHelpArticle, toFreshdeskHelpResourceResult, tokenizeHelpSearchQuestion, } from "../brc-edu/freshdesk/freshdesk-help-search.js";
 let eduResourcesCache = null;
 export function resetEduResourcesCacheForTests() {
@@ -145,6 +146,12 @@ function loadSyncedEduResourcesIfAvailable(baseDir) {
     return null;
 }
 export async function loadEnrichedEduResources(baseDir = process.cwd(), options) {
+    const fromYouTube = await loadVisibleYouTubeResourcesForHelpSearch(undefined, {
+        now: options?.now,
+    });
+    if (fromYouTube && fromYouTube.length > 0) {
+        return fromYouTube;
+    }
     const synced = loadSyncedEduResourcesIfAvailable(baseDir);
     if (synced) {
         return synced;

@@ -36,6 +36,7 @@ src/
 │   ├── freshdesk/                 Freshdesk support articles, screenshots, and public image links
 │   ├── customer-docs/             Customer documentation index
 │   ├── upcoming-webinars/         Upcoming webinar index
+│   ├── youtube/                   YouTube catalogue sync, staff overrides, workbook export
 │   └── help/                      Unified help search and resource-detail formatting
 ├── edu/                           Help-resource loading, enrichment, workbook parsing, and storage configuration
 └── tools/
@@ -491,7 +492,8 @@ Red can answer Big Red Cloud how-to and training questions using deployment-prov
 | ------ | ------- |
 | Freshdesk | Official support articles and screenshots |
 | Customer documentation | Big Red Cloud procedural and product documentation |
-| Recorded webinars | Relevant training and webinar recordings |
+| Recorded webinars | Videos from the Big Red Cloud webinar playlist |
+| YouTube videos | Other Big Red Cloud channel uploads |
 | Upcoming webinars | Scheduled training events and registration information |
 
 The optional source filter accepts:
@@ -500,7 +502,20 @@ The optional source filter accepts:
 - `freshdesk`
 - `customer_docs`
 - `recorded_webinar`
+- `youtube_video`
 - `upcoming_webinar`
+
+### YouTube catalogue (operators)
+
+Red prefers `brc-edu/youtube/effective-video-catalog.json` for customer video search. Staff exclusions in `video-overrides.json` are permanent across syncs and are never returned to customers. The workbook `brc-edu/latest/webinar_video_routing_index.xlsx` is regenerated automatically as a compatibility export.
+
+Synchronisation entry points:
+
+- Azure Function timer (`BRC_YOUTUBE_SYNC_SCHEDULE`, default hourly) → `POST /internal/brc-edu/youtube/sync` with the edu sync secret
+- Optional YouTube PubSubHubbub webhook → Red `/internal/brc-edu/youtube/webhook` (or the Function forwarder)
+- Staff **Sync YouTube now** on the protected BRC Edu admin page
+
+See `.env.example` and `functions/brc-edu-resource-processor/local.settings.json.example` for required settings.
 
 ### Help search
 
@@ -563,9 +578,11 @@ Key implementation files:
 - `src/brc-edu/help/help-answer-sources.ts` — article and video source formatting
 - `src/brc-edu/freshdesk/` — Freshdesk article and screenshot handling
 - `src/brc-edu/customer-docs/` — customer-document search index
+- `src/brc-edu/youtube/` — YouTube catalogue sync, overrides, workbook export, admin APIs
 - `src/brc-edu/upcoming-webinars/` — upcoming-webinar parsing and index loading
-- `src/edu/brc_edu_resources.ts` — recorded-webinar resource loading
+- `src/edu/brc_edu_resources.ts` — recorded-webinar / YouTube resource loading
 - `src/edu/brc_edu_storage_config.ts` — shared help-index storage configuration
 - `src/config/red_public_base_url.ts` — public screenshot-link base URL
+- `functions/brc-edu-resource-processor/` — workbook blob processor, YouTube timer, webhook forwarder
 
 Help-resource indexes are supplied by the deployment operator. Public users cannot use these MCP tools to modify the live indexes or upload replacement support content.

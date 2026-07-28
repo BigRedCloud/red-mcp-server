@@ -118,6 +118,14 @@ import {
   WORKBOOK_DOWNLOAD_PATH,
 } from "./edu/brc_edu_upload_page.js";
 import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
+import {
+  authorizeYouTubeServiceSyncSecret,
+  handleYouTubeAdminListVideos,
+  handleYouTubeAdminManualSync,
+  handleYouTubeServiceSync,
+  handleYouTubeVisibilityUpdate,
+  handleYouTubeWebhookRequest,
+} from "./brc-edu/youtube/youtube-admin-http.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -461,6 +469,10 @@ app.get("/favicon.ico", (_req, res) => {
   res.type("png").sendFile(RED_FAVICON_PATH);
 });
 app.use(express.urlencoded({ extended: false }));
+app.use(
+  "/internal/brc-edu/youtube/webhook",
+  express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }),
+);
 app.use(express.json());
 
 registerFreshdeskPublicImageRoute(app);
@@ -1048,6 +1060,100 @@ app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => 
       }
     });
   });
+});
+
+app.get("/internal/brc-edu/youtube/videos", async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleYouTubeAdminListVideos();
+  res.status(result.status).json(result.body);
+});
+
+app.post("/internal/brc-edu/youtube/sync", async (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret)
+    ? requestSecret[0]
+    : requestSecret;
+  const serviceAuth = authorizeYouTubeServiceSyncSecret(
+    typeof normalizedSecret === "string" ? normalizedSecret : undefined,
+  );
+
+  if (serviceAuth.ok) {
+    const sourceHeader = req.headers["x-red-youtube-sync-source"];
+    const sourceValue = Array.isArray(sourceHeader) ? sourceHeader[0] : sourceHeader;
+    const source =
+      sourceValue === "webhook" || sourceValue === "timer" ? sourceValue : "timer";
+    const result = await handleYouTubeServiceSync(source);
+    res.status(result.status).json(result.body);
+    return;
+  }
+
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleYouTubeAdminManualSync();
+  res.status(result.status).json(result.body);
+});
+
+app.post(
+  "/internal/brc-edu/youtube/videos/:videoId/visibility",
+  async (req: Request, res: Response) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+      sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+      return;
+    }
+
+    const result = await handleYouTubeVisibilityUpdate({
+      videoId: String(req.params.videoId ?? ""),
+      body: req.body,
+      excludedBy: authResult.identity,
+    });
+    res.status(result.status).json(result.body);
+  },
+);
+
+app.all("/internal/brc-edu/youtube/webhook", async (req: Request, res: Response) => {
+  const configuredSecret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim();
+  if (configuredSecret) {
+    const headerSecret = req.headers["x-red-youtube-webhook-secret"];
+    const provided = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
+    const querySecret =
+      typeof req.query.token === "string" ? req.query.token : undefined;
+    const candidate = (provided || querySecret || "").trim();
+    if (candidate !== configuredSecret) {
+      // For hub verification GET, allow hub.verify_token path inside handler.
+      if (req.method.toUpperCase() !== "GET") {
+        res.status(401).send("Unauthorized.");
+        return;
+      }
+    }
+  }
+
+  const handled = handleYouTubeWebhookRequest(req);
+  if (handled.contentType) {
+    res.setHeader("Content-Type", handled.contentType);
+  }
+
+  if (handled.shouldSync) {
+    void handleYouTubeServiceSync("webhook").catch(() => {
+      // Webhook acknowledgements should not fail the publisher; timer sync recovers.
+    });
+  }
+
+  if (handled.status === 204) {
+    res.status(204).end();
+    return;
+  }
+
+  res.status(handled.status).send(handled.body ?? "");
 });
 
 app.delete("/mcp", async (req: Request, res: Response) => {

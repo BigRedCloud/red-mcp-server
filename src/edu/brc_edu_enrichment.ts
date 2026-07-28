@@ -54,6 +54,10 @@ export type EnrichedEduResource = {
   generatedFrom: string;
   needsReview: boolean;
   notes?: string;
+  /** Stable YouTube identity when the resource came from the YouTube catalogue. */
+  videoId?: string;
+  /** Distinguishes recorded webinars from other channel videos for help search. */
+  youtubeCategory?: "recorded_webinar" | "youtube_video";
 };
 
 type CategoryInference = {
@@ -173,7 +177,7 @@ function normalizeHeaderKey(key: string): string {
 const SUPPORT_FIELD_ALIASES = {
   title: ["video_title", "title"],
   url: ["video_url", "url"],
-  notes: ["notes", "note"],
+  notes: ["notes", "note", "description"],
   preferredCategory: [
     "help_routing_category",
     "preferred_category",

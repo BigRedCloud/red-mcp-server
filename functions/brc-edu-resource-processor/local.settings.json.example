@@ -5,6 +5,10 @@
     "BRC_EDU_STORAGE_CONNECTION": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "RED_BRC_EDU_SYNC_ENDPOINT": "https://your-red-host/internal/brc-edu/resources/sync",
-    "RED_BRC_EDU_SYNC_SECRET": ""
+    "RED_BRC_EDU_SYNC_SECRET": "",
+    "RED_BRC_YOUTUBE_SYNC_ENDPOINT": "https://your-red-host/internal/brc-edu/youtube/sync",
+    "RED_BRC_YOUTUBE_SYNC_SECRET": "",
+    "BRC_YOUTUBE_SYNC_SCHEDULE": "0 0 * * * *",
+    "RED_BRC_YOUTUBE_WEBHOOK_FORWARD": "true"
   }
 }

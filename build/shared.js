@@ -4,9 +4,9 @@ import { z } from "zod";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
-import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE } from "./auth/connection_ref.js";
+import { CONNECTION_REF_INVALID_MESSAGE, CONNECTION_REF_NOT_PASSED_MESSAGE, resolveConnectionIdFromRef } from "./auth/connection_ref.js";
 import { CompanyNotConnectedError, buildCompanyCredentialInvalidResponse, buildCompanyNotConnectedResponse, } from "./auth/company_connection_errors.js";
-import { evaluateBrcCredentialResponse, isBrcCredentialHttpFailure, responseBodyIndicatesInvalidCredential, } from "./auth/credential_validation.js";
+import { responseBodyIndicatesInvalidCredential, } from "./auth/credential_validation.js";
 import { enrichReadResponseBody, enrichWriteResponseBody, isListPayload, } from "./read_connection_metadata.js";
 import { ensureConnectionStoreInitialized, resolveConnectionIdForActiveSession, getCurrentConnectionId, getCurrentMcpSessionId, getMcpSessionContext, LOCAL_STDIO_SESSION_ID, runWithMcpSessionContext, } from "./auth/connection_store.js";
 export const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
@@ -385,8 +385,16 @@ export function normaliseCompanyName(companyName) {
 export async function getCredentialForCompanyAsync(companyName) {
     await ensureCredentialsForCurrentSession(companyName);
     const credential = companyCredentialProvider.getCredential(companyName);
-    if (!credential && getActiveConnectionRef()) {
-        throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+    if (!credential) {
+        const activeRef = getActiveConnectionRef();
+        if (activeRef) {
+            // Only say "invalid/expired" when the ref itself cannot be resolved.
+            // A resolved ref with no loaded company must not destroy the handoff story.
+            const connectionId = await resolveConnectionIdFromRef(activeRef);
+            if (!connectionId) {
+                throw new Error(CONNECTION_REF_INVALID_MESSAGE);
+            }
+        }
     }
     return getCredentialForCompany(companyName);
 }
@@ -880,9 +888,10 @@ export async function brcFetch(companyName, path, init = {}) {
     });
     const text = await response.text();
     if (!response.ok) {
-        const credentialFailure = isBrcCredentialHttpFailure(response.status) ||
-            responseBodyIndicatesInvalidCredential(text) ||
-            !evaluateBrcCredentialResponse(response.status, text).valid;
+        // Only remove stored credentials on confirmed authentication failures.
+        // 403/404/422/500 and other non-auth errors must preserve the connection.
+        const credentialFailure = response.status === 401 ||
+            responseBodyIndicatesInvalidCredential(text);
         if (credentialFailure) {
             await invalidateCompanyCredential(companyName);
             const otherCompaniesConnected = listConnectedCompanyNames().length > 0;

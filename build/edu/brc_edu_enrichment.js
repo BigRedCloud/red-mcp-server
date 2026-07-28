@@ -127,7 +127,7 @@ function normalizeHeaderKey(key) {
 const SUPPORT_FIELD_ALIASES = {
     title: ["video_title", "title"],
     url: ["video_url", "url"],
-    notes: ["notes", "note"],
+    notes: ["notes", "note", "description"],
     preferredCategory: [
         "help_routing_category",
         "preferred_category",

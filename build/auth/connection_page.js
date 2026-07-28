@@ -419,7 +419,11 @@ function brandBar() {
         </div>
       </header>`;
 }
-export function renderConnectPage(code) {
+export function renderConnectPage(code, options = {}) {
+    const clientId = options.telemetryClientId &&
+        options.telemetryClientId.trim().length > 0
+        ? escapeHtml(options.telemetryClientId.trim().toLowerCase())
+        : "";
     const sessionDuration = formatCredentialTtlForUser();
     const content = `
       <div class="card">
@@ -429,7 +433,7 @@ export function renderConnectPage(code) {
 
         <form method="POST" action="/connect" enctype="multipart/form-data">
           <input type="hidden" name="code" value="${escapeHtml(code)}" />
-          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="" />
+          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${clientId}" />
           <div class="trust-notes">
             <div class="trust-note">
               <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
@@ -488,7 +492,7 @@ Company B,xxxxxxxx</div>
 
 
       </div>`;
-    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript());
+    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript(options.telemetryClientId));
 }
 export function renderExpiredLinkPage() {
     const content = `

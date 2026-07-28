@@ -2,6 +2,8 @@ import { CosmosClient } from "@azure/cosmos";
 import { isPendingConnectionExpired } from "./connection_pending.js";
 import { redServerConfig } from "../config/server_config.js";
 import { encodeStoredApiKey } from "./credential_secret.js";
+import { mergeConnectionTelemetryRecord, pickValidTelemetryUuid, } from "./connection_telemetry_merge.js";
+import { isValidTelemetryUuid } from "../telemetry/identity.js";
 const PENDING_CONNECTION_NO_COSMOS_TTL = -1;
 function sessionTtlSeconds() {
     return redServerConfig.sessionTtlMinutes * 60;
@@ -32,6 +34,31 @@ function failedValidationDocumentId(normalisedName) {
 }
 function apiKeyTtlSeconds() {
     return redServerConfig.apiKeyTtlMinutes * 60;
+}
+function isCosmosNotFoundError(error) {
+    const statusCode = error && typeof error === "object" && "code" in error
+        ? Number(error.code)
+        : error && typeof error === "object" && "statusCode" in error
+            ? Number(error.statusCode)
+            : NaN;
+    return statusCode === 404;
+}
+function buildConnectionTelemetryDocument(record, pk, ttl) {
+    const doc = {
+        pk,
+        id: "telemetry",
+        type: "connectionTelemetry",
+        connectionId: record.connectionId,
+        updatedAt: record.updatedAt,
+        ttl,
+    };
+    if (record.telemetryClientId) {
+        doc.telemetryClientId = record.telemetryClientId;
+    }
+    if (record.connectionSessionId) {
+        doc.connectionSessionId = record.connectionSessionId;
+    }
+    return doc;
 }
 export class CosmosConnectionStore {
     client;
@@ -404,18 +431,46 @@ export class CosmosConnectionStore {
         }
     }
     async saveConnectionTelemetry(connectionId, patch) {
-        const existing = await this.getConnectionTelemetry(connectionId);
-        const doc = {
-            pk: connectionPartitionKey(connectionId),
-            id: "telemetry",
-            type: "connectionTelemetry",
-            connectionId,
-            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
-            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
-            updatedAt: Date.now(),
-            ttl: apiKeyTtlSeconds(),
-        };
-        await this.getContainer().items.upsert(doc);
+        const pk = connectionPartitionKey(connectionId);
+        const item = this.getContainer().item("telemetry", pk);
+        const updatedAt = Date.now();
+        const ttl = apiKeyTtlSeconds();
+        // Patch-first: only set fields present in this call. A session-id update must
+        // never replace the whole document (Cosmos upsert would drop omitted fields).
+        const ops = [
+            { op: "set", path: "/type", value: "connectionTelemetry" },
+            { op: "set", path: "/connectionId", value: connectionId },
+            { op: "set", path: "/updatedAt", value: updatedAt },
+            { op: "set", path: "/ttl", value: ttl },
+        ];
+        const clientId = pickValidTelemetryUuid(patch.telemetryClientId);
+        const sessionId = pickValidTelemetryUuid(patch.connectionSessionId);
+        if (clientId) {
+            ops.push({ op: "set", path: "/telemetryClientId", value: clientId });
+        }
+        if (sessionId) {
+            ops.push({ op: "set", path: "/connectionSessionId", value: sessionId });
+        }
+        try {
+            await item.patch(ops);
+            return;
+        }
+        catch (error) {
+            if (!isCosmosNotFoundError(error)) {
+                // Document may exist but patch failed; merge-read then upsert only as
+                // last resort, preserving any fields returned by a successful read.
+                const existing = await this.getConnectionTelemetry(connectionId);
+                if (existing) {
+                    const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+                    await this.getContainer().items.upsert(buildConnectionTelemetryDocument(merged, pk, ttl));
+                    return;
+                }
+                throw error;
+            }
+        }
+        // First write: create with only the fields supplied in this patch.
+        const created = mergeConnectionTelemetryRecord(connectionId, null, patch);
+        await this.getContainer().items.upsert(buildConnectionTelemetryDocument(created, pk, ttl));
     }
     async getConnectionTelemetry(connectionId) {
         try {
@@ -427,8 +482,12 @@ export class CosmosConnectionStore {
             }
             return {
                 connectionId: resource.connectionId,
-                telemetryClientId: resource.telemetryClientId,
-                connectionSessionId: resource.connectionSessionId,
+                telemetryClientId: isValidTelemetryUuid(resource.telemetryClientId)
+                    ? resource.telemetryClientId.trim().toLowerCase()
+                    : undefined,
+                connectionSessionId: isValidTelemetryUuid(resource.connectionSessionId)
+                    ? resource.connectionSessionId.trim().toLowerCase()
+                    : undefined,
                 updatedAt: resource.updatedAt,
             };
         }

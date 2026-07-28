@@ -694,7 +694,7 @@ export async function getHelpResourceDetails(
       };
     }
 
-    if (parsed.source === "recorded_webinar") {
+    if (parsed.source === "recorded_webinar" || parsed.source === "youtube_video") {
       const resource = await findRecordedWebinarById(resourceId);
       if (!resource) {
         return { ok: false, error: "Help resource was not found." };

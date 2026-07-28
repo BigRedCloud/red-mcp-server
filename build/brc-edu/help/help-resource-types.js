@@ -2,6 +2,7 @@ export const HELP_RESOURCE_SOURCES = [
     "freshdesk",
     "customer_docs",
     "recorded_webinar",
+    "youtube_video",
     "upcoming_webinar",
 ];
 export function buildHelpResourceId(source, id) {

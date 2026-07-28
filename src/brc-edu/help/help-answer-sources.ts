@@ -27,6 +27,7 @@ const SOURCE_TYPE_BY_RESOURCE: Record<HelpResourceSource, HelpAnswerSourceType> 
   freshdesk: "support_article",
   customer_docs: "customer_documentation",
   recorded_webinar: "recorded_webinar",
+  youtube_video: "recorded_webinar",
   upcoming_webinar: "upcoming_webinar",
 };
 
@@ -249,7 +250,8 @@ function pickStrongCompanionVideo(
   const candidates = results
     .filter(
       (result) =>
-        result.source === "recorded_webinar" &&
+        (result.source === "recorded_webinar" ||
+          result.source === "youtube_video") &&
         Boolean(result.publicUrl) &&
         !usedIds.has(result.resourceId),
     )

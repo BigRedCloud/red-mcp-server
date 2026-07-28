@@ -1,5 +1,6 @@
 import { encodeStoredApiKey } from "./credential_secret.js";
 import { isPendingConnectionExpired } from "./connection_pending.js";
+import { mergeConnectionTelemetryRecord } from "./connection_telemetry_merge.js";
 function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
 }
@@ -186,13 +187,9 @@ export class MemoryConnectionStore {
         failedValidationsByConnection.delete(connectionId);
     }
     async saveConnectionTelemetry(connectionId, patch) {
-        const existing = telemetryByConnection.get(connectionId);
-        telemetryByConnection.set(connectionId, {
-            connectionId,
-            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
-            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
-            updatedAt: Date.now(),
-        });
+        const existing = telemetryByConnection.get(connectionId) ?? null;
+        const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+        telemetryByConnection.set(connectionId, merged);
     }
     async getConnectionTelemetry(connectionId) {
         const record = telemetryByConnection.get(connectionId);

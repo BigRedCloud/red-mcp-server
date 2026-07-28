@@ -59,16 +59,80 @@ export function getApiKeyExpirationMs() {
 }
 /**
  * Public base URL for the Red connection page.
- * Must match the MCP server instance Cursor is connected to (same host/port).
- * Set BRC_PUBLIC_BASE_URL in hosted deployments; defaults to localhost for local dev.
+ * Must match the MCP server instance (and connection store) the client is using.
+ *
+ * Resolution order:
+ * 1. BRC_CONNECT_PUBLIC_BASE_URL — explicit connect-page override
+ * 2. Non-production Azure slot / staging → https://WEBSITE_HOSTNAME
+ *    (prevents staging MCP from sending users to production /connect)
+ * 3. BRC_PUBLIC_BASE_URL — production / general hosted URL
+ * 4. WEBSITE_HOSTNAME when present
+ * 5. localhost for local dev
  */
 export function getPublicBaseUrl() {
+    const connectOverride = process.env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
+    if (connectOverride) {
+        return connectOverride.replace(/\/$/, "");
+    }
+    const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase();
+    if (isNonProductionHostedSlot() && websiteHostname) {
+        return `https://${websiteHostname}`;
+    }
     const fromEnv = process.env.BRC_PUBLIC_BASE_URL?.trim();
     if (fromEnv) {
         return fromEnv.replace(/\/$/, "");
     }
+    if (websiteHostname) {
+        return `https://${websiteHostname}`;
+    }
     const port = process.env.PORT ?? "3000";
     return `http://localhost:${port}`;
+}
+/**
+ * True when this process is a non-production Azure slot or staging deployment.
+ * Staging must serve its own /connect page so telemetryClientId is written to
+ * the same store staging MCP later reads.
+ */
+export function isNonProductionHostedSlot(env = process.env) {
+    const slotName = env.WEBSITE_SLOT_NAME?.trim().toLowerCase();
+    if (slotName && slotName !== "production") {
+        return true;
+    }
+    const deploymentEnv = env.BRC_DEPLOYMENT_ENV?.trim().toLowerCase();
+    if (deploymentEnv === "staging") {
+        return true;
+    }
+    const hostname = env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
+    return hostname.includes("-staging.") || hostname.endsWith("-staging.azurewebsites.net");
+}
+/** Safe host comparison for connect-URL vs instance diagnostics (no secrets). */
+export function getConnectUrlHostMismatch() {
+    const configured = process.env.BRC_PUBLIC_BASE_URL?.trim();
+    let configuredHost = "";
+    if (configured) {
+        try {
+            configuredHost = new URL(configured).hostname.toLowerCase();
+        }
+        catch {
+            configuredHost = "";
+        }
+    }
+    const resolved = getPublicBaseUrl();
+    let resolvedHost = "";
+    try {
+        resolvedHost = new URL(resolved).hostname.toLowerCase();
+    }
+    catch {
+        resolvedHost = "";
+    }
+    const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
+    const usingSlotHostname = Boolean(websiteHostname) && resolvedHost === websiteHostname;
+    return {
+        configuredPublicBaseHostPresent: Boolean(configuredHost),
+        resolvedConnectHostPresent: Boolean(resolvedHost),
+        hostsMatch: Boolean(configuredHost && resolvedHost && configuredHost === resolvedHost),
+        usingSlotHostname,
+    };
 }
 export function getMaxBatchItems() {
     return redServerConfig.maxBatchItems;

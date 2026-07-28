@@ -129,6 +129,16 @@ function sourceBoost(source, question, baseScore) {
         }
         return baseScore + 5;
     }
+    if (source === "youtube_video") {
+        if (/\b(video|recording|watch|tutorial|how\s*to)\b/i.test(question)) {
+            return baseScore + 12;
+        }
+        // Prefer recorded webinars over ordinary channel videos for webinar queries.
+        if (/\bwebinar\b/i.test(question)) {
+            return Math.max(0, baseScore - 5);
+        }
+        return baseScore + 5;
+    }
     if (source === "upcoming_webinar") {
         if (isTrainingOrLiveHelpQuery(question)) {
             return baseScore + 18;
@@ -143,10 +153,22 @@ function fromCustomerDocsResource(resource) {
 function fromUpcomingWebinarResource(resource) {
     return resource;
 }
+function resolveVideoHelpSource(resource) {
+    return resource.youtubeCategory === "youtube_video"
+        ? "youtube_video"
+        : "recorded_webinar";
+}
+function buildVideoHelpResourceId(resource, source) {
+    if (resource.videoId) {
+        return `${source}:${resource.videoId}`;
+    }
+    return `${source}:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`;
+}
 function fromRecordedWebinarResource(resource, syncedAt) {
+    const source = resolveVideoHelpSource(resource);
     return {
-        resourceId: `recorded_webinar:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`,
-        source: "recorded_webinar",
+        resourceId: buildVideoHelpResourceId(resource, source),
+        source,
         title: resource.title,
         summary: resource.description || resource.title,
         bodyText: resource.description,
@@ -287,13 +309,19 @@ export function searchUnifiedHelpResources(question, sources, options) {
                 consider(`freshdesk:${article.freshdeskArticleId}`, score, toHelpSearchResult(normalized, score));
             }
         }
-        if (includeSource("recorded_webinar")) {
+        if (includeSource("recorded_webinar") || includeSource("youtube_video")) {
             for (const resource of sources.recordedWebinars ?? []) {
                 if (!resource.isActive) {
                     continue;
                 }
                 const normalized = fromRecordedWebinarResource(resource, syncedAt);
-                let score = sourceBoost("recorded_webinar", query, scoreTextMatch(query, questionTokens, [
+                if ((normalized.source === "recorded_webinar" &&
+                    !includeSource("recorded_webinar")) ||
+                    (normalized.source === "youtube_video" &&
+                        !includeSource("youtube_video"))) {
+                    continue;
+                }
+                let score = sourceBoost(normalized.source, query, scoreTextMatch(query, questionTokens, [
                     normalized.title,
                     normalized.category,
                     normalized.bodyText,
@@ -310,7 +338,7 @@ export function searchUnifiedHelpResources(question, sources, options) {
                     // Keep weak/generic videos from crowding procedural results.
                     score = Math.max(0, score - 40);
                 }
-                consider(`recorded_webinar:${normalized.url}`, score, toHelpSearchResult(normalized, score));
+                consider(`${normalized.source}:${normalized.url}`, score, toHelpSearchResult(normalized, score));
             }
         }
         if (includeSource("upcoming_webinar")) {
