@@ -36,9 +36,9 @@ src/
 │   ├── freshdesk/                 Freshdesk support articles, screenshots, and public image links
 │   ├── customer-docs/             Customer documentation index
 │   ├── upcoming-webinars/         Upcoming webinar index
-│   ├── youtube/                   YouTube catalogue sync, staff overrides, workbook export
+│   ├── youtube/                   YouTube catalogue sync, staff overrides, admin APIs
 │   └── help/                      Unified help search and resource-detail formatting
-├── edu/                           Help-resource loading, enrichment, workbook parsing, and storage configuration
+├── edu/                           Help-resource loading, enrichment, and storage configuration
 └── tools/
     ├── general/                   Generic list/get/create/update/delete/batch + payload builders
     ├── setup/                     Company context, setup config, readiness, deployment policy, processing settings
@@ -507,7 +507,7 @@ The optional source filter accepts:
 
 ### YouTube catalogue (operators)
 
-Red prefers `brc-edu/youtube/effective-video-catalog.json` for customer video search. Staff exclusions in `video-overrides.json` are permanent across syncs and are never returned to customers. The workbook `brc-edu/latest/webinar_video_routing_index.xlsx` is regenerated automatically as a compatibility export.
+Red prefers `brc-edu/youtube/effective-video-catalog.json` for customer video search. Staff exclusions in `video-overrides.json` are permanent across syncs and are never returned to customers.
 
 Synchronisation entry points:
 
@@ -578,11 +578,11 @@ Key implementation files:
 - `src/brc-edu/help/help-answer-sources.ts` — article and video source formatting
 - `src/brc-edu/freshdesk/` — Freshdesk article and screenshot handling
 - `src/brc-edu/customer-docs/` — customer-document search index
-- `src/brc-edu/youtube/` — YouTube catalogue sync, overrides, workbook export, admin APIs
+- `src/brc-edu/youtube/` — YouTube catalogue sync, overrides, admin APIs
 - `src/brc-edu/upcoming-webinars/` — upcoming-webinar parsing and index loading
 - `src/edu/brc_edu_resources.ts` — recorded-webinar / YouTube resource loading
 - `src/edu/brc_edu_storage_config.ts` — shared help-index storage configuration
 - `src/config/red_public_base_url.ts` — public screenshot-link base URL
-- `functions/brc-edu-resource-processor/` — workbook blob processor, YouTube timer, webhook forwarder
+- `functions/brc-edu-resource-processor/` — YouTube timer and webhook forwarder
 
 Help-resource indexes are supplied by the deployment operator. Public users cannot use these MCP tools to modify the live indexes or upload replacement support content.

@@ -1,9 +1,5 @@
 import type { ContainerClient } from "@azure/storage-blob";
 
-import {
-  createConfiguredWorkbookBlobAccess,
-  type BrcEduWorkbookBlobAccess,
-} from "../../edu/brc_edu_workbook_store.js";
 import { writeSyncedEduResources } from "../../edu/brc_edu_synced_store.js";
 import { invalidateEduResourcesCache } from "../../edu/brc_edu_resources.js";
 import {
@@ -39,7 +35,6 @@ import {
   type YouTubeSyncSource,
   type YouTubeSyncStatus,
 } from "./youtube-types.js";
-import { buildYouTubeWorkbookBuffer } from "./youtube-workbook-export.js";
 
 export {
   catalogVideoToSupportRow,
@@ -49,7 +44,6 @@ export {
 export type YouTubeSyncDeps = {
   container?: ContainerClient | null;
   youtubeConfig?: YouTubeClientConfig | null;
-  workbookAccess?: BrcEduWorkbookBlobAccess | null;
   writeSyncedResources?: boolean;
   invalidateCache?: boolean;
   now?: Date;
@@ -71,9 +65,8 @@ export type YouTubeSyncFailure = {
 
 export type YouTubeSyncResult = YouTubeSyncSuccess | YouTubeSyncFailure;
 
-async function publishWorkbookAndSyncedResources(params: {
+async function publishSyncedResources(params: {
   catalog: YouTubeEffectiveCatalog;
-  workbookAccess: BrcEduWorkbookBlobAccess | null | undefined;
   writeSyncedResources: boolean;
   invalidateCache: boolean;
   now: Date;
@@ -85,18 +78,6 @@ async function publishWorkbookAndSyncedResources(params: {
 
   if (params.writeSyncedResources) {
     writeSyncedEduResources(visibleEnriched);
-  }
-
-  if (params.workbookAccess) {
-    const buffer = await buildYouTubeWorkbookBuffer(params.catalog);
-    const uploadResult = await params.workbookAccess.uploadWorkbook({
-      latestBuffer: buffer,
-      archiveBuffer: buffer,
-    });
-
-    if (!uploadResult.ok) {
-      throw new Error(uploadResult.error);
-    }
   }
 
   if (params.invalidateCache) {
@@ -119,10 +100,6 @@ export async function runYouTubeCatalogSync(
     deps.youtubeConfig === undefined
       ? getYouTubeClientConfigFromEnv()
       : deps.youtubeConfig;
-  const workbookAccess =
-    deps.workbookAccess === undefined
-      ? createConfiguredWorkbookBlobAccess()
-      : deps.workbookAccess;
   const writeSyncedResources = deps.writeSyncedResources !== false;
   const invalidateCache = deps.invalidateCache !== false;
 
@@ -203,9 +180,8 @@ export async function runYouTubeCatalogSync(
 
     await saveYouTubeEffectiveCatalog(container, effective);
 
-    await publishWorkbookAndSyncedResources({
+    await publishSyncedResources({
       catalog: effective,
-      workbookAccess,
       writeSyncedResources,
       invalidateCache,
       now,
@@ -252,7 +228,6 @@ export async function rebuildEffectiveCatalogFromStores(params: {
   container: ContainerClient;
   writeSyncedResources?: boolean;
   invalidateCache?: boolean;
-  workbookAccess?: BrcEduWorkbookBlobAccess | null;
   now?: Date;
 }): Promise<YouTubeEffectiveCatalog> {
   const now = params.now ?? new Date();
@@ -271,12 +246,8 @@ export async function rebuildEffectiveCatalogFromStores(params: {
   });
 
   await saveYouTubeEffectiveCatalog(params.container, effective);
-  await publishWorkbookAndSyncedResources({
+  await publishSyncedResources({
     catalog: effective,
-    workbookAccess:
-      params.workbookAccess === undefined
-        ? createConfiguredWorkbookBlobAccess()
-        : params.workbookAccess,
     writeSyncedResources: params.writeSyncedResources !== false,
     invalidateCache: params.invalidateCache !== false,
     now,
@@ -304,7 +275,6 @@ export async function updateYouTubeVideoVisibility(params: {
   reason?: string;
   excludedBy?: string;
   container?: ContainerClient | null;
-  workbookAccess?: BrcEduWorkbookBlobAccess | null;
   writeSyncedResources?: boolean;
   invalidateCache?: boolean;
   maxRetries?: number;
@@ -374,7 +344,6 @@ export async function updateYouTubeVideoVisibility(params: {
 
       const catalog = await rebuildEffectiveCatalogFromStores({
         container,
-        workbookAccess: params.workbookAccess,
         writeSyncedResources: params.writeSyncedResources,
         invalidateCache: params.invalidateCache,
         now,

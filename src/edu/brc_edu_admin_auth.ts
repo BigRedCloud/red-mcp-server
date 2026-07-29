@@ -4,7 +4,7 @@ import { getRedPublicBaseUrl } from "../config/red_public_base_url.js";
 import { validateBrcEduAdminUploadSecret } from "./brc_edu_upload_store.js";
 
 export const BRC_EDU_ADMIN_DEFAULT_PROTECTED_PATH =
-  "/internal/brc-edu/resources/upload";
+  "/internal/brc-edu/admin";
 
 export const BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE =
   "This area is available only to authorised Big Red Cloud staff.";

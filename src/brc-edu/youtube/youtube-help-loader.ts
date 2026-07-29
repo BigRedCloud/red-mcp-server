@@ -36,7 +36,7 @@ export function invalidateYouTubeEffectiveCatalogCache(): void {
 /**
  * Loads visible (non-excluded) YouTube catalogue videos for Red customer help search.
  * Prefers effective-video-catalog.json in Azure Blob; returns null when unavailable
- * so callers can fall back to the legacy synced workbook/CSV path.
+ * so callers can fall back to the legacy synced JSON / local CSV path.
  */
 export async function loadVisibleYouTubeResourcesForHelpSearch(
   container: ContainerClient | null = createConfiguredYouTubeBlobContainer(),

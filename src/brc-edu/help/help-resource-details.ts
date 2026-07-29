@@ -6,6 +6,14 @@ import {
   loadFreshdeskArticlesIndex,
 } from "../freshdesk/freshdesk-index-store.js";
 import {
+  freshdeskArticleIdsMatch,
+  normalizeFreshdeskArticleId,
+} from "../freshdesk/freshdesk-catalog-types.js";
+import {
+  loadFreshdeskEffectiveCatalog,
+  loadFreshdeskOverrides,
+} from "../freshdesk/freshdesk-catalog-store.js";
+import {
   getSyncedFreshdeskArticlePublicUrl,
   FRESHDESK_LINK_RESPONSE_GUIDANCE,
 } from "../freshdesk/freshdesk-article-url.js";
@@ -190,7 +198,13 @@ export type HelpResourceDetailsPayload = {
   };
 };
 
-async function findFreshdeskArticleById(
+/**
+ * Resolve a Freshdesk article for customer help details.
+ * Visibility comes from the effective catalogue (or raw + overrides fallback).
+ * Full rich fields always come from the raw articles index so screenshots,
+ * contentBlocks, and syncedImages are never stripped by a compact search index.
+ */
+export async function findFreshdeskArticleById(
   freshdeskArticleId: string,
   container: ContainerClient | null,
 ): Promise<SyncedFreshdeskArticle | null> {
@@ -198,13 +212,88 @@ async function findFreshdeskArticleById(
     return null;
   }
 
+  const requestedId = normalizeFreshdeskArticleId(freshdeskArticleId);
+  if (!requestedId) {
+    return null;
+  }
+
   try {
+    let effective = null;
+    try {
+      effective = await loadFreshdeskEffectiveCatalog(container);
+    } catch {
+      effective = null;
+    }
+
+    if (effective && effective.items.length > 0) {
+      const effectiveItem = effective.items.find(
+        (item) =>
+          freshdeskArticleIdsMatch(item.articleId, requestedId) ||
+          freshdeskArticleIdsMatch(item.freshdeskArticleId, requestedId),
+      );
+
+      if (!effectiveItem || effectiveItem.excluded || !effectiveItem.enabled) {
+        return null;
+      }
+
+      const index = await loadFreshdeskArticlesIndex(container);
+      const rawArticle = index?.articles.find((article) =>
+        freshdeskArticleIdsMatch(article.freshdeskArticleId, requestedId),
+      );
+
+      if (rawArticle) {
+        return rawArticle.enabled ? rawArticle : null;
+      }
+
+      // Effective entry is visible but raw index is unavailable — return the
+      // catalogue item with admin-only fields removed.
+      const {
+        articleId: _articleId,
+        topic: _topic,
+        topicLabel: _topicLabel,
+        excluded: _excluded,
+        excludedAt: _excludedAt,
+        excludedBy: _excludedBy,
+        exclusionReason: _exclusionReason,
+        lastSyncedAt: _lastSyncedAt,
+        description: _description,
+        url: _url,
+        categoryName: _categoryName,
+        ...synced
+      } = effectiveItem;
+      return synced;
+    }
+
     const index = await loadFreshdeskArticlesIndex(container);
-    return (
-      index?.articles.find(
-        (article) => String(article.freshdeskArticleId) === freshdeskArticleId,
-      ) ?? null
+    if (!index) {
+      return null;
+    }
+
+    const rawArticle = index.articles.find((article) =>
+      freshdeskArticleIdsMatch(article.freshdeskArticleId, requestedId),
     );
+    if (!rawArticle || !rawArticle.enabled) {
+      return null;
+    }
+
+    let overrideExcluded = false;
+    try {
+      const overridesLoad = await loadFreshdeskOverrides(container);
+      const override =
+        overridesLoad.document.overrides[requestedId] ??
+        overridesLoad.document.overrides[
+          normalizeFreshdeskArticleId(rawArticle.freshdeskArticleId)
+        ];
+      overrideExcluded = Boolean(override?.excluded);
+    } catch {
+      overrideExcluded = false;
+    }
+
+    if (overrideExcluded) {
+      return null;
+    }
+
+    return rawArticle;
   } catch {
     return null;
   }

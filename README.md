@@ -99,9 +99,9 @@ Key shared modules:
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
 - `src/telemetry/` — anonymous client/session identity and platform detection for hosted operational telemetry
 - `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, YouTube catalogue sync, screenshots, and unified help search
-- `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
+- `src/edu/` — shared help-resource loading, enrichment, and storage configuration
 - `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
-- `functions/brc-edu-resource-processor/` — Azure Functions for workbook blob processing, hourly YouTube reconciliation, and optional YouTube webhook forwarding
+- `functions/brc-edu-resource-processor/` — Azure Functions for hourly YouTube reconciliation and optional YouTube webhook forwarding
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -364,7 +364,7 @@ Hosted Red deployments can synchronise the Big Red Cloud YouTube channel automat
 - Other channel uploads are classified as **Big Red Cloud videos**.
 - Staff can exclude or restore videos on the protected BRC Edu admin page; exclusions are keyed by YouTube `videoId` and survive every future sync.
 - Excluded videos remain visible (greyed out) to staff but are never returned to customers in help search.
-- Authoritative JSON lives in Azure Blob Storage under `brc-edu/youtube/`; the XLSX workbook at `brc-edu/latest/webinar_video_routing_index.xlsx` is regenerated as a compatibility export.
+- Authoritative JSON lives in Azure Blob Storage under `brc-edu/youtube/` (`youtube-videos.json`, `video-overrides.json`, `effective-video-catalog.json`).
 - An Azure Function timer (default hourly, `BRC_YOUTUBE_SYNC_SCHEDULE`) and optional YouTube PubSubHubbub webhook keep the catalogue fresh; staff can also click **Sync YouTube now**.
 
 Required Azure settings are listed in `.env.example` (YouTube API key, channel id, blob paths, sync secret, webhook secret). Prefer App Service / Function App application settings or Key Vault — never commit real secrets.

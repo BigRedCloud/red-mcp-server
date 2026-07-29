@@ -29,7 +29,11 @@ export const YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS = [
   "youtube-count-visible",
   "youtube-count-excluded",
   "youtube-filter",
-  "youtube-rows",
+  "youtube-search",
+  "youtube-video-rows",
+  "youtube-webinar-rows",
+  "youtube-video-section-count",
+  "youtube-webinar-section-count",
   "youtube-sync-btn",
   "youtube-refresh-btn",
 ] as const;
@@ -56,31 +60,55 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
         <div class="toolbar">
           <button type="button" class="btn btn-primary" id="youtube-sync-btn">Sync YouTube now</button>
           <button type="button" class="btn" id="youtube-refresh-btn">Refresh list</button>
+          <label class="sr-only" for="youtube-search">Search videos</label>
+          <input id="youtube-search" class="btn" type="search" placeholder="Search videos" style="width:auto;min-width:220px;text-align:left" />
           <label class="sr-only" for="youtube-filter">Filter videos</label>
           <select id="youtube-filter" class="btn" style="width:auto;min-width:180px">
             <option value="all">All</option>
             <option value="recorded_webinar">Recorded webinars</option>
-            <option value="youtube_video">Big Red Cloud videos</option>
+            <option value="youtube_video">YouTube videos</option>
             <option value="visible">Visible</option>
             <option value="excluded">Excluded</option>
           </select>
         </div>
-        <div class="table-wrap">
-          <table aria-label="YouTube videos">
-            <thead>
-              <tr>
-                <th scope="col">Thumbnail</th>
-                <th scope="col">Title</th>
-                <th scope="col">Type</th>
-                <th scope="col">Published</th>
-                <th scope="col">Visibility</th>
-                <th scope="col">Last synced</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="youtube-rows"></tbody>
-          </table>
-        </div>
+
+        <section class="youtube-section" id="youtube-videos-section" aria-labelledby="youtube-videos-heading">
+          <h3 id="youtube-videos-heading">YouTube videos <span class="hint" id="youtube-video-section-count">(0)</span></h3>
+          <div class="table-wrap">
+            <table aria-label="YouTube videos">
+              <thead>
+                <tr>
+                  <th scope="col">Thumbnail</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Published</th>
+                  <th scope="col">Visibility</th>
+                  <th scope="col">Last synced</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="youtube-video-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="youtube-section" id="youtube-webinars-section" aria-labelledby="youtube-webinars-heading">
+          <h3 id="youtube-webinars-heading">Recorded webinars <span class="hint" id="youtube-webinar-section-count">(0)</span></h3>
+          <div class="table-wrap">
+            <table aria-label="Recorded webinars">
+              <thead>
+                <tr>
+                  <th scope="col">Thumbnail</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Published</th>
+                  <th scope="col">Visibility</th>
+                  <th scope="col">Last synced</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="youtube-webinar-rows"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
       <script>
 (() => {
@@ -102,14 +130,20 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
   const visibleEl = requireYoutubeElement("youtube-count-visible");
   const excludedEl = requireYoutubeElement("youtube-count-excluded");
   const filterEl = requireYoutubeElement("youtube-filter");
-  const rowsEl = requireYoutubeElement("youtube-rows");
+  const searchEl = requireYoutubeElement("youtube-search");
+  const videoRowsEl = requireYoutubeElement("youtube-video-rows");
+  const webinarRowsEl = requireYoutubeElement("youtube-webinar-rows");
+  const videoSectionCountEl = requireYoutubeElement("youtube-video-section-count");
+  const webinarSectionCountEl = requireYoutubeElement("youtube-webinar-section-count");
+  const videosSectionEl = requireYoutubeElement("youtube-videos-section");
+  const webinarsSectionEl = requireYoutubeElement("youtube-webinars-section");
   const syncBtn = requireYoutubeElement("youtube-sync-btn");
   const refreshBtn = requireYoutubeElement("youtube-refresh-btn");
 
   let videos = [];
 
   function escapeHtml(value) {
-    return String(value)
+    return String(value ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -121,10 +155,6 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
     statusEl.style.display = "block";
     statusEl.className = "notice " + kind;
     statusEl.textContent = message;
-  }
-
-  function categoryLabel(category) {
-    return category === "recorded_webinar" ? "Recorded webinar" : "Big Red Cloud video";
   }
 
   function formatDate(value) {
@@ -146,47 +176,84 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
     }
   }
 
-  function matchesFilter(video) {
+  function matchesVisibilityFilter(video) {
     const filter = filterEl.value;
-    if (filter === "all") return true;
-    if (filter === "recorded_webinar") return video.category === "recorded_webinar";
-    if (filter === "youtube_video") return video.category === "youtube_video";
     if (filter === "visible") return !video.excluded;
     if (filter === "excluded") return Boolean(video.excluded);
     return true;
   }
 
-  function renderRows() {
-    const filtered = videos.filter(matchesFilter);
-    rowsEl.innerHTML = filtered.map((video) => {
-      const excludedClass = video.excluded ? " youtube-row-excluded" : "";
-      const visibility = video.excluded
-        ? '<span class="youtube-excluded-label">Excluded from Red</span>'
-        : "Visible in Red";
-      const action = video.excluded
-        ? '<button type="button" class="btn" data-action="restore" data-video-id="' + escapeHtml(video.videoId) + '">Make visible in Red</button>'
-        : '<button type="button" class="btn btn-danger" data-action="exclude" data-video-id="' + escapeHtml(video.videoId) + '">Exclude from Red</button>';
-      const thumb = video.thumbnailUrl
-        ? '<img src="' + escapeHtml(video.thumbnailUrl) + '" alt="" width="120" height="68" loading="lazy" />'
-        : "—";
-      const reason = video.excluded && video.exclusionReason
-        ? '<div class="hint">Reason: ' + escapeHtml(video.exclusionReason) + '</div>'
-        : "";
+  function matchesSearch(video) {
+    const query = String(searchEl.value || "").trim().toLowerCase();
+    if (!query) return true;
+    return String(video.title || "").toLowerCase().includes(query) ||
+      String(video.description || "").toLowerCase().includes(query);
+  }
 
-      return '<tr class="' + excludedClass.trim() + '">' +
-        '<td>' + thumb + '</td>' +
-        '<td><strong>' + escapeHtml(video.title) + '</strong><div><a href="' + escapeHtml(video.url) + '" target="_blank" rel="noopener noreferrer">Open on YouTube</a></div>' + reason + '</td>' +
-        '<td>' + escapeHtml(categoryLabel(video.category)) + '</td>' +
-        '<td>' + escapeHtml(formatDate(video.publishedAt)) + '</td>' +
-        '<td>' + visibility + '</td>' +
-        '<td>' + escapeHtml(formatDate(video.lastSyncedAt)) + '</td>' +
-        '<td>' + action + '</td>' +
-        '</tr>';
-    }).join("");
+  function renderVideoRow(video) {
+    const excludedClass = video.excluded ? " youtube-row-excluded" : "";
+    const visibility = video.excluded
+      ? '<span class="youtube-excluded-label">Excluded from Red</span>'
+      : "Visible in Red";
+    const action = video.excluded
+      ? '<button type="button" class="btn" data-action="restore" data-video-id="' + escapeHtml(video.videoId) + '">Make visible in Red</button>'
+      : '<button type="button" class="btn btn-danger" data-action="exclude" data-video-id="' + escapeHtml(video.videoId) + '">Exclude from Red</button>';
+    const thumb = video.thumbnailUrl
+      ? '<img src="' + escapeHtml(video.thumbnailUrl) + '" alt="" width="120" height="68" loading="lazy" />'
+      : "—";
+    const reason = video.excluded && video.exclusionReason
+      ? '<div class="hint">Reason: ' + escapeHtml(video.exclusionReason) + '</div>'
+      : "";
+
+    return '<tr class="' + excludedClass.trim() + '">' +
+      '<td>' + thumb + '</td>' +
+      '<td><strong>' + escapeHtml(video.title) + '</strong><div><a href="' + escapeHtml(video.url) + '" target="_blank" rel="noopener noreferrer">Open on YouTube</a></div>' + reason + '</td>' +
+      '<td>' + escapeHtml(formatDate(video.publishedAt)) + '</td>' +
+      '<td>' + visibility + '</td>' +
+      '<td>' + escapeHtml(formatDate(video.lastSyncedAt)) + '</td>' +
+      '<td>' + action + '</td>' +
+      '</tr>';
+  }
+
+  function renderSection(rowsEl, countEl, sectionEl, category, emptyMessage) {
+    const filter = filterEl.value;
+    const categoryHidden =
+      (filter === "youtube_video" && category !== "youtube_video") ||
+      (filter === "recorded_webinar" && category !== "recorded_webinar");
+
+    sectionEl.style.display = categoryHidden ? "none" : "";
+
+    const filtered = videos.filter((video) =>
+      video.category === category &&
+      matchesVisibilityFilter(video) &&
+      matchesSearch(video),
+    );
+
+    countEl.textContent = "(" + filtered.length + ")";
 
     if (!filtered.length) {
-      rowsEl.innerHTML = '<tr><td colspan="7">No videos match this filter.</td></tr>';
+      rowsEl.innerHTML = '<tr><td colspan="6">' + escapeHtml(emptyMessage) + "</td></tr>";
+      return;
     }
+
+    rowsEl.innerHTML = filtered.map(renderVideoRow).join("");
+  }
+
+  function renderRows() {
+    renderSection(
+      videoRowsEl,
+      videoSectionCountEl,
+      videosSectionEl,
+      "youtube_video",
+      "No YouTube videos match this filter.",
+    );
+    renderSection(
+      webinarRowsEl,
+      webinarSectionCountEl,
+      webinarsSectionEl,
+      "recorded_webinar",
+      "No recorded webinars match this filter.",
+    );
   }
 
   function applyPayload(payload) {
@@ -279,7 +346,7 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
     setStatus("success", excluded ? "Video excluded from Red." : "Video restored in Red.");
   }
 
-  rowsEl.addEventListener("click", (event) => {
+  function onRowsClick(event) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const button = target.closest("button[data-action]");
@@ -288,9 +355,12 @@ export function renderYouTubeAdminSectionHtml(auth: BrcEduAdminPageAuth): string
     const action = button.getAttribute("data-action");
     if (!videoId || !action) return;
     void setVisibility(videoId, action === "exclude");
-  });
+  }
 
+  videoRowsEl.addEventListener("click", onRowsClick);
+  webinarRowsEl.addEventListener("click", onRowsClick);
   filterEl.addEventListener("change", renderRows);
+  searchEl.addEventListener("input", renderRows);
   syncBtn.addEventListener("click", () => { void syncNow(); });
   refreshBtn.addEventListener("click", () => { void loadVideos(); });
 
@@ -320,6 +390,15 @@ export function youtubeAdminSectionCss(): string {
         border-radius: 6px;
         object-fit: cover;
         background: #e5e7eb;
+      }
+
+      .youtube-section {
+        margin-top: 24px;
+      }
+
+      .youtube-section h3 {
+        margin: 0 0 12px;
+        font-size: 17px;
       }
   `;
 }

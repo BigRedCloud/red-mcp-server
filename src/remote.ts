@@ -89,33 +89,20 @@ import {
 } from "./edu/brc_edu_synced_store.js";
 import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
 import {
-  downloadWebinarWorkbookForAdmin,
-  loadWebinarWorkbookForAdmin,
-  saveWebinarWorkbookForAdmin,
-  createConfiguredWorkbookBlobAccess,
-} from "./edu/brc_edu_workbook_store.js";
-import {
   authorizeBrcEduAdminRequest,
   BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE,
   getBrcEduAdminProtectedPath,
   type BrcEduAdminAuthResult,
 } from "./edu/brc_edu_admin_auth.js";
-import {
-  BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY,
-  BRC_EDU_UPLOAD_FIELD_NAME,
-  BRC_EDU_UPLOAD_MAX_BYTES,
-  createConfiguredBrcEduBlobUploader,
-  handleBrcEduResourceUpload,
-} from "./edu/brc_edu_upload_store.js";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "./edu/brc_edu_upload_store.js";
 import {
   renderBrcEduStaffDeniedPage,
   renderBrcEduUploadErrorPage,
   renderBrcEduUploadPage,
   renderBrcEduUploadPlainError,
-  renderBrcEduUploadSuccessPage,
+  parseBrcEduAdminView,
+  BRC_EDU_ADMIN_PATH,
   type BrcEduAdminPageAuth,
-  WORKBOOK_API_PATH,
-  WORKBOOK_DOWNLOAD_PATH,
 } from "./edu/brc_edu_upload_page.js";
 import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
 import {
@@ -126,6 +113,15 @@ import {
   handleYouTubeVisibilityUpdate,
   handleYouTubeWebhookRequest,
 } from "./brc-edu/youtube/youtube-admin-http.js";
+import {
+  authorizeFreshdeskServiceSyncSecret,
+  handleFreshdeskAdminListArticles,
+  handleFreshdeskAdminManualSync,
+  handleFreshdeskServiceSync,
+  handleFreshdeskVisibilityUpdate,
+} from "./brc-edu/freshdesk/freshdesk-admin-http.js";
+import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
+import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -328,13 +324,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 1024 * 1024, // 1 MB
-  },
-});
-
-const eduResourceUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: BRC_EDU_UPLOAD_MAX_BYTES,
   },
 });
 
@@ -884,7 +873,7 @@ app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
   res.status(result.status).json(result.body);
 });
 
-app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+app.get(BRC_EDU_ADMIN_PATH, (req: Request, res: Response) => {
   const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
   const authResult = authorizeBrcEduAdminHttpRequest(req);
 
@@ -894,173 +883,113 @@ app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
   }
 
   const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
-  res.send(renderBrcEduUploadPage(pageAuth));
+  const view = parseBrcEduAdminView(req.query.view);
+  res.send(renderBrcEduUploadPage(pageAuth, view));
 });
 
-app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
+app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(req.query)) {
+    if (typeof value === "string") {
+      query.set(key, value);
+    } else if (Array.isArray(value) && typeof value[0] === "string") {
+      query.set(key, value[0]);
+    }
+  }
 
+  if (!query.has("view")) {
+    query.set("view", "overview");
+  }
+
+  const suffix = query.toString();
+  res.redirect(302, `${BRC_EDU_ADMIN_PATH}${suffix ? `?${suffix}` : ""}`);
+});
+
+app.get("/internal/brc-edu/resources/upload/workbook", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Workbook editing has been removed. Use YouTube video management." });
+});
+
+app.put("/internal/brc-edu/resources/upload/workbook", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Workbook editing has been removed. Use YouTube video management." });
+});
+
+app.get(
+  "/internal/brc-edu/resources/upload/workbook/download",
+  (_req: Request, res: Response) => {
+    res
+      .status(404)
+      .json({ error: "Workbook download has been removed. Use YouTube video management." });
+  },
+);
+
+app.post("/internal/brc-edu/resources/upload", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Excel/CSV upload has been removed. Use YouTube video management." });
+});
+
+app.get(CONTENT_OVERVIEW_API_PATH, async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
   if (!authResult.ok) {
     sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
-  const result = await loadWebinarWorkbookForAdmin(createConfiguredWorkbookBlobAccess());
+  const result = await handleContentOverview();
+  res.status(result.status).json(result.body);
+});
 
-  if (!result.ok) {
-    if (result.status === 404) {
-      res.status(200).json({
-        rows: [],
-        etag: "",
-        lastModified: "",
-        rowCount: 0,
-      });
+app.get("/internal/brc-edu/freshdesk/articles", async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleFreshdeskAdminListArticles();
+  res.status(result.status).json(result.body);
+});
+
+app.post("/internal/brc-edu/freshdesk/sync", async (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret)
+    ? requestSecret[0]
+    : requestSecret;
+  const serviceAuth = authorizeFreshdeskServiceSyncSecret(
+    typeof normalizedSecret === "string" ? normalizedSecret : undefined,
+  );
+
+  if (serviceAuth.ok) {
+    const result = await handleFreshdeskServiceSync();
+    res.status(result.status).json(result.body);
+    return;
+  }
+
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleFreshdeskAdminManualSync();
+  res.status(result.status).json(result.body);
+});
+
+app.post(
+  "/internal/brc-edu/freshdesk/articles/:articleId/visibility",
+  async (req: Request, res: Response) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+      sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
       return;
     }
 
-    res.status(result.status).json({ error: result.error });
-    return;
-  }
-
-  res.json(result.payload);
-});
-
-app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
-
-  if (!authResult.ok) {
-    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
-    return;
-  }
-
-  const result = await downloadWebinarWorkbookForAdmin(
-    createConfiguredWorkbookBlobAccess(),
-  );
-
-  if (!result.ok) {
-    res.status(result.status).json({ error: result.error });
-    return;
-  }
-
-  res.setHeader(
-    "Content-Type",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
-  res.setHeader(
-    "Content-Disposition",
-    'attachment; filename="webinar_video_routing_index.xlsx"',
-  );
-  res.send(result.buffer);
-});
-
-app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
-
-  if (!authResult.ok) {
-    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
-    return;
-  }
-
-  const body = req.body as {
-    rows?: unknown;
-    ifMatch?: unknown;
-  };
-
-  const rows = Array.isArray(body?.rows) ? body.rows : null;
-  if (!rows) {
-    res.status(400).json({ error: "Workbook rows are required." });
-    return;
-  }
-
-  const result = await saveWebinarWorkbookForAdmin(
-    {
-      rows,
-      ifMatch: typeof body?.ifMatch === "string" ? body.ifMatch : undefined,
-    },
-    createConfiguredWorkbookBlobAccess(),
-  );
-
-  if (!result.ok) {
-    res.status(result.status).json({
-      error: result.error,
-      errors: result.errors,
+    const result = await handleFreshdeskVisibilityUpdate({
+      articleId: String(req.params.articleId ?? ""),
+      body: req.body,
+      excludedBy: authResult.identity,
     });
-    return;
-  }
-
-  invalidateEduResourcesCache();
-
-  res.json({
-    rows,
-    etag: result.etag,
-    lastModified: result.lastModified,
-    rowCount: result.rowCount,
-    latestBlob: result.latestBlob,
-    archiveBlob: result.archiveBlob,
-    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
-  });
-});
-
-app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
-  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
-
-  if (!authResult.ok) {
-    sendBrcEduAdminAuthFailure(res, authResult);
-    return;
-  }
-
-  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
-
-  eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
-    void (async () => {
-      if (uploadError) {
-        const message =
-          uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE"
-            ? "File exceeds the maximum size of 5 MB."
-            : "Upload failed.";
-
-        res.status(400).send(renderBrcEduUploadErrorPage(message, pageAuth));
-        return;
-      }
-
-      const file = req.file
-        ? {
-            buffer: req.file.buffer,
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size,
-          }
-        : undefined;
-
-      const uploadResult = await handleBrcEduResourceUpload(
-        file,
-        createConfiguredBrcEduBlobUploader(),
-      );
-
-      if (!uploadResult.ok) {
-        res
-          .status(uploadResult.status)
-          .send(renderBrcEduUploadErrorPage(uploadResult.error, pageAuth));
-        return;
-      }
-
-      invalidateEduResourcesCache();
-
-      res.send(
-        renderBrcEduUploadSuccessPage(
-          uploadResult.latestBlob,
-          uploadResult.archiveBlob,
-          pageAuth,
-        ),
-      );
-    })().catch(() => {
-      if (!res.headersSent) {
-        res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", pageAuth));
-      }
-    });
-  });
-});
+    res.status(result.status).json(result.body);
+  },
+);
 
 app.get("/internal/brc-edu/youtube/videos", async (req: Request, res: Response) => {
   const authResult = authorizeBrcEduAdminHttpRequest(req);

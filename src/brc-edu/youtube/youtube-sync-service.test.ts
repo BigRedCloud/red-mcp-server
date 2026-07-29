@@ -12,7 +12,6 @@ import {
 } from "./youtube-catalog-store.js";
 import { runYouTubeCatalogSync, updateYouTubeVideoVisibility } from "./youtube-sync-service.js";
 import type { YouTubeRawCatalogVideo } from "./youtube-types.js";
-import type { BrcEduWorkbookBlobAccess } from "../../edu/brc_edu_workbook_store.js";
 
 function rawVideo(
   overrides: Partial<YouTubeRawCatalogVideo> & Pick<YouTubeRawCatalogVideo, "videoId" | "category">,
@@ -135,7 +134,6 @@ test("failed YouTube requests do not delete the previous working catalogue", asy
         throw new Error("YouTube API unavailable");
       },
     },
-    workbookAccess: null,
     writeSyncedResources: false,
     invalidateCache: false,
   });
@@ -238,7 +236,6 @@ test("updateYouTubeVideoVisibility requires a known videoId", async () => {
     videoId: "missing",
     excluded: true,
     container,
-    workbookAccess: null,
     writeSyncedResources: false,
     invalidateCache: false,
   });
@@ -249,23 +246,7 @@ test("updateYouTubeVideoVisibility requires a known videoId", async () => {
   }
 });
 
-test("workbook access stub accepts generated buffers during sync success path", async () => {
-  const uploads: Buffer[] = [];
-  const workbookAccess: BrcEduWorkbookBlobAccess = {
-    async downloadLatestWorkbook() {
-      return null;
-    },
-    async uploadWorkbook({ latestBuffer }) {
-      uploads.push(latestBuffer);
-      return {
-        ok: true,
-        etag: '"wb"',
-        latestBlob: "brc-edu/latest/webinar_video_routing_index.xlsx",
-        archiveBlob: "brc-edu/archive/webinar_video_routing_index_x.xlsx",
-      };
-    },
-  };
-
+test("manual YouTube sync succeeds without generating a workbook", async () => {
   const blobs = new Map<string, { body: string; etag: string }>();
   const container = {
     getBlockBlobClient(path: string) {
@@ -344,7 +325,6 @@ test("workbook access stub accepts generated buffers during sync success path", 
         return new Response("{}", { status: 404 });
       },
     },
-    workbookAccess,
     writeSyncedResources: false,
     invalidateCache: false,
   });
@@ -355,11 +335,15 @@ test("workbook access stub accepts generated buffers during sync success path", 
     assert.equal(result.counts.recordedWebinar, 1);
     assert.equal(result.counts.youtubeVideo, 1);
   }
-  assert.equal(uploads.length, 1);
+
+  // No workbook blob paths should be written by sync.
+  assert.equal(
+    [...blobs.keys()].some((key) => key.includes("webinar_video_routing_index")),
+    false,
+  );
 
   const overrides = parseYouTubeOverridesDocument(
     JSON.parse(blobs.get("brc-edu/youtube/video-overrides.json")?.body ?? "null"),
   );
-  // Sync must not invent override entries.
   assert.deepEqual(overrides?.overrides ?? {}, {});
 });
