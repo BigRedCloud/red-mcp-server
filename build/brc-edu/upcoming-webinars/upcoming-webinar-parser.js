@@ -1,7 +1,13 @@
 import * as cheerio from "cheerio";
 import { createHash } from "node:crypto";
 import { buildHelpResourceId, isPublicHttpsUrl, } from "../help/help-resource-types.js";
+/** Base page used for scraping and as the webinar-series site URL. */
 export const UPCOMING_WEBINAR_PAGE_URL = "https://bigredcloud.com/webinar-series/";
+/**
+ * Customer-facing deep link to the Upcoming Webinars section on the public site.
+ * Prefer this URL when directing users to the regular schedule (not for inventing sessions).
+ */
+export const UPCOMING_WEBINAR_SCHEDULE_URL = "https://bigredcloud.com/webinar-series/#Upcoming-Webinar";
 const WEEKDAYS = [
     "Monday",
     "Tuesday",

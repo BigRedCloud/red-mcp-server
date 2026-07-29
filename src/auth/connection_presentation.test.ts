@@ -122,7 +122,10 @@ test("expiryMessage includes both duration and exact expiry time", () => {
   assert.match(metadata.expiryMessage, /IST|UTC\+1/i);
   assert.match(metadata.expiryMessage, /unless you start a new chat or reconnect/i);
   assert.match(metadata.expiryMessage, /remaining/i);
+  assert.match(metadata.expiryMessage, /fresh secure connection link/i);
+  assert.match(metadata.expiryMessage, /works only once/i);
   assert.equal(metadata.expiryMessage.includes("redconn_"), false);
+  assert.equal(/confirmed authentication failure/i.test(metadata.expiryMessage), false);
 });
 
 test("expiryTimeWithTimezoneText includes timezone abbreviation or offset", () => {

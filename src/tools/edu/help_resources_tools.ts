@@ -25,6 +25,7 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
   "Use only publicUrl or registrationUrl values returned in resources for hyperlinks. Freshdesk links use bigredcloud.freshdesk.com — never rewrite them onto bigredcloud.com/support.",
   "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
   "Prefer customer documentation for procedural questions, Freshdesk for detailed step-by-step instructions, recorded webinars for video walkthroughs, and upcoming webinars for training/onboarding/live help requests.",
+  "When the customer asks about upcoming webinars and no upcoming_webinar resources are returned, use customerFacingEmptyUpcomingWebinarMarkdown — do not claim no webinars are scheduled, and do not present recorded webinars as upcoming.",
   "Do not show internal resource IDs, Azure blob names, storage URLs, relevance scores, or sync metadata to the customer.",
   "For Big Red Cloud how-to or tutorial questions, automatically open the best matching Freshdesk article from usedResourceIds with brc_get_help_resource_details using includeImages=true and imagePresentation=links. Place each relevant screenshot beside its step even when the user did not explicitly ask for images.",
   "Never claim no Freshdesk article exists when usedResourceIds includes a matching Freshdesk resource.",

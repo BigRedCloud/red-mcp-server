@@ -19,13 +19,17 @@ function pickSourceUrl(resource) {
         }
         return null;
     }
+    if (resource.source === "upcoming_webinar") {
+        if (registrationUrl && isPublicHttpsUrl(registrationUrl)) {
+            return registrationUrl;
+        }
+        if (publicUrl && isPublicHttpsUrl(publicUrl)) {
+            return publicUrl;
+        }
+        return null;
+    }
     if (publicUrl && isPublicHttpsUrl(publicUrl)) {
         return publicUrl;
-    }
-    if (resource.source === "upcoming_webinar" &&
-        registrationUrl &&
-        isPublicHttpsUrl(registrationUrl)) {
-        return registrationUrl;
     }
     return null;
 }

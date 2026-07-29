@@ -172,7 +172,7 @@ export function buildConnectionExpiryMetadata(options) {
         connectionDurationMinutes: durationMinutes,
         connectionDurationHours: durationHours,
         connectionDurationText: durationText,
-        expiryMessage: `Your connected companies stay connected for ${durationText} from confirmation, unless you start a new chat or reconnect.`,
+        expiryMessage: `Your connected companies stay connected for ${durationText} from confirmation, unless you start a new chat or reconnect. After that, ask Red for a fresh secure connection link — each link works only once and cannot be reused.`,
     };
     if (!options.earliestExpiresAtMs || !Number.isFinite(options.earliestExpiresAtMs)) {
         return base;
@@ -188,6 +188,8 @@ export function buildConnectionExpiryMetadata(options) {
     if (timeRemainingText !== "expired") {
         expiryMessage += ` There ${timeRemainingText.startsWith("about 1 minute") ? "is" : "are"} ${timeRemainingText}.`;
     }
+    expiryMessage +=
+        " After that, ask Red for a fresh secure connection link — each link works only once and cannot be reused.";
     const metadata = {
         ...base,
         expiresAt: expiresAtIso,

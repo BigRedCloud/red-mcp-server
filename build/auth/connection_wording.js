@@ -49,6 +49,8 @@ export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
     "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, when the session expires, or what timezone the expiry is in.",
     "Present the result to the user with the customerMessage text, company names, and expiryMessage when connected.",
     "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from the response — do not say you do not know the current time or that you lack a live clock when timeRemainingText is present. Do not ask the user to check their device clock. Do not say local time on its own.",
+    "Customer duration answers should explain how long the connection lasts, that a fresh secure link is needed after expiry, and that the one-time connection link itself cannot be reused.",
+    "Do not mention authentication classifications, empty-result logic, connectionRef, rehydration, HTTP status codes, session bindings, or other internal diagnostics in customer answers.",
     "Do not show connectionRef, activeConnectionRef, redconn_ values, session IDs, or diagnostic metadata to normal users.",
     "Do not show raw ISO expiresAt or credentialType to normal users unless they specifically ask or dev mode is enabled.",
     "Connection credentials are never returned.",

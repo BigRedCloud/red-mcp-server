@@ -442,3 +442,39 @@ test("irrelevant webinars are excluded from Sources Videos", () => {
     assert.equal(markdown.includes("watch?v=getting-started"), false);
     assert.match(markdown, /Sales Invoices, Cash Book and Bank Rec/);
 });
+test("empty upcoming webinar search does not claim none are scheduled", () => {
+    const response = buildUnifiedFindHelpResourcesResponse("What webinars are coming up?", {
+        recordedWebinars: parseEnrichedEduCsv(WEBINAR_CSV),
+        customerDocs: [customerDoc()],
+        upcomingWebinars: [],
+    });
+    assert.equal(response.matchCount, 0);
+    assert.equal(response.resources.length, 0);
+    assert.ok(response.customerFacingEmptyUpcomingWebinarMarkdown);
+    assert.match(response.customerFacingEmptyUpcomingWebinarMarkdown ?? "", /currently available webinar listings/i);
+    assert.match(response.customerFacingEmptyUpcomingWebinarMarkdown ?? "", /#Upcoming-Webinar/);
+    assert.match(response.customerFacingEmptyUpcomingWebinarMarkdown ?? "", /check your inbox/i);
+    assert.equal(/no webinars are scheduled|nothing scheduled|nothing is coming up/i.test(response.customerFacingEmptyUpcomingWebinarMarkdown ?? ""), false);
+    assert.match(response.responseGuidance.format.join(" "), /Do not claim that no webinars are scheduled/i);
+    assert.match(response.customerFacingSupportMarkdown, /Still need help\?/);
+    assert.equal(response.resources.some((resource) => resource.source === "recorded_webinar"), false);
+});
+test("returned upcoming webinars use registration links and take priority", () => {
+    const response = buildUnifiedFindHelpResourcesResponse("Are there any upcoming webinars?", {
+        recordedWebinars: parseEnrichedEduCsv(WEBINAR_CSV),
+        upcomingWebinars: [upcomingWebinar()],
+    });
+    assert.ok(response.matchCount > 0);
+    assert.equal(response.resources.every((resource) => resource.source === "upcoming_webinar"), true);
+    assert.equal(response.customerFacingEmptyUpcomingWebinarMarkdown, undefined);
+    assert.match(response.customerFacingSourcesMarkdown ?? "", /zoom\.us\/meeting\/register\/onboarding-3/);
+    assert.equal(/recorded_webinar/.test(response.usedResourceIds.join(",")), false);
+});
+test("recorded webinar queries are not treated as upcoming schedule searches", () => {
+    const response = buildUnifiedFindHelpResourcesResponse("Find a recorded webinar about sales invoices", {
+        recordedWebinars: parseEnrichedEduCsv(TRAINING_VIDEOS_CSV),
+        upcomingWebinars: [upcomingWebinar()],
+    });
+    assert.equal(response.customerFacingEmptyUpcomingWebinarMarkdown, undefined);
+    assert.ok(response.resources.some((resource) => resource.source === "recorded_webinar"));
+});

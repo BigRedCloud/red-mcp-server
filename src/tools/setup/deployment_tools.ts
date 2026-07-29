@@ -186,38 +186,38 @@ Help and training:
 - Help and training searches do not require a connected company.
 - Prefer the most relevant official source and provide a direct link where available.
 - Excluded admin-managed help resources must not be presented to customers.
+- Recorded webinars are not upcoming webinars. If an upcoming-webinar search returns no listings, do not claim no webinars are scheduled — point the customer to the Upcoming Webinars section of the Big Red Cloud website and their email inbox.
 
 Connection and data safety:
 - Treat every company API key like a password.
 - Never ask the user to paste credentials into chat.
 - When no company is connected, start a fresh secure company connection and direct the user to the one-time Red connection page.
-- Never reuse an old, completed, expired, or stale connection link.
-- Company connection details are kept for ${formatCredentialTtlForUser()} and are not shown back in chat.
+- Never reuse an old, completed, expired, failed, or stale connection link. Ask for a fresh link when reconnecting.
+- After a successful connection, company access remains available in this Red session for ${formatCredentialTtlForUser()}. Credentials are entered only on the secure Red connection page and are not shown back in chat.
 - Never repeat API keys or internal connection references from current or earlier chat turns.
 - Only use live data from companies connected in the current Red session. Do not use company data from previous test runs, saved reports, or unrelated sessions.
-- A missing result or an empty list does not by itself mean the connection has expired.
-- Only a confirmed authentication failure should be treated as an invalid company credential.
 - Red may compare multiple connected companies, but it must state when fields are unavailable or not directly comparable.
 
 Write-action safety:
-- Show a clear preview before create, update, delete, batch, or email actions.
-- Ask for explicit plain-English confirmation before posting.
+- Supported create, update, delete, batch, and email actions require explicit plain-English confirmation before posting.
+- Where the relevant tool supports it, show a clear plain-English preview of what will be posted before asking for confirmation.
 - Confirm the company, transaction date, customer or supplier, products or accounts, VAT treatment, amounts, references, and totals as relevant.
 - Validate transaction dates against the current financial year.
 - Do not bypass disabled actions with direct API calls, scripts, or configuration changes.
+- Delete, update, batch, and email actions depend on the current deployment capabilities above.
 - If an action is unavailable, explain that plainly and offer a read-only review or instructions for completing it directly in Big Red Cloud.
-- Email sending is limited to sales invoices, quotes, and customer statements. Do not prepare or simulate an unsupported email action.
+- Email sending is limited to sales invoices, quotes, and customer statements when email skills are available. Do not prepare or simulate an unsupported email action.
 
 Recommended workflow:
 1. Connect the required company or companies using a fresh secure link.
 2. Check company readiness and any workflow-specific settings.
 3. Review data or ask the business question.
-4. Request a preview for any proposed change.
+4. Request a preview for any proposed change where preview is supported.
 5. Check the key details and warnings.
 6. Confirm the action only when satisfied.`;
 }
 
-function buildGettingStartedText(): string {
+export function buildGettingStartedText(): string {
   const sessionDuration = formatCredentialTtlForUser();
 
   return `Welcome to Red, Big Red Cloud's conversational assistant.
@@ -233,7 +233,7 @@ Ask Red to start a secure company connection. Red gives you a fresh one-time lin
 - connect one company using the form; or
 - connect several companies by uploading a CSV file.
 
-Enter company credentials only on that secure page, never in chat. Connections remain available for ${sessionDuration}. Each connection link works once. Ask for a fresh link when reconnecting, retrying, or replacing an expired or stale link.
+Enter company credentials only on that secure page, never in chat. The secure link can only be used once. After you successfully connect, the company remains available in this Red session for ${sessionDuration}. Do not reuse a used, expired, failed, or stale link — ask Red for a fresh link when reconnecting.
 
 Example:
 "Connect my companies."
@@ -262,11 +262,12 @@ You can ask product how-to questions even when no company is connected.
 Examples:
 "How do I complete the year-end routine?"
 "Show me help for bank feeds."
-"Find the best webinar about sales invoices."
+"Find a recorded webinar about sales invoices."
+"Are there any upcoming webinars?"
 "Show me the official Freshdesk steps and screenshots for adding a customer."
 
-5. Preview before posting
-For create, update, delete, batch, and supported email actions, ask Red to show the proposed details before anything is posted.
+5. Preview and confirm before posting
+For supported create, update, delete, batch, and email actions, Red requires explicit confirmation before anything is posted. Where the relevant action supports it, ask Red to show a plain-English preview of the proposed details first.
 
 Examples:
 "Prepare a sales invoice, but do not create it yet."
@@ -295,7 +296,29 @@ Good starter prompts:
 - "Show me examples of what I can ask."`;
 }
 
-const examplesText = `Example prompts you can type into Red:
+export function buildExamplesText(): string {
+  const capabilities = getCustomerDeploymentCapabilities();
+
+  const emailSection = capabilities.canSendEmails
+    ? `
+
+Supported email actions:
+- "Email this sales invoice to the customer."
+- "Send this quote by email."
+- "Email a customer statement for last month."
+
+Red can email sales invoices, quotes, and customer statements only. It cannot email purchases, payments, cash receipts, bank accounts, reports, customers, suppliers, products, or other unsupported document types through the current tools.`
+    : `
+
+Email sending is not available in this Red session.`;
+
+  const writeNote = capabilities.canCreateOrUpdateRecords
+    ? ""
+    : `
+
+Creating or changing records is not available in this Red session — use read-only review prompts instead.`;
+
+  return `Example prompts you can type into Red:
 
 Getting started and connections:
 - "Start."
@@ -357,14 +380,7 @@ Help, screenshots, and webinars:
 - "Find official help for bank feeds."
 - "Show the Freshdesk steps and screenshots for creating a customer."
 - "Find a recorded webinar about sales invoices."
-- "Are there any upcoming webinars?"
-
-Supported email actions:
-- "Email this sales invoice to the customer."
-- "Send this quote by email."
-- "Email a customer statement for last month."
-
-Red cannot email purchases, payments, cash receipts, bank accounts, reports, customers, suppliers, products, or other unsupported document types through the current tools.
+- "Are there any upcoming webinars?"${emailSection}${writeNote}
 
 Audit and safety:
 - "Do not create anything yet."
@@ -373,28 +389,36 @@ Audit and safety:
 - "Ask me before deleting anything."
 - "Show me what Red changed in this session."
 - "Summarise Red activity for the currently connected companies."`;
+}
 
-function buildSafetyText(): string {
+export function buildSafetyText(): string {
   const sessionDuration = formatCredentialTtlForUser();
+  const capabilities = getCustomerDeploymentCapabilities();
+
+  const emailSafety = capabilities.canSendEmails
+    ? `9. Understand email limits
+Red can email sales invoices, quotes, and customer statements only when email sending is available. It cannot email purchases, payments, cash receipts, bank accounts, reports, or other unsupported document types through the current tools. Supported emails use a plain-English preview and explicit confirmation before sending.`
+    : `9. Understand email limits
+Email sending is not available in this Red session. Red does not send purchases, payments, cash receipts, bank-account information, arbitrary messages, or unsupported document types.`;
 
   return `Red safety guide
 
 Red can review connected company data and, where enabled, prepare or carry out accounting actions. It can also answer Big Red Cloud help and training questions from official resources.
 
 1. Keep credentials out of chat
-Never paste a company API key into chat. Ask Red for a fresh secure connection link and enter credentials only on the Red connection page.
+Never paste a company API key into chat. Ask Red for a fresh secure connection link and enter credentials only on the Red connection page. Red does not request or repeat API keys in chat.
 
 2. Use a fresh one-time connection link
-Each secure connection link works once. Do not reuse an old, completed, expired, or stale link. Connected company credentials remain available for ${sessionDuration}.
+The secure link can only be used once. After you successfully connect, the company remains available in this Red session for ${sessionDuration}. Do not reuse an old, completed, expired, failed, or stale link — ask Red for a fresh link when reconnecting.
 
 3. Start with a readiness check
 Ask Red to check the company before creating records. This can identify financial year, VAT, analysis, reference, customer, supplier, product, and sales-representative setup issues.
 
 4. Begin read-only
-Review, search, compare, or summarise data before making changes. For multi-company work, confirm which companies and periods are being compared.
+Review, search, compare, or summarise data before making changes. For multi-company work, confirm which companies and periods are being compared. Company access is limited to companies connected in the current Red session.
 
-5. Preview every proposed change
-Before a create, update, delete, batch, or email action, Red should show the proposed details in plain language.
+5. Confirm before changing data
+Supported create, update, delete, batch, and email actions require explicit plain-English confirmation before posting. Where the relevant tool supports it, Red shows a plain-English preview of what will be posted before asking you to confirm. Delete, update, batch, and email actions depend on the current deployment capabilities.
 
 6. Confirm explicitly
 Check the company, transaction date, customer or supplier, products or nominal accounts, VAT treatment, amounts, references, totals, and any warnings before confirming.
@@ -405,17 +429,16 @@ Accounting actions may fail when the transaction date is outside the company's c
 8. Treat analysis as decision support
 Check important figures against Big Red Cloud. Red should explain the records used, calculations, assumptions, uncertainty, and limitations, and should never fill gaps by guessing.
 
-9. Understand email limits
-Red can email sales invoices, quotes, and customer statements only. It cannot email purchases, payments, cash receipts, bank accounts, reports, or other unsupported document types through the current tools.
+${emailSafety}
 
 10. Use official help sources
-Red can search official Freshdesk articles, screenshots, customer documentation, YouTube videos, recorded webinars, and upcoming webinars. Help searches do not require a connected company.
+Red can search official Freshdesk articles, screenshots, customer documentation, YouTube videos, recorded webinars, and upcoming webinars. Help searches do not require a connected company. Recorded webinars are not the same as upcoming webinars.
 
 11. Review the session audit trail
 Ask Red to summarise write actions made during the current session. Audit results are limited to the current session and currently connected companies.
 
 12. Protect technical connection details
-API keys and internal connection references must never appear in customer-facing responses. An empty result does not automatically mean a connection has expired.
+API keys and internal connection references must never appear in customer-facing responses. Red does not bypass disabled actions.
 
 Useful prompts:
 - "Connect my companies."
@@ -428,6 +451,9 @@ Useful prompts:
 - "Show me what Red changed in this session."
 - "Clear my connected company sessions."`;
 }
+
+export { customerDeploymentPolicyText };
+
 
 export function registerDeploymentTools(server: ServerType) {
   server.tool(
@@ -451,6 +477,7 @@ export function registerDeploymentTools(server: ServerType) {
       "Do not list MCP tool names, endpoint names, tool counts, JSON, schemas, local file paths, terminal commands, environment variables, or a full capability catalogue.",
       "Customer-facing answers must be plain-English business responses with evidence, assumptions, uncertainty, and limitations.",
       "Internal analysis is allowed, but code/scripts/commands/intermediate files must not be exposed to customer users unless dev mode is enabled.",
+      "Assistant-only connection diagnostics (never include in customer answers): a missing result or empty list does not by itself mean the connection has expired; only a confirmed authentication failure should be treated as an invalid company credential.",
     ].join(" "),
     {},
     async () => textResponse(customerDeploymentPolicyText())
@@ -538,7 +565,7 @@ export function registerDeploymentTools(server: ServerType) {
       mimeType: "text/markdown",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, mimeType: "text/markdown", text: examplesText }],
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: buildExamplesText() }],
     })
   );
 
