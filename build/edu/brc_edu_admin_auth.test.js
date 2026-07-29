@@ -54,21 +54,21 @@ test("getBrcEduAdminProtectedPath defaults and accepts override", () => {
 test("getBrcEduAdminPublicUrl prefers BRC_EDU_ADMIN_PUBLIC_URL", () => {
     restoreEnv();
     process.env.BRC_EDU_ADMIN_PUBLIC_URL =
-        "https://red.example.com/internal/brc-edu/resources/upload/";
+        "https://red.example.com/internal/brc-edu/admin/";
     process.env.RED_PUBLIC_BASE_URL = "https://other.example.com";
-    assert.equal(getBrcEduAdminPublicUrl(), "https://red.example.com/internal/brc-edu/resources/upload");
+    assert.equal(getBrcEduAdminPublicUrl(), "https://red.example.com/internal/brc-edu/admin");
 });
 test("getBrcEduAdminPublicUrl derives from Red public base URL", () => {
     restoreEnv();
     delete process.env.BRC_EDU_ADMIN_PUBLIC_URL;
     process.env.RED_PUBLIC_BASE_URL = "https://red.example.com/";
     delete process.env.BRC_EDU_ADMIN_PROTECTED_PATH;
-    assert.equal(getBrcEduAdminPublicUrl(), "https://red.example.com/internal/brc-edu/resources/upload");
+    assert.equal(getBrcEduAdminPublicUrl(), "https://red.example.com/internal/brc-edu/admin");
 });
 test("buildOpenEduAdminToolPayload returns protected URL without secrets", () => {
     restoreEnv();
     process.env.BRC_EDU_ADMIN_PUBLIC_URL =
-        "https://red.example.com/internal/brc-edu/resources/upload";
+        "https://red.example.com/internal/brc-edu/admin";
     process.env.BRC_EDU_ADMIN_UPLOAD_SECRET = "must-never-appear";
     const payload = buildOpenEduAdminToolPayload();
     const serialized = JSON.stringify(payload);
@@ -131,14 +131,14 @@ test("unauthenticated access redirects to Microsoft sign-in when Entra is config
     delete process.env.BRC_EDU_ADMIN_UPLOAD_SECRET;
     const result = authorizeBrcEduAdminRequest({
         headers: {},
-        returnPath: "/internal/brc-edu/resources/upload",
+        returnPath: "/internal/brc-edu/admin",
     });
     assert.equal(result.ok, false);
     if (!result.ok) {
         assert.equal(result.status, 401);
         assert.ok(result.redirectToLogin);
         assert.match(result.redirectToLogin, /^\/\.auth\/login\/aad\?/);
-        assert.match(result.redirectToLogin, /post_login_redirect_uri=%2Finternal%2Fbrc-edu%2Fresources%2Fupload/);
+        assert.match(result.redirectToLogin, /post_login_redirect_uri=%2Finternal%2Fbrc-edu%2Fadmin/);
     }
 });
 test("approved staff can access the admin page via Easy Auth principal", () => {
@@ -205,17 +205,17 @@ test("admin secret is never embedded in session-authenticated admin page URLs", 
     const html = renderBrcEduUploadPage({ mode: "session" });
     assert.equal(html.includes("must-never-appear-in-html"), false);
     assert.equal(html.includes(`${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=`), false);
-    assert.match(html, /action="\/internal\/brc-edu\/resources\/upload"/);
-    assert.match(html, /BRC Edu webinar resources/);
+    assert.match(html, /Red content administration/);
+    assert.match(html, /Content overview/);
 });
 test("existing admin page still works after secret authentication", () => {
     const secret = "configured-secret";
-    const html = renderBrcEduUploadPage(secret);
-    assert.match(html, /BRC Edu webinar resources/);
-    assert.match(html, /id="refresh-btn"/);
-    assert.match(html, /id="save-btn"/);
+    const html = renderBrcEduUploadPage(secret, "youtube");
+    assert.match(html, /Red content administration/);
+    assert.match(html, /id="youtube-sync-btn"/);
+    assert.match(html, /YouTube video management/);
     assert.match(html, new RegExp(`${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(secret)}`));
 });
 test("buildEasyAuthLoginRedirectUrl encodes the return path", () => {
-    assert.equal(buildEasyAuthLoginRedirectUrl("/internal/brc-edu/resources/upload"), "/.auth/login/aad?post_login_redirect_uri=%2Finternal%2Fbrc-edu%2Fresources%2Fupload");
+    assert.equal(buildEasyAuthLoginRedirectUrl("/internal/brc-edu/admin"), "/.auth/login/aad?post_login_redirect_uri=%2Finternal%2Fbrc-edu%2Fadmin");
 });

@@ -1,8 +1,8 @@
 import { buildOpenEduAdminToolPayload, getBrcEduAdminProtectedPath, getBrcEduAdminPublicUrl, } from "../../edu/brc_edu_admin_auth.js";
 import { jsonResponse } from "../../shared.js";
 export const OPEN_EDU_ADMIN_TOOL_DESCRIPTION = [
-    "Return the protected URL for Red's BRC Edu admin page (webinar resource upload and workbook editor).",
-    "Use when a Big Red Book / Big Red Cloud staff member asks to open Red's admin page, the BRC Edu admin page, or the webinar resources admin.",
+    "Return the protected URL for Red's content administration page (Freshdesk articles, YouTube videos, and visibility controls).",
+    "Use when a Big Red Book / Big Red Cloud staff member asks to open Red's admin page, the BRC Edu admin page, or the content resources admin.",
     "Returns only the customer-facing protected admin URL — never a shared secret, query parameter, token, or bypass link.",
     "Opening the link still requires Microsoft Entra sign-in; only authorised staff can access the page.",
     "Does not bypass authentication. Does not require a connected company.",
