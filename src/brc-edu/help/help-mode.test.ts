@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   detectHelpMode,
   HELP_MODE_INSTRUCTION_SUMMARY,
+  isRedHelpCompanyConnectionQuery,
   resolveHelpModeToolPolicy,
   resolveHelpSearchQuery,
 } from "./help-mode.js";
@@ -12,116 +13,120 @@ import { resolveHelpRedActionCapability } from "./help-red-action-capability.js"
 import { buildUnifiedFindHelpResourcesResponse } from "./unified-help-search.js";
 import type { SyncedFreshdeskArticle } from "../freshdesk/freshdesk-sync-service.js";
 
-test("detectHelpMode: help, how do I add a customer", () => {
-  const result = detectHelpMode("help, how do I add a customer");
+test("detectHelpMode: red-help how do I add a sales invoice", () => {
+  const result = detectHelpMode("red-help how do I add a sales invoice");
   assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "how do I add a customer");
+  assert.equal(result.cleanedQuery, "how do I add a sales invoice");
 });
 
-test("detectHelpMode: HELP: How do I create an invoice?", () => {
-  const result = detectHelpMode("HELP: How do I create an invoice?");
+test("detectHelpMode: RED-HELP: how do I add a customer?", () => {
+  const result = detectHelpMode("RED-HELP: how do I add a customer?");
   assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "How do I create an invoice?");
+  assert.equal(result.cleanedQuery, "how do I add a customer?");
 });
 
-test("detectHelpMode: leading spaces help me reconcile", () => {
-  const result = detectHelpMode("  help me reconcile my bank");
+test("detectHelpMode: leading spaces /red-help", () => {
+  const result = detectHelpMode("  /red-help reconcile my bank");
   assert.equal(result.isHelpMode, true);
   assert.equal(result.cleanedQuery, "reconcile my bank");
 });
 
-test("detectHelpMode: show me how to add a supplier", () => {
-  const result = detectHelpMode("show me how to add a supplier");
+test("detectHelpMode: red-help, add a supplier manually", () => {
+  const result = detectHelpMode("red-help, add a supplier manually");
   assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "add a supplier");
+  assert.equal(result.cleanedQuery, "add a supplier manually");
 });
 
-test("detectHelpMode: tell me how to do this manually with colon", () => {
-  const result = detectHelpMode(
-    "tell me how to do this manually: create a credit note",
-  );
+test("detectHelpMode: RED-HELP: add a supplier manually", () => {
+  const result = detectHelpMode("RED-HELP: add a supplier manually");
   assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "create a credit note");
+  assert.equal(result.cleanedQuery, "add a supplier manually");
 });
 
-test("detectHelpMode: how do prefix", () => {
-  const result = detectHelpMode("how do I add a customer to Big Red Cloud");
-  assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "I add a customer to Big Red Cloud");
-});
-
-test("detectHelpMode: manual help prefix", () => {
-  const result = detectHelpMode("manual help: bank reconciliation");
-  assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "bank reconciliation");
-});
-
-test("detectHelpMode: bare help alone", () => {
-  const result = detectHelpMode("help");
-  assert.equal(result.isHelpMode, true);
-  assert.equal(result.cleanedQuery, "");
-});
-
-test("normal mode: Add a customer", () => {
-  const result = detectHelpMode("Add a customer");
+test("non-trigger: help me add a customer", () => {
+  const result = detectHelpMode("help me add a customer");
   assert.equal(result.isHelpMode, false);
-  assert.equal(result.cleanedQuery, "Add a customer");
+  assert.equal(result.cleanedQuery, "help me add a customer");
 });
 
-test("normal mode: Can you help add this customer for me?", () => {
-  const result = detectHelpMode("Can you help add this customer for me?");
+test("non-trigger: how do I create an invoice?", () => {
+  const result = detectHelpMode("how do I create an invoice?");
   assert.equal(result.isHelpMode, false);
-  assert.equal(result.cleanedQuery, "Can you help add this customer for me?");
+  assert.equal(result.cleanedQuery, "how do I create an invoice?");
 });
 
-test("normal mode: I need help but please create the invoice", () => {
-  const result = detectHelpMode("I need help but please create the invoice");
+test("non-trigger: can you help add this supplier?", () => {
+  const result = detectHelpMode("can you help add this supplier?");
   assert.equal(result.isHelpMode, false);
 });
 
-test("normal mode: Create a supplier called Test Ltd", () => {
-  const result = detectHelpMode("Create a supplier called Test Ltd");
-  assert.equal(result.isHelpMode, false);
-  assert.equal(result.cleanedQuery, "Create a supplier called Test Ltd");
-});
-
-test("normal mode: helpfulness at start is not help mode", () => {
-  const result = detectHelpMode("helpfulness tip for invoices");
+test("non-trigger: I need red-help documentation", () => {
+  const result = detectHelpMode("I need red-help documentation");
   assert.equal(result.isHelpMode, false);
 });
 
-test("help mode policy blocks transactional tools", () => {
+test("non-trigger: create a customer", () => {
+  const result = detectHelpMode("create a customer");
+  assert.equal(result.isHelpMode, false);
+  assert.equal(result.cleanedQuery, "create a customer");
+});
+
+test("non-trigger: tell me how to add a payment", () => {
+  const result = detectHelpMode("tell me how to add a payment");
+  assert.equal(result.isHelpMode, false);
+});
+
+test("non-trigger: show me how / manual help / bare help", () => {
+  assert.equal(detectHelpMode("show me how to add a supplier").isHelpMode, false);
+  assert.equal(detectHelpMode("manual help: bank reconciliation").isHelpMode, false);
+  assert.equal(detectHelpMode("help").isHelpMode, false);
+  assert.equal(detectHelpMode("help, how do I add a customer").isHelpMode, false);
+});
+
+test("red-help policy blocks transactional tools", () => {
   const policy = resolveHelpModeToolPolicy(
-    "help, how do I add a customer to Big Red Cloud",
+    "red-help how do I add a sales invoice",
   );
   assert.equal(policy.isHelpMode, true);
   assert.equal(policy.blockTransactionalTools, true);
+  assert.equal(policy.allowCompanyConnectionTool, false);
   assert.deepEqual(policy.preferredHelpTools, [
     "brc_find_help_resources",
     "brc_get_help_resource_details",
   ]);
-  assert.equal(policy.cleanedQuery, "how do I add a customer to Big Red Cloud");
+  assert.equal(policy.cleanedQuery, "how do I add a sales invoice");
 });
 
 test("normal mode policy does not block transactional tools", () => {
-  const policy = resolveHelpModeToolPolicy("Add a customer");
+  const policy = resolveHelpModeToolPolicy("create a customer");
   assert.equal(policy.isHelpMode, false);
   assert.equal(policy.blockTransactionalTools, false);
+  assert.equal(policy.allowCompanyConnectionTool, false);
   assert.deepEqual(policy.preferredHelpTools, []);
 });
 
-test("resolveHelpSearchQuery strips prefix for search", () => {
-  const resolved = resolveHelpSearchQuery(
-    "help, how do I add a customer to Big Red Cloud",
-  );
-  assert.equal(resolved.isHelpMode, true);
+test("red-help connection query may keep company connection tool", () => {
   assert.equal(
-    resolved.searchQuery,
-    "how do I add a customer to Big Red Cloud",
+    isRedHelpCompanyConnectionQuery("how do I connect my companies"),
+    true,
   );
+  const policy = resolveHelpModeToolPolicy(
+    "red-help how do I connect my companies",
+  );
+  assert.equal(policy.isHelpMode, true);
+  assert.equal(policy.blockTransactionalTools, true);
+  assert.equal(policy.allowCompanyConnectionTool, true);
 });
 
-test("unified help search receives cleaned query in help mode", () => {
+test("resolveHelpSearchQuery strips red-help command", () => {
+  const resolved = resolveHelpSearchQuery(
+    "red-help how do I add a sales invoice",
+  );
+  assert.equal(resolved.isHelpMode, true);
+  assert.equal(resolved.searchQuery, "how do I add a sales invoice");
+});
+
+test("unified help search receives cleaned query in red-help mode", () => {
   const article: SyncedFreshdeskArticle = {
     id: "freshdesk-1001",
     source: "freshdesk",
@@ -141,32 +146,42 @@ test("unified help search receives cleaned query in help mode", () => {
   };
 
   const response = buildUnifiedFindHelpResourcesResponse(
-    "help, how do I add a customer",
+    "red-help how do I add a customer",
     { freshdeskArticles: [article] },
     { maxResults: 5 },
   );
 
   assert.equal(response.helpMode, true);
   assert.equal(response.question, "how do I add a customer");
-  assert.equal(
-    response.originalQuestion,
-    "help, how do I add a customer",
-  );
+  assert.equal(response.originalQuestion, "red-help how do I add a customer");
   assert.equal(response.blockTransactionalTools, true);
   assert.match(
     JSON.stringify(response.responseGuidance),
-    /help mode|Do not.*perform the accounting action|blockTransactionalTools|manual guidance/i,
+    /red-help|reserved manual-help command|blockTransactionalTools|manual guidance/i,
   );
 });
 
-test("help-mode response puts manual Sources before Do this through Red", () => {
+test("ordinary how-to remains normal mode for unified search", () => {
+  const response = buildUnifiedFindHelpResourcesResponse(
+    "how do I create an invoice?",
+    { freshdeskArticles: [] },
+    { maxResults: 5 },
+  );
+
+  assert.equal(response.helpMode, false);
+  assert.equal(response.question, "how do I create an invoice?");
+  assert.equal(response.blockTransactionalTools, false);
+});
+
+test("red-help response puts manual Sources before Do this through Red", () => {
   const capability = resolveHelpRedActionCapability("how do I add a customer", {
     isToolEnabled: () => true,
   });
   assert.equal(capability.redActionAvailable, true);
 
   const sections = buildHelpAnswerSectionsMarkdown({
-    sourcesMarkdown: "Sources\n\n### Articles\n- [Add a Customer](https://example.test/a)",
+    sourcesMarkdown:
+      "Sources\n\n### Articles\n- [Add a Customer](https://example.test/a)",
     redActionMarkdown: capability.customerFacingRedActionMarkdown,
     supportMarkdown:
       "Still need help?\n\n[Contact Big Red Cloud Support](https://bigredcloud.com/contact/)",
@@ -181,15 +196,19 @@ test("help-mode response puts manual Sources before Do this through Red", () => 
   assert.ok(supportPos > redPos);
 });
 
-test("help mode instruction summary is explicit", () => {
-  assert.match(HELP_MODE_INSTRUCTION_SUMMARY, /help mode/i);
+test("red-help instruction summary is explicit", () => {
+  assert.match(HELP_MODE_INSTRUCTION_SUMMARY, /red-help is Red's reserved manual-help command/i);
   assert.match(
     HELP_MODE_INSTRUCTION_SUMMARY,
-    /Do not interpret it as permission to perform the accounting action/i,
+    /provide customer-help resources and manual instructions instead of performing the accounting action/i,
   );
   assert.match(HELP_MODE_INSTRUCTION_SUMMARY, /brc_find_help_resources/);
   assert.match(
     HELP_MODE_INSTRUCTION_SUMMARY,
     /Do not call create, update, delete/i,
+  );
+  assert.match(
+    HELP_MODE_INSTRUCTION_SUMMARY,
+    /brc_start_company_connection only when/i,
   );
 });

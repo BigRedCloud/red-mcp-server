@@ -8,7 +8,7 @@ import { SUPPORT_CONTACT_URL, SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMa
 import { AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, buildHelpAnswerSectionsMarkdown, } from "./help-answer-layout.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
 import { detectHelpProceduralIntent, expandHelpSearchQueries, scoreProceduralTitleMatch, scoreProceduralVideoMatch, } from "./help-query-expansion.js";
-import { HELP_MODE_INSTRUCTION_SUMMARY, resolveHelpSearchQuery, } from "./help-mode.js";
+import { HELP_MODE_INSTRUCTION_SUMMARY, isRedHelpCompanyConnectionQuery, resolveHelpSearchQuery, } from "./help-mode.js";
 import { buildEmptyUpcomingWebinarCustomerMarkdown, EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE, isUpcomingWebinarScheduleQuery, } from "../upcoming-webinars/upcoming-webinar-customer-fallback.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
@@ -368,6 +368,8 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
     const helpModeResolution = resolveHelpSearchQuery(question);
     const searchQuestion = helpModeResolution.searchQuery || question.trim();
     const originalQuestion = question;
+    const allowCompanyConnectionTool = helpModeResolution.isHelpMode &&
+        isRedHelpCompanyConnectionQuery(searchQuestion);
     let resources = searchUnifiedHelpResources(searchQuestion, sources, options);
     const upcomingScheduleQuery = options?.sourceFilter === "upcoming_webinar" ||
         isUpcomingWebinarScheduleQuery(searchQuestion);
@@ -415,6 +417,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         helpMode: helpModeResolution.isHelpMode,
         cleanedQuery: helpModeResolution.cleanedQuery,
         blockTransactionalTools: helpModeResolution.isHelpMode,
+        allowCompanyConnectionTool,
         category: options?.category ?? null,
         matchCount: resources.length,
         resources,
@@ -447,8 +450,8 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
                     ? HELP_MODE_INSTRUCTION_SUMMARY
                     : "Answer the customer's how-to question from returned help resources.",
                 helpModeResolution.isHelpMode
-                    ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action."
-                    : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
+                    ? "red-help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action. Use brc_start_company_connection only when the cleaned query is specifically about connecting companies."
+                    : "When the customer asked Red to perform an action (not red-help mode), use the appropriate operational tools after any required confirmation.",
                 "Provide a concise synthesized direct answer first.",
                 "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
                 emptyUpcomingWebinarResult
@@ -479,6 +482,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             ],
             helpMode: helpModeResolution.isHelpMode,
             blockTransactionalTools: helpModeResolution.isHelpMode,
+            allowCompanyConnectionTool,
             supportFooter: SUPPORT_FOOTER_GUIDANCE,
             supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
             sources: [

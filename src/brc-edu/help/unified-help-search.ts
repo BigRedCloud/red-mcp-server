@@ -50,6 +50,7 @@ import {
 } from "./help-query-expansion.js";
 import {
   HELP_MODE_INSTRUCTION_SUMMARY,
+  isRedHelpCompanyConnectionQuery,
   resolveHelpSearchQuery,
 } from "./help-mode.js";
 import {
@@ -607,6 +608,9 @@ export function buildUnifiedFindHelpResourcesResponse(
   const helpModeResolution = resolveHelpSearchQuery(question);
   const searchQuestion = helpModeResolution.searchQuery || question.trim();
   const originalQuestion = question;
+  const allowCompanyConnectionTool =
+    helpModeResolution.isHelpMode &&
+    isRedHelpCompanyConnectionQuery(searchQuestion);
 
   let resources = searchUnifiedHelpResources(searchQuestion, sources, options);
   const upcomingScheduleQuery =
@@ -671,6 +675,7 @@ export function buildUnifiedFindHelpResourcesResponse(
     helpMode: helpModeResolution.isHelpMode,
     cleanedQuery: helpModeResolution.cleanedQuery,
     blockTransactionalTools: helpModeResolution.isHelpMode,
+    allowCompanyConnectionTool,
     category: options?.category ?? null,
     matchCount: resources.length,
     resources,
@@ -705,8 +710,8 @@ export function buildUnifiedFindHelpResourcesResponse(
           ? HELP_MODE_INSTRUCTION_SUMMARY
           : "Answer the customer's how-to question from returned help resources.",
         helpModeResolution.isHelpMode
-          ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action."
-          : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
+          ? "red-help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action. Use brc_start_company_connection only when the cleaned query is specifically about connecting companies."
+          : "When the customer asked Red to perform an action (not red-help mode), use the appropriate operational tools after any required confirmation.",
         "Provide a concise synthesized direct answer first.",
         "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
         emptyUpcomingWebinarResult
@@ -737,6 +742,7 @@ export function buildUnifiedFindHelpResourcesResponse(
       ],
       helpMode: helpModeResolution.isHelpMode,
       blockTransactionalTools: helpModeResolution.isHelpMode,
+      allowCompanyConnectionTool,
       supportFooter: SUPPORT_FOOTER_GUIDANCE,
       supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
       sources: [

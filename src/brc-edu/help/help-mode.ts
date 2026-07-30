@@ -1,7 +1,7 @@
 /**
- * Explicit help-mode detection for customer messages that begin with a
- * recognised help/manual prefix. Help mode means: search Red help content and
- * return manual instructions — do not perform the accounting action.
+ * Reserved red-help command detection.
+ * Only messages that begin with red-help / red-help: / red-help, / /red-help
+ * enter manual-help mode. Ordinary "help me" / "how do I" wording stays normal mode.
  */
 
 export type HelpModeDetection = {
@@ -12,31 +12,35 @@ export type HelpModeDetection = {
 export type HelpModeToolPolicy = HelpModeDetection & {
   /** When true, create/update/delete/email/batch tools must not be auto-selected. */
   blockTransactionalTools: boolean;
+  /**
+   * Connection tooling remains available in red-help mode only when the cleaned
+   * query is specifically about connecting companies.
+   */
+  allowCompanyConnectionTool: boolean;
   preferredHelpTools: readonly string[];
 };
 
 /**
- * Longer prefixes first so "help me" wins over "help", etc.
- * Applied only at the start of the message (after optional leading whitespace).
+ * Reserved command at message start (optional leading slash), then optional
+ * colon/comma/whitespace before the rest of the query.
+ * Does not match mid-sentence uses such as "I need red-help documentation".
  */
-const HELP_MODE_PREFIX_PATTERNS: RegExp[] = [
-  /^\s*tell\s+me\s+how\s+to\s+do\s+this\s+manually\s*[:\-–—,]?\s*/i,
-  /^\s*manual\s+help\s*[:\-–—,]?\s*/i,
-  /^\s*show\s+me\s+how(?:\s+to)?\s*/i,
-  /^\s*help\s+me\s*[:\-–—,]?\s*/i,
-  /^\s*how\s+do\s+/i,
-  // "help", "help,", "help:" — require boundary so "helpfulness" does not match.
-  /^\s*help(?=\s*[:\-–—,]|\s+|$)\s*[:\-–—,]?\s*/i,
-];
+const RED_HELP_COMMAND_PATTERN =
+  /^\s*\/?red-help(?=\s*[:\-–—,]|\s+|$)\s*[:\-–—,]?\s*/i;
+
+const COMPANY_CONNECTION_QUERY_PATTERN =
+  /\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?|connection\s+link|secure\s+(?:red\s+)?connection)\b.{0,40}\bcompan(?:y|ies)\b|\bcompan(?:y|ies)\b.{0,40}\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?)\b/i;
 
 export const HELP_MODE_PREFERRED_TOOLS = [
   "brc_find_help_resources",
   "brc_get_help_resource_details",
 ] as const;
 
+export const RED_HELP_COMMAND = "red-help";
+
 /**
- * Detect whether a user message is an explicit help-mode request and strip the
- * recognised command prefix from the searchable query.
+ * Detect whether a user message begins with the reserved red-help command and
+ * strip that command from the searchable query.
  */
 export function detectHelpMode(userMessage: string): HelpModeDetection {
   const original = typeof userMessage === "string" ? userMessage : "";
@@ -46,29 +50,29 @@ export function detectHelpMode(userMessage: string): HelpModeDetection {
     return { isHelpMode: false, cleanedQuery: "" };
   }
 
-  for (const pattern of HELP_MODE_PREFIX_PATTERNS) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(trimmedStart);
-    if (!match || match.index !== 0) {
-      continue;
-    }
-
-    const cleanedQuery = trimmedStart.slice(match[0].length).trim();
+  RED_HELP_COMMAND_PATTERN.lastIndex = 0;
+  const match = RED_HELP_COMMAND_PATTERN.exec(trimmedStart);
+  if (!match || match.index !== 0) {
     return {
-      isHelpMode: true,
-      cleanedQuery,
+      isHelpMode: false,
+      cleanedQuery: trimmedStart.trim(),
     };
   }
 
   return {
-    isHelpMode: false,
-    cleanedQuery: trimmedStart.trim(),
+    isHelpMode: true,
+    cleanedQuery: trimmedStart.slice(match[0].length).trim(),
   };
 }
 
+/** True when a red-help cleaned query is specifically about connecting companies. */
+export function isRedHelpCompanyConnectionQuery(cleanedQuery: string): boolean {
+  return COMPANY_CONNECTION_QUERY_PATTERN.test(cleanedQuery.trim());
+}
+
 /**
- * Query to pass into help search / details. Uses the cleaned help-mode query
- * when a prefix was present; otherwise the trimmed original message.
+ * Query to pass into help search / details. Uses the cleaned red-help query
+ * when the reserved command was present; otherwise the trimmed original message.
  */
 export function resolveHelpSearchQuery(userMessage: string): {
   isHelpMode: boolean;
@@ -92,19 +96,24 @@ export function resolveHelpSearchQuery(userMessage: string): {
 }
 
 /**
- * Tool-selection policy for help-mode messages.
+ * Tool-selection policy for red-help messages.
  * Callers (and MCP instructions) must not auto-invoke transactional tools.
  */
 export function resolveHelpModeToolPolicy(
   userMessage: string,
 ): HelpModeToolPolicy {
   const detection = detectHelpMode(userMessage);
+  const allowCompanyConnectionTool =
+    detection.isHelpMode &&
+    isRedHelpCompanyConnectionQuery(detection.cleanedQuery);
+
   return {
     ...detection,
     blockTransactionalTools: detection.isHelpMode,
+    allowCompanyConnectionTool,
     preferredHelpTools: detection.isHelpMode ? HELP_MODE_PREFERRED_TOOLS : [],
   };
 }
 
 export const HELP_MODE_INSTRUCTION_SUMMARY =
-  "When a message is in help mode (it begins with help, help,, help:, help me, manual help, show me how, how do, or tell me how to do this manually), answer the user's how-to question using Red's customer-help resources. Do not interpret it as permission to perform the accounting action. Call brc_find_help_resources with the cleaned question (prefix removed), then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer.";
+  "red-help is Red's reserved manual-help command. When a user begins a message with red-help, provide customer-help resources and manual instructions instead of performing the accounting action. Call brc_find_help_resources with the cleaned question (command removed), then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer. Use brc_start_company_connection only when the cleaned red-help query is specifically about connecting companies.";
