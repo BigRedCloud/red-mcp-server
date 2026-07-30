@@ -91,6 +91,7 @@ test("red-help policy blocks transactional tools", () => {
   assert.equal(policy.blockTransactionalTools, true);
   assert.equal(policy.allowCompanyConnectionTool, false);
   assert.deepEqual(policy.preferredHelpTools, [
+    "brc_red_help",
     "brc_find_help_resources",
     "brc_get_help_resource_details",
   ]);
@@ -202,6 +203,7 @@ test("red-help instruction summary is explicit", () => {
     HELP_MODE_INSTRUCTION_SUMMARY,
     /provide customer-help resources and manual instructions instead of performing the accounting action/i,
   );
+  assert.match(HELP_MODE_INSTRUCTION_SUMMARY, /brc_red_help/);
   assert.match(HELP_MODE_INSTRUCTION_SUMMARY, /brc_find_help_resources/);
   assert.match(
     HELP_MODE_INSTRUCTION_SUMMARY,
@@ -210,5 +212,9 @@ test("red-help instruction summary is explicit", () => {
   assert.match(
     HELP_MODE_INSTRUCTION_SUMMARY,
     /brc_start_company_connection only when/i,
+  );
+  assert.match(
+    HELP_MODE_INSTRUCTION_SUMMARY,
+    /detectHelpMode alone cannot force tool selection/i,
   );
 });

@@ -53,6 +53,7 @@ export function withConnectionRefSchema(
 export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_getting_started",
   "brc_get_deployment_policy",
+  "brc_red_help",
   "brc_find_help_resources",
   "brc_get_help_resource_details",
   "brc_open_edu_admin",
@@ -93,7 +94,11 @@ function createFilteredServer(server: McpServer): McpServer {
       (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
     ];
 
-    const schemaWithConnectionRef = withConnectionRefSchema(schema);
+    const schemaWithConnectionRef = CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has(
+      toolName
+    )
+      ? schema
+      : withConnectionRefSchema(schema);
 
     if (!requiresWriteConfirmation(toolName)) {
       return originalTool(

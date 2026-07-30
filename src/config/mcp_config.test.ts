@@ -60,6 +60,12 @@ test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () =
 test("MCP server instructions define red-help mode and block auto transactional actions", () => {
   const instructions = getBrcMcpServerInstructions(50, false);
 
+  assert.ok(
+    instructions.startsWith(
+      "RED-HELP ROUTING OVERRIDE: If the user's message begins with red-help or /red-help",
+    ),
+  );
+  assert.match(instructions, /immediately call brc_red_help/i);
   assert.match(instructions, /Help mode \(mandatory\)/i);
   assert.match(
     instructions,
@@ -77,5 +83,9 @@ test("MCP server instructions define red-help mode and block auto transactional 
   assert.match(
     instructions,
     /Ordinary phrases such as "help me", "how do I"/i,
+  );
+  assert.match(
+    instructions,
+    /detectHelpMode alone cannot force tool selection/i,
   );
 });

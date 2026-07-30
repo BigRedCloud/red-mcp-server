@@ -20,7 +20,7 @@ export const AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE = [
     "Place each relevant screenshot beside its step even when the user did not explicitly ask for images.",
     "Do not require the user to say include screenshots, show images, or place images beside the steps.",
     "Do not claim screenshots were shown when imageCount is 0 or no Markdown links are returned.",
-    "Never claim no Freshdesk article exists when brc_find_help_resources returned a matching Freshdesk resource.",
+    "Never claim no Freshdesk article exists when brc_red_help or brc_find_help_resources returned a matching Freshdesk resource.",
     "Base tutorial steps on the official help content — do not invent UI paths such as usually under Sales.",
     "Do not manually retry alternate search wording — the server already expands procedural queries.",
 ].join(" ");

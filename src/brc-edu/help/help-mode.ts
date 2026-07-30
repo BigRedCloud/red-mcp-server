@@ -32,6 +32,7 @@ const COMPANY_CONNECTION_QUERY_PATTERN =
   /\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?|connection\s+link|secure\s+(?:red\s+)?connection)\b.{0,40}\bcompan(?:y|ies)\b|\bcompan(?:y|ies)\b.{0,40}\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?)\b/i;
 
 export const HELP_MODE_PREFERRED_TOOLS = [
+  "brc_red_help",
   "brc_find_help_resources",
   "brc_get_help_resource_details",
 ] as const;
@@ -116,4 +117,4 @@ export function resolveHelpModeToolPolicy(
 }
 
 export const HELP_MODE_INSTRUCTION_SUMMARY =
-  "red-help is Red's reserved manual-help command. When a user begins a message with red-help, provide customer-help resources and manual instructions instead of performing the accounting action. Call brc_find_help_resources with the cleaned question (command removed), then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer. Use brc_start_company_connection only when the cleaned red-help query is specifically about connecting companies.";
+  "red-help is Red's reserved manual-help command. When a user begins a message with red-help, provide customer-help resources and manual instructions instead of performing the accounting action. Call brc_red_help with the text after red-help as query (preferred), or brc_find_help_resources for compatibility, then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer. Use brc_start_company_connection only when the cleaned red-help query is specifically about connecting companies. MCP clients remain responsible for selecting the initial tool — detectHelpMode alone cannot force tool selection.";

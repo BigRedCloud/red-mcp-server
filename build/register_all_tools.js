@@ -40,6 +40,7 @@ export function withConnectionRefSchema(schema) {
 export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
     "brc_getting_started",
     "brc_get_deployment_policy",
+    "brc_red_help",
     "brc_find_help_resources",
     "brc_get_help_resource_details",
     "brc_open_edu_admin",
@@ -57,7 +58,9 @@ function createFilteredServer(server) {
             return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
         const [description, schema, handler] = args;
-        const schemaWithConnectionRef = withConnectionRefSchema(schema);
+        const schemaWithConnectionRef = CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has(toolName)
+            ? schema
+            : withConnectionRefSchema(schema);
         if (!requiresWriteConfirmation(toolName)) {
             return originalTool(toolName, description, schemaWithConnectionRef, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
