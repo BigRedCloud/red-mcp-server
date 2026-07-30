@@ -52,6 +52,45 @@ test("completed connection code can be claimed and bound to a session", async ()
   assert.equal(await store.getRecentClientClaim(clientKey, 60_000), connectionId);
 });
 
+test("claiming a confirmation code a second time fails safely", async () => {
+  const {
+    getConnectionStore,
+    claimConnectionCodeForSession,
+    ClaimConnectionError,
+  } = await loadConnectionStoreModule();
+
+  const store = getConnectionStore();
+  const code = uniqueId("one-time-code");
+  const connectionId = uniqueId("connection");
+
+  await store.createPendingConnection({
+    code,
+    connectionId,
+    expiresAt: Date.now() + 60_000,
+  });
+  await store.completePendingConnection(code);
+  await store.saveConnectedCompanies(connectionId, [
+    {
+      companyName: "Company A",
+      apiKey: "test-api-key-company-a",
+      expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
+    },
+  ]);
+
+  await claimConnectionCodeForSession(code, uniqueId("session-1"));
+
+  await assert.rejects(
+    () => claimConnectionCodeForSession(code, uniqueId("session-2")),
+    (error) => {
+      assert.ok(error instanceof ClaimConnectionError);
+      assert.equal(error.reason, "not_found");
+      assert.match(error.message, /missing|incorrect|already been used/i);
+      return true;
+    }
+  );
+});
+
 test("claiming an unknown connection code fails safely", async () => {
   const {
     claimConnectionCodeForSession,

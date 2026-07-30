@@ -78,6 +78,10 @@ test("success page tells the user to return to this chat and copy/paste the code
 test("success page still includes the confirmation code without exposing keys", () => {
     const html = renderSuccessPage(["YOUR-COMPANY"], "abc123");
     assert.match(html, /Confirm connection code abc123/);
+    assert.match(html, /id="copy-confirmation-code"/);
+    assert.match(html, />\s*Copy confirmation code\s*</);
+    assert.match(html, /id="copy-chat-message"/);
+    assert.match(html, />\s*Copy message for chat\s*</);
 });
 test("shared do-not-reuse and do-not-paste constants are explicit", () => {
     assert.match(DO_NOT_REUSE_OLD_CONNECTION_LINK, /Do not reuse an old/i);

@@ -5,6 +5,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
@@ -38,6 +39,7 @@ const connectionRefs = new Map<
 >();
 const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
 const telemetryByConnection = new Map<string, ConnectionTelemetryRecord>();
+const successPagesById = new Map<string, ConnectionSuccessPageRecord>();
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -56,6 +58,14 @@ function cleanupExpiredPendingConnections(): void {
 
     if (isPendingConnectionExpired(pending.expiresAt)) {
       pendingConnections.delete(code);
+    }
+  }
+}
+
+function cleanupExpiredSuccessPages(now = Date.now()): void {
+  for (const [successId, page] of successPagesById.entries()) {
+    if (page.expiresAt <= now) {
+      successPagesById.delete(successId);
     }
   }
 }
@@ -127,7 +137,7 @@ export class MemoryConnectionStore implements ConnectionStore {
   }
 
   async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const pending = await this.getPendingConnection(code);
+    const pending = await this.getConnectionByCode(code);
     if (!pending) return null;
 
     pendingConnections.delete(code);
@@ -308,6 +318,36 @@ export class MemoryConnectionStore implements ConnectionStore {
   ): Promise<ConnectionTelemetryRecord | null> {
     const record = telemetryByConnection.get(connectionId);
     return record ? { ...record } : null;
+  }
+
+  async saveConnectionSuccessPage(
+    record: ConnectionSuccessPageRecord
+  ): Promise<void> {
+    cleanupExpiredSuccessPages();
+    successPagesById.set(record.successId, {
+      ...record,
+      connectedNames: [...record.connectedNames],
+      failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+    });
+  }
+
+  async getConnectionSuccessPage(
+    successId: string
+  ): Promise<ConnectionSuccessPageRecord | null> {
+    cleanupExpiredSuccessPages();
+    const record = successPagesById.get(successId.trim());
+    if (!record || record.expiresAt <= Date.now()) {
+      if (record) {
+        successPagesById.delete(successId.trim());
+      }
+      return null;
+    }
+
+    return {
+      ...record,
+      connectedNames: [...record.connectedNames],
+      failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+    };
   }
 
   async getDiagnostics(args: {

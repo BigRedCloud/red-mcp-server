@@ -11,6 +11,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
@@ -45,6 +46,10 @@ function clientPartitionKey(clientKey: string): string {
 
 function connectionRefPartitionKey(ref: string): string {
   return `ref:${ref}`;
+}
+
+function successPagePartitionKey(successId: string): string {
+  return `success:${successId}`;
 }
 
 function companyDocumentId(normalisedName: string): string {
@@ -131,6 +136,17 @@ type ConnectionTelemetryDocument = CosmosRecord & {
   telemetryClientId?: string;
   connectionSessionId?: string;
   updatedAt: number;
+  ttl: number;
+};
+
+type ConnectionSuccessPageDocument = CosmosRecord & {
+  type: "connectionSuccessPage";
+  successId: string;
+  confirmationCode: string;
+  connectedNames: string[];
+  failedCompanies: FailedCompanyConnection[];
+  createdAt: number;
+  expiresAt: number;
   ttl: number;
 };
 
@@ -297,11 +313,11 @@ export class CosmosConnectionStore implements ConnectionStore {
   }
 
   async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const pending = await this.getPendingConnection(code);
+    const pending = await this.getConnectionByCode(code);
     if (!pending) return null;
 
     await this.getContainer()
-      .item("pending", pendingPartitionKey(code))
+      .item("pending", pendingPartitionKey(pending.code))
       .delete()
       .catch(() => {});
 
@@ -727,6 +743,73 @@ export class CosmosConnectionStore implements ConnectionStore {
           ? resource.connectionSessionId.trim().toLowerCase()
           : undefined,
         updatedAt: resource.updatedAt,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async saveConnectionSuccessPage(
+    record: ConnectionSuccessPageRecord
+  ): Promise<void> {
+    const ttlSeconds = Math.max(
+      60,
+      Math.ceil((record.expiresAt - Date.now()) / 1000)
+    );
+
+    const doc: ConnectionSuccessPageDocument = {
+      pk: successPagePartitionKey(record.successId),
+      id: "success",
+      type: "connectionSuccessPage",
+      successId: record.successId,
+      confirmationCode: record.confirmationCode,
+      connectedNames: [...record.connectedNames],
+      failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+      ttl: ttlSeconds,
+    };
+
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getConnectionSuccessPage(
+    successId: string
+  ): Promise<ConnectionSuccessPageRecord | null> {
+    const trimmed = successId.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const { resource } = await this.getContainer()
+        .item("success", successPagePartitionKey(trimmed))
+        .read<ConnectionSuccessPageDocument>();
+
+      if (!resource || resource.type !== "connectionSuccessPage") {
+        return null;
+      }
+
+      if (resource.expiresAt <= Date.now()) {
+        try {
+          await this.getContainer()
+            .item("success", successPagePartitionKey(trimmed))
+            .delete();
+        } catch {
+          // already gone
+        }
+        return null;
+      }
+
+      return {
+        successId: resource.successId,
+        confirmationCode: resource.confirmationCode,
+        connectedNames: [...(resource.connectedNames ?? [])],
+        failedCompanies: (resource.failedCompanies ?? []).map((failure) => ({
+          ...failure,
+        })),
+        createdAt: resource.createdAt,
+        expiresAt: resource.expiresAt,
       };
     } catch {
       return null;

@@ -72,11 +72,16 @@ import {
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
 import {
+  applyConnectionSuccessPageHeaders,
   renderConnectPage,
   renderConnectionFailedPage,
   renderExpiredLinkPage,
   renderSuccessPage,
 } from "./auth/connection_page.js";
+import {
+  createConnectionSuccessPage,
+  getConnectionSuccessPage,
+} from "./auth/connection_success_session.js";
 
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
@@ -673,13 +678,15 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         }
       }
 
-      res.send(
-        renderSuccessPage(
-          outcome.connectedCompanies,
-          code,
-          outcome.failedCompanies
-        )
-      );
+      const { path: successPath } = await createConnectionSuccessPage({
+        confirmationCode: code,
+        connectedNames: outcome.connectedCompanies,
+        failedCompanies: outcome.failedCompanies,
+      });
+
+      applyConnectionSuccessPageHeaders(res);
+      // PRG: opaque success id only — confirmation code stays server-side / page body.
+      res.redirect(303, successPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
 
@@ -831,6 +838,30 @@ app.get("/connect", async (req, res) => {
   return runWithRedTelemetryContext(telemetryContext, () => {
     res.send(renderConnectPage(code, { telemetryClientId: clientId }));
   });
+});
+
+app.get("/connect/success/:successId", async (req, res) => {
+  await ensureConnectionStoreInitialized();
+  applyConnectionSuccessPageHeaders(res);
+
+  const successId = String(req.params.successId ?? "");
+  const successPage = await getConnectionSuccessPage(successId);
+
+  if (!successPage) {
+    res.status(400).send(renderExpiredLinkPage());
+    return;
+  }
+
+  // Do not log confirmationCode — it must not appear in access/App Insights URLs.
+  res
+    .type("html")
+    .send(
+      renderSuccessPage(
+        successPage.connectedNames,
+        successPage.confirmationCode,
+        successPage.failedCompanies
+      )
+    );
 });
 
 

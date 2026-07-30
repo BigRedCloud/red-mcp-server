@@ -249,6 +249,8 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         console.error("Red telemetry: failed to store connection session id:", error instanceof Error ? error.message : error);
     }
     const connectedCompaniesList = connectedCompanies;
+    // Confirmation codes are one-time use after a successful claim.
+    await store.consumePendingConnection(trimmedCode);
     return {
         connectionId: pending.connectionId,
         connectedCompanies: connectedCompaniesList,

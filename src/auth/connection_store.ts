@@ -385,6 +385,9 @@ export async function claimConnectionCodeForSession(
 
   const connectedCompaniesList = connectedCompanies;
 
+  // Confirmation codes are one-time use after a successful claim.
+  await store.consumePendingConnection(trimmedCode);
+
   return {
     connectionId: pending.connectionId,
     connectedCompanies: connectedCompaniesList,

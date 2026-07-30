@@ -11,6 +11,7 @@ const clientLastClaims = new Map();
 const connectionRefs = new Map();
 const failedValidationsByConnection = new Map();
 const telemetryByConnection = new Map();
+const successPagesById = new Map();
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -26,6 +27,13 @@ function cleanupExpiredPendingConnections() {
         }
         if (isPendingConnectionExpired(pending.expiresAt)) {
             pendingConnections.delete(code);
+        }
+    }
+}
+function cleanupExpiredSuccessPages(now = Date.now()) {
+    for (const [successId, page] of successPagesById.entries()) {
+        if (page.expiresAt <= now) {
+            successPagesById.delete(successId);
         }
     }
 }
@@ -79,7 +87,7 @@ export class MemoryConnectionStore {
         return { ...pending };
     }
     async consumePendingConnection(code) {
-        const pending = await this.getPendingConnection(code);
+        const pending = await this.getConnectionByCode(code);
         if (!pending)
             return null;
         pendingConnections.delete(code);
@@ -194,6 +202,29 @@ export class MemoryConnectionStore {
     async getConnectionTelemetry(connectionId) {
         const record = telemetryByConnection.get(connectionId);
         return record ? { ...record } : null;
+    }
+    async saveConnectionSuccessPage(record) {
+        cleanupExpiredSuccessPages();
+        successPagesById.set(record.successId, {
+            ...record,
+            connectedNames: [...record.connectedNames],
+            failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+        });
+    }
+    async getConnectionSuccessPage(successId) {
+        cleanupExpiredSuccessPages();
+        const record = successPagesById.get(successId.trim());
+        if (!record || record.expiresAt <= Date.now()) {
+            if (record) {
+                successPagesById.delete(successId.trim());
+            }
+            return null;
+        }
+        return {
+            ...record,
+            connectedNames: [...record.connectedNames],
+            failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+        };
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

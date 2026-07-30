@@ -54,6 +54,16 @@ export type ConnectionTelemetryRecord = {
   updatedAt: number;
 };
 
+/** Short-lived success-page lookup — confirmation code is never used as the URL id. */
+export type ConnectionSuccessPageRecord = {
+  successId: string;
+  confirmationCode: string;
+  connectedNames: string[];
+  failedCompanies: FailedCompanyConnection[];
+  createdAt: number;
+  expiresAt: number;
+};
+
 export interface ConnectionStore {
   getStoreType(): string;
 
@@ -140,6 +150,14 @@ export interface ConnectionStore {
   getConnectionTelemetry(
     connectionId: string
   ): Promise<ConnectionTelemetryRecord | null>;
+
+  saveConnectionSuccessPage(
+    record: ConnectionSuccessPageRecord
+  ): Promise<void>;
+
+  getConnectionSuccessPage(
+    successId: string
+  ): Promise<ConnectionSuccessPageRecord | null>;
 
   getDiagnostics(args: {
     connectionId?: string;
