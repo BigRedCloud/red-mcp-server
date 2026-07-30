@@ -17,6 +17,7 @@ import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUID
 import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSourcesMarkdownTextBlock, } from "./help-answer-sources.js";
 import { SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMarkdownTextBlock, resolveSupportFallback, } from "./help-support-fallback.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
+import { resolveHelpSearchQuery } from "./help-mode.js";
 import { buildHelpAnswerSectionsMarkdown, AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, } from "./help-answer-layout.js";
 import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
@@ -290,6 +291,9 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
     if (!parsed) {
         return { ok: false, error: "Help resource ID is invalid." };
     }
+    const questionForWorkflow = options.question
+        ? resolveHelpSearchQuery(options.question).searchQuery || options.question
+        : options.question;
     const freshdeskIndexContainer = options.freshdeskIndexContainer === undefined
         ? createConfiguredFreshdeskIndexContainer()
         : options.freshdeskIndexContainer;
@@ -298,7 +302,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
         : options.freshdeskImageContainer;
     const includeImages = options.includeImages ?? true;
     const maxImages = Math.min(options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD);
-    const question = options.question?.trim() || null;
+    const question = questionForWorkflow?.trim() || null;
     const imagePresentation = resolveHelpImagePresentation(options.imagePresentation);
     try {
         if (parsed.source === "freshdesk") {

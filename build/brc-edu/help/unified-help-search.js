@@ -8,6 +8,7 @@ import { SUPPORT_CONTACT_URL, SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMa
 import { AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, buildHelpAnswerSectionsMarkdown, } from "./help-answer-layout.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
 import { detectHelpProceduralIntent, expandHelpSearchQueries, scoreProceduralTitleMatch, scoreProceduralVideoMatch, } from "./help-query-expansion.js";
+import { HELP_MODE_INSTRUCTION_SUMMARY, resolveHelpSearchQuery, } from "./help-mode.js";
 import { buildEmptyUpcomingWebinarCustomerMarkdown, EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE, isUpcomingWebinarScheduleQuery, } from "../upcoming-webinars/upcoming-webinar-customer-fallback.js";
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
@@ -364,9 +365,12 @@ export function searchUnifiedHelpResources(question, sources, options) {
     return dedupeSearchResults([...bestByKey.values()]).slice(0, maxResults);
 }
 export function buildUnifiedFindHelpResourcesResponse(question, sources, options) {
-    let resources = searchUnifiedHelpResources(question, sources, options);
+    const helpModeResolution = resolveHelpSearchQuery(question);
+    const searchQuestion = helpModeResolution.searchQuery || question.trim();
+    const originalQuestion = question;
+    let resources = searchUnifiedHelpResources(searchQuestion, sources, options);
     const upcomingScheduleQuery = options?.sourceFilter === "upcoming_webinar" ||
-        isUpcomingWebinarScheduleQuery(question);
+        isUpcomingWebinarScheduleQuery(searchQuestion);
     if (upcomingScheduleQuery) {
         const upcomingOnly = resources.filter((resource) => resource.source === "upcoming_webinar");
         if (upcomingOnly.length > 0) {
@@ -380,10 +384,10 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             resources = catalogue.map((resource) => toHelpSearchResult(fromUpcomingWebinarResource(resource), 100));
         }
     }
-    const intent = detectHelpProceduralIntent(question);
+    const intent = detectHelpProceduralIntent(searchQuestion);
     const usedResources = selectUsedHelpResources(resources, {
         intentIsProcedural: intent !== null,
-        question,
+        question: searchQuestion,
     });
     const usedResourceIds = usedResources.map((resource) => resource.resourceId);
     const answerSources = buildHelpAnswerSources(helpSearchResultsToSourceInputs(usedResources));
@@ -398,7 +402,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         strongestScore: usedResources[0]?.relevanceScore ?? resources[0]?.relevanceScore ?? null,
         hasRelevantSourceOrScreenshot: answerSources.length > 0,
     });
-    const redAction = resolveHelpRedActionCapability(question);
+    const redAction = resolveHelpRedActionCapability(searchQuestion);
     const hasFreshdeskMatch = usedResources.some((resource) => resource.source === "freshdesk");
     const customerFacingAnswerSectionsMarkdown = buildHelpAnswerSectionsMarkdown({
         sourcesMarkdown: customerFacingSourcesMarkdown,
@@ -406,7 +410,11 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
         supportMarkdown: supportFallback.customerFacingSupportMarkdown,
     });
     return {
-        question,
+        question: searchQuestion,
+        originalQuestion,
+        helpMode: helpModeResolution.isHelpMode,
+        cleanedQuery: helpModeResolution.cleanedQuery,
+        blockTransactionalTools: helpModeResolution.isHelpMode,
         category: options?.category ?? null,
         matchCount: resources.length,
         resources,
@@ -435,6 +443,12 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
             : {}),
         responseGuidance: {
             format: [
+                helpModeResolution.isHelpMode
+                    ? HELP_MODE_INSTRUCTION_SUMMARY
+                    : "Answer the customer's how-to question from returned help resources.",
+                helpModeResolution.isHelpMode
+                    ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action."
+                    : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
                 "Provide a concise synthesized direct answer first.",
                 "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
                 emptyUpcomingWebinarResult
@@ -443,6 +457,7 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
                 "Do not describe recorded_webinar or youtube_video resources as upcoming webinars.",
                 "End with customerFacingAnswerSectionsMarkdown (or Sources with Articles/Videos, then optional Do this through Red, then Still need help? support) in that exact order.",
                 "Never emit Do this through Red before Sources.",
+                "Manual guidance and Sources must appear before any optional Do this through Red offer.",
                 "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
                 "Always end with the Still need help? support section.",
                 "Use only publicUrl or registrationUrl values returned in sources for hyperlinks.",
@@ -462,6 +477,8 @@ export function buildUnifiedFindHelpResourcesResponse(question, sources, options
                 "upcoming_webinar",
                 "freshdesk",
             ],
+            helpMode: helpModeResolution.isHelpMode,
+            blockTransactionalTools: helpModeResolution.isHelpMode,
             supportFooter: SUPPORT_FOOTER_GUIDANCE,
             supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
             sources: [

@@ -10,6 +10,9 @@ import { jsonResponse } from "../../shared.js";
 export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
     "Find Big Red Cloud customer help across Freshdesk support articles, customer documentation, recorded webinar videos, and upcoming live webinars.",
     "Use when the customer asks a support question or how-to question about Big Red Cloud.",
+    "When the user's message is in help mode (begins with help / help, / help: / help me / manual help / show me how / how do / tell me how to do this manually), treat it as a request for manual instructions — not permission to perform the accounting action.",
+    "Pass the user's question (including any help-mode prefix); the server strips the prefix and searches with the cleaned query.",
+    "In help mode: do not ask for customer details first; do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action.",
     "Do not use for connecting companies, listing connected companies, clearing connections, or any company books data.",
     "Read-only. Does not require a connected company.",
     "Return a concise synthesized answer for the customer: direct answer, clear steps where applicable, then a Sources section with Articles / Videos groupings and exact public links from customerFacingSourcesMarkdown or the sources array.",
@@ -25,6 +28,7 @@ export const FIND_HELP_RESOURCES_TOOL_DESCRIPTION = [
     "For procedural how-tos, automatically include the strongest topic-aligned training video under Videos when one exists — do not require the user to ask for a video.",
     "Always emit Sources before any Do this through Red section.",
     "When redActionAvailable is true, include customerFacingRedActionMarkdown after Sources and before support — do not start the action unless the user asks.",
+    "Manual guidance must appear before any offer to perform the action through Red.",
     "Always end every help answer with Still need help? and [Contact Big Red Cloud Support](https://bigredcloud.com/contact/) — support must be last.",
     "Never claim company data was changed by a tutorial answer.",
 ].join(" ");

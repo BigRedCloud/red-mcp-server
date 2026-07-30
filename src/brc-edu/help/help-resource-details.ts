@@ -80,6 +80,7 @@ import {
   buildRedActionMarkdownTextBlock,
   resolveHelpRedActionCapability,
 } from "./help-red-action-capability.js";
+import { resolveHelpSearchQuery } from "./help-mode.js";
 import {
   buildHelpAnswerSectionsMarkdown,
   AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE,
@@ -539,6 +540,10 @@ export async function getHelpResourceDetails(
     return { ok: false, error: "Help resource ID is invalid." };
   }
 
+  const questionForWorkflow = options.question
+    ? resolveHelpSearchQuery(options.question).searchQuery || options.question
+    : options.question;
+
   const freshdeskIndexContainer =
     options.freshdeskIndexContainer === undefined
       ? createConfiguredFreshdeskIndexContainer()
@@ -554,7 +559,7 @@ export async function getHelpResourceDetails(
     options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES,
     FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD,
   );
-  const question = options.question?.trim() || null;
+  const question = questionForWorkflow?.trim() || null;
   const imagePresentation = resolveHelpImagePresentation(
     options.imagePresentation,
   );

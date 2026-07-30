@@ -40,3 +40,11 @@ test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () =
     assert.match(instructions, /https:\/\/bigredcloud\.com\/contact\//);
     assert.equal(/helpInteractionMode/i.test(instructions), false);
 });
+test("MCP server instructions define help mode and block auto transactional actions", () => {
+    const instructions = getBrcMcpServerInstructions(50, false);
+    assert.match(instructions, /Help mode \(mandatory\)/i);
+    assert.match(instructions, /When a message is in help mode, answer the user's how-to question using Red's customer-help resources/i);
+    assert.match(instructions, /Do not interpret it as permission to perform the accounting action/i);
+    assert.match(instructions, /Do not call create, update, delete, email, or batch tools unless the user later explicitly asks/i);
+    assert.match(instructions, /help, how do I add a customer/i);
+});

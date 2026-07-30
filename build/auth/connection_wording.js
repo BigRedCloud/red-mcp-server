@@ -74,7 +74,7 @@ export const START_CONNECTION_RESPONSE_LINES = [
     "",
     "If you need to reconnect, try again after a failure, or fix an expired or stale connection, ask Red to start a new company connection to generate a fresh link.",
     "",
-    "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
+    "Once you've connected on that page, come back here and paste the confirmation message shown on the success screen so I can link those companies to this chat.",
 ];
 export function formatStartConnectionResponse(url) {
     return START_CONNECTION_RESPONSE_LINES.join("\n").replace("{url}", url);

@@ -49,6 +49,10 @@ import {
   scoreProceduralVideoMatch,
 } from "./help-query-expansion.js";
 import {
+  HELP_MODE_INSTRUCTION_SUMMARY,
+  resolveHelpSearchQuery,
+} from "./help-mode.js";
+import {
   buildEmptyUpcomingWebinarCustomerMarkdown,
   EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE,
   isUpcomingWebinarScheduleQuery,
@@ -600,10 +604,14 @@ export function buildUnifiedFindHelpResourcesResponse(
     sourceFilter?: HelpResourceSourceFilter;
   },
 ) {
-  let resources = searchUnifiedHelpResources(question, sources, options);
+  const helpModeResolution = resolveHelpSearchQuery(question);
+  const searchQuestion = helpModeResolution.searchQuery || question.trim();
+  const originalQuestion = question;
+
+  let resources = searchUnifiedHelpResources(searchQuestion, sources, options);
   const upcomingScheduleQuery =
     options?.sourceFilter === "upcoming_webinar" ||
-    isUpcomingWebinarScheduleQuery(question);
+    isUpcomingWebinarScheduleQuery(searchQuestion);
 
   if (upcomingScheduleQuery) {
     const upcomingOnly = resources.filter(
@@ -624,10 +632,10 @@ export function buildUnifiedFindHelpResourcesResponse(
     }
   }
 
-  const intent = detectHelpProceduralIntent(question);
+  const intent = detectHelpProceduralIntent(searchQuestion);
   const usedResources = selectUsedHelpResources(resources, {
     intentIsProcedural: intent !== null,
-    question,
+    question: searchQuestion,
   });
   const usedResourceIds = usedResources.map((resource) => resource.resourceId);
   const answerSources = buildHelpAnswerSources(
@@ -647,7 +655,7 @@ export function buildUnifiedFindHelpResourcesResponse(
       usedResources[0]?.relevanceScore ?? resources[0]?.relevanceScore ?? null,
     hasRelevantSourceOrScreenshot: answerSources.length > 0,
   });
-  const redAction = resolveHelpRedActionCapability(question);
+  const redAction = resolveHelpRedActionCapability(searchQuestion);
   const hasFreshdeskMatch = usedResources.some(
     (resource) => resource.source === "freshdesk",
   );
@@ -658,7 +666,11 @@ export function buildUnifiedFindHelpResourcesResponse(
   });
 
   return {
-    question,
+    question: searchQuestion,
+    originalQuestion,
+    helpMode: helpModeResolution.isHelpMode,
+    cleanedQuery: helpModeResolution.cleanedQuery,
+    blockTransactionalTools: helpModeResolution.isHelpMode,
     category: options?.category ?? null,
     matchCount: resources.length,
     resources,
@@ -689,6 +701,12 @@ export function buildUnifiedFindHelpResourcesResponse(
       : {}),
     responseGuidance: {
       format: [
+        helpModeResolution.isHelpMode
+          ? HELP_MODE_INSTRUCTION_SUMMARY
+          : "Answer the customer's how-to question from returned help resources.",
+        helpModeResolution.isHelpMode
+          ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action."
+          : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
         "Provide a concise synthesized direct answer first.",
         "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
         emptyUpcomingWebinarResult
@@ -697,6 +715,7 @@ export function buildUnifiedFindHelpResourcesResponse(
         "Do not describe recorded_webinar or youtube_video resources as upcoming webinars.",
         "End with customerFacingAnswerSectionsMarkdown (or Sources with Articles/Videos, then optional Do this through Red, then Still need help? support) in that exact order.",
         "Never emit Do this through Red before Sources.",
+        "Manual guidance and Sources must appear before any optional Do this through Red offer.",
         "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
         "Always end with the Still need help? support section.",
         "Use only publicUrl or registrationUrl values returned in sources for hyperlinks.",
@@ -716,6 +735,8 @@ export function buildUnifiedFindHelpResourcesResponse(
         "upcoming_webinar",
         "freshdesk",
       ],
+      helpMode: helpModeResolution.isHelpMode,
+      blockTransactionalTools: helpModeResolution.isHelpMode,
       supportFooter: SUPPORT_FOOTER_GUIDANCE,
       supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
       sources: [
