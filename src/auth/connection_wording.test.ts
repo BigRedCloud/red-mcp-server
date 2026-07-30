@@ -76,6 +76,11 @@ test("start connection response tells the user not to reuse an older link", () =
   assert.match(text, /Do not open or reuse an older connection link/i);
   assert.match(text, /start a new company connection to generate a fresh link/i);
   assert.equal(text.includes("https://example.test/connect?code=abc"), true);
+  assert.match(
+    text,
+    /Once you've connected on that page, come back here and paste the confirmation message shown on the success screen so I can link those companies to this chat\./
+  );
+  assert.equal(/will not be active until you do/i.test(text), false);
 });
 
 test("claim guidance requires a fresh secure Red connection link", () => {
