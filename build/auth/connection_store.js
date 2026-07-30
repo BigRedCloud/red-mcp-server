@@ -213,8 +213,15 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         throw new ClaimConnectionError(`A connection code is required. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     const store = getConnectionStore();
-    const pending = await store.getConnectionByCode(trimmedCode);
-    if (!pending) {
+    // Connect-page tokens must never be accepted as confirmation codes.
+    const connectTokenHit = await store.getConnectionByConnectToken(trimmedCode);
+    if (connectTokenHit &&
+        connectTokenHit.connectToken === trimmedCode &&
+        connectTokenHit.confirmationCode !== trimmedCode) {
+        throw new ClaimConnectionError(`That value is the secure connection link token, not the confirmation code. After connecting on the secure page, copy the confirmation code from the success page (or use Copy message for chat), then confirm here. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
+    }
+    const pending = await store.getConnectionByConfirmationCode(trimmedCode);
+    if (!pending || !pending.confirmationCode) {
         throw new ClaimConnectionError(`That connection code is missing, incorrect, or has already been used. ${FRESH_CONNECTION_LINK_CLAIM_GUIDANCE}`, "not_found");
     }
     if (!pending.used) {
@@ -250,7 +257,7 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
     }
     const connectedCompaniesList = connectedCompanies;
     // Confirmation codes are one-time use after a successful claim.
-    await store.consumePendingConnection(trimmedCode);
+    await store.consumeConfirmationCode(trimmedCode);
     return {
         connectionId: pending.connectionId,
         connectedCompanies: connectedCompaniesList,
@@ -261,16 +268,39 @@ export async function claimConnectionCodeForSession(code, sessionId, options) {
         connectionSessionId,
     };
 }
+/**
+ * Generate and attach a confirmation code for a completed connect-page token.
+ * The confirmation code is always distinct from the connectToken.
+ */
+export async function issueConfirmationCodeForConnectToken(connectToken) {
+    await ensureConnectionStoreInitialized();
+    const token = connectToken.trim();
+    if (!token) {
+        return null;
+    }
+    let confirmationCode = crypto.randomBytes(16).toString("hex");
+    while (confirmationCode === token) {
+        confirmationCode = crypto.randomBytes(16).toString("hex");
+    }
+    const pending = await getConnectionStore().issueConfirmationCode(token, confirmationCode);
+    if (!pending?.confirmationCode) {
+        return null;
+    }
+    return {
+        confirmationCode: pending.confirmationCode,
+        connectionId: pending.connectionId,
+    };
+}
 export async function createPendingConnection(sessionId) {
     await ensureConnectionStoreInitialized();
     const connectionId = await ensureConnectionIdForSession(sessionId);
-    const code = crypto.randomBytes(16).toString("hex");
+    const connectToken = crypto.randomBytes(16).toString("hex");
     await getConnectionStore().createPendingConnection({
-        code,
+        connectToken,
         connectionId,
         expiresAt: PENDING_CONNECTION_NEVER_EXPIRES_AT,
     });
-    return { code, connectionId };
+    return { code: connectToken, connectToken, connectionId };
 }
 export const LOCAL_STDIO_SESSION_ID = "local-stdio";
 export const LOCAL_STDIO_CONNECTION_ID = "local-stdio";

@@ -24,42 +24,38 @@ test("telemetry saved after successful connection is loadable by connection id",
 });
 test("client ID and connection session ID survive confirmation and rehydration", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, ensureConnectionStoreInitialized, } = await import("../auth/connection_store.js");
+    const { seedClaimableConnection } = await import("../auth/connection_test_helpers.js");
     await ensureConnectionStoreInitialized();
     const store = getConnectionStore();
     const connectionId = uniqueId("conn");
     const clientId = generateTelemetryUuid();
-    const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
+    const connectToken = uniqueId("connect").replace(/-/g, "").slice(0, 32);
+    const confirmationCode = uniqueId("confirm").replace(/-/g, "").slice(0, 32);
     const sessionId = uniqueId("session");
     await store.saveConnectionTelemetry(connectionId, {
         telemetryClientId: clientId,
     });
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
+        companies: [
+            {
+                companyName: "Company A",
+                apiKey: "test-key-telemetry-a",
+            },
+            {
+                companyName: "Company B",
+                apiKey: "test-key-telemetry-b",
+            },
+            {
+                companyName: "Company C",
+                apiKey: "test-key-telemetry-c",
+            },
+        ],
         expiresAt: Number.MAX_SAFE_INTEGER,
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-key-telemetry-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company B",
-            apiKey: "test-key-telemetry-b",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company C",
-            apiKey: "test-key-telemetry-c",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const claim = await claimConnectionCodeForSession(code, sessionId);
+    const claim = await claimConnectionCodeForSession(confirmationCode, sessionId);
     const afterConfirm = await loadConnectionTelemetryContext(connectionId);
     assert.equal(afterConfirm.recordFound, true);
     assert.equal(afterConfirm.telemetryClientId, clientId);
@@ -103,29 +99,29 @@ test("connected company count reflects stored companies not empty keyStore", asy
 });
 test("telemetry loaded during a later MCP request via connectionRef body", async () => {
     const { getConnectionStore, ensureConnectionStoreInitialized, claimConnectionCodeForSession, } = await import("../auth/connection_store.js");
+    const { seedClaimableConnection } = await import("../auth/connection_test_helpers.js");
     await ensureConnectionStoreInitialized();
     const store = getConnectionStore();
     const connectionId = uniqueId("conn-ref");
     const clientId = generateTelemetryUuid();
-    const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
+    const connectToken = uniqueId("connect").replace(/-/g, "").slice(0, 32);
+    const confirmationCode = uniqueId("confirm").replace(/-/g, "").slice(0, 32);
     await store.saveConnectionTelemetry(connectionId, {
         telemetryClientId: clientId,
     });
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
+        companies: [
+            {
+                companyName: "Ref Co",
+                apiKey: "test-key-ref",
+            },
+        ],
         expiresAt: Number.MAX_SAFE_INTEGER,
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Ref Co",
-            apiKey: "test-key-ref",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const claim = await claimConnectionCodeForSession(code, uniqueId("session-a"));
+    const claim = await claimConnectionCodeForSession(confirmationCode, uniqueId("session-a"));
     const rotatedSession = uniqueId("session-b");
     const extracted = extractConnectionRefFromMcpBody({
         method: "tools/call",

@@ -605,7 +605,6 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
         </div>`
         : "";
     const escapedCode = escapeHtml(code);
-    const codeJson = JSON.stringify(code);
     const chatMessageJson = JSON.stringify(`Confirm connection code ${code}`);
     const content = `
       <div class="card">
@@ -626,10 +625,7 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
             Paste into chat as: <strong>Confirm connection code ${escapedCode}</strong>
           </p>
           <div class="copy-actions">
-            <button type="button" class="btn-primary" id="copy-confirmation-code">
-              Copy confirmation code
-            </button>
-            <button type="button" class="btn-secondary" id="copy-chat-message">
+            <button type="button" class="btn-primary" id="copy-chat-message">
               Copy message for chat
             </button>
           </div>
@@ -639,10 +635,8 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
     const copyScript = `
 <script>
 (function () {
-  var confirmationCode = ${codeJson};
   var chatMessage = ${chatMessageJson};
   var statusEl = document.getElementById("copy-status");
-  var codeBtn = document.getElementById("copy-confirmation-code");
   var messageBtn = document.getElementById("copy-chat-message");
 
   function showStatus(message) {
@@ -678,14 +672,9 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
     fallbackCopy();
   }
 
-  if (codeBtn) {
-    codeBtn.addEventListener("click", function () {
-      copyText(confirmationCode, "Confirmation code copied.");
-    });
-  }
   if (messageBtn) {
     messageBtn.addEventListener("click", function () {
-      copyText(chatMessage, "Chat message copied.");
+      copyText(chatMessage, "Message copied. Return to the chat and paste it there.");
     });
   }
 })();

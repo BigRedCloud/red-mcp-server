@@ -26,30 +26,32 @@ async function loadModules() {
 }
 async function seedCompletedConnection(args) {
     const { getConnectionStore } = await loadModules();
+    const { seedClaimableConnection } = await import("./connection_test_helpers.js");
     const store = getConnectionStore();
-    await store.createPendingConnection({
-        code: args.code,
+    const confirmationCode = uniqueId("confirm");
+    await seedClaimableConnection(store, {
+        connectToken: args.code,
+        confirmationCode,
         connectionId: args.connectionId,
+        companies: args.companies.map((company) => ({
+            companyName: company.name,
+            apiKey: company.apiKey,
+            expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+        })),
         expiresAt: Number.MAX_SAFE_INTEGER,
     });
-    await store.completePendingConnection(args.code);
-    await store.saveConnectedCompanies(args.connectionId, args.companies.map((company) => ({
-        companyName: company.name,
-        apiKey: company.apiKey,
-        expiresAt: Date.now() + 4 * 60 * 60 * 1000,
-        credentialValidatedAt: Date.now(),
-    })));
+    return { confirmationCode };
 }
 test("confirm returns a ref that works on the next read call", async () => {
     const { claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, runWithActiveConnectionRef, listConnectedCompanyNames, getCredentialForCompanyAsync, } = await loadModules();
     const connectionId = uniqueId("conn");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-c-confirm-next" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-session"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-session"));
     const nextSession = uniqueId("read-session");
     const scope = await prepareHttpToolSessionScope(nextSession, new Map(), undefined, claimed.connectionRef);
     assert.equal(scope.resolution.connectionRefResolved, true);
@@ -65,12 +67,12 @@ test("missing-ref failure followed by valid-ref retry succeeds", async () => {
     const { claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, runWithActiveConnectionRef, getCredentialForCompany, getCredentialForCompanyAsync, CONNECTION_REF_NOT_PASSED_MESSAGE, wrapHttpSessionAwareToolHandler, getConnectionStore, } = await loadModules();
     const connectionId = uniqueId("conn-retry");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-c-retry" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-retry"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-retry"));
     const rotated = uniqueId("rotated-session");
     await assert.rejects(async () => {
         const scope = await prepareHttpToolSessionScope(rotated, new Map());
@@ -105,12 +107,12 @@ test("missing-ref failure does not delete the connection", async () => {
     const { claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, getCredentialForCompany, getConnectionStore, } = await loadModules();
     const connectionId = uniqueId("conn-preserve");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-preserve" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-preserve"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-preserve"));
     const scope = await prepareHttpToolSessionScope(uniqueId("missing-ref"), new Map());
     await assert.rejects(() => runWithHttpToolSession(scope, async () => {
         getCredentialForCompany("Company C");
@@ -124,12 +126,12 @@ test("ref remains valid after MCP session rotation", async () => {
     const { claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, runWithActiveConnectionRef, listConnectedCompanyNames, } = await loadModules();
     const connectionId = uniqueId("conn-rotate");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-rotate" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-rotate"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-rotate"));
     for (let i = 0; i < 3; i++) {
         const scope = await prepareHttpToolSessionScope(uniqueId(`rot-${i}`), new Map(), undefined, claimed.connectionRef);
         await runWithActiveConnectionRef(claimed.connectionRef, () => runWithHttpToolSession(scope, async () => {
@@ -142,12 +144,12 @@ test("ref remains valid after telemetry update", async () => {
     const { generateTelemetryUuid } = await import("../telemetry/identity.js");
     const connectionId = uniqueId("conn-tel");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-tel" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-tel"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-tel"));
     // Session-only telemetry patch (as confirm does after connect).
     await getConnectionStore().saveConnectionTelemetry(connectionId, {
         connectionSessionId: generateTelemetryUuid(),
@@ -196,12 +198,12 @@ test("list company contexts reloads through connectionRef", async () => {
     const { claimConnectionCodeForSession, wrapHttpSessionAwareToolHandler, listConnectedCompanyNames, } = await loadModules();
     const connectionId = uniqueId("conn-contexts");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-contexts" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-contexts"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-contexts"));
     const handler = wrapHttpSessionAwareToolHandler(async () => ({
         count: listConnectedCompanyNames().length,
         companies: listConnectedCompanyNames(),
@@ -214,12 +216,12 @@ test("list sales invoices reloads through connectionRef", async () => {
     const { claimConnectionCodeForSession, wrapHttpSessionAwareToolHandler, getCredentialForCompanyAsync, } = await loadModules();
     const connectionId = uniqueId("conn-invoices");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "key-invoices" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-invoices"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-invoices"));
     const handler = wrapHttpSessionAwareToolHandler(async (args) => {
         const credential = await getCredentialForCompanyAsync(args.companyName);
         return { ok: true, companyName: credential.companyName };
@@ -234,18 +236,18 @@ test("separate connections cannot inherit Company B", async () => {
     const connectionB = uniqueId("conn-b");
     const codeA = uniqueId("code").replace(/-/g, "").slice(0, 32);
     const codeB = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const seededA = await seedCompletedConnection({
         connectionId: connectionA,
         code: codeA,
         companies: [{ name: "Company A", apiKey: "key-a-isol" }],
     });
-    await seedCompletedConnection({
+    const seededB = await seedCompletedConnection({
         connectionId: connectionB,
         code: codeB,
         companies: [{ name: "Company B", apiKey: "key-b-isol" }],
     });
-    const claimA = await claimConnectionCodeForSession(codeA, uniqueId("sess-a"));
-    const claimB = await claimConnectionCodeForSession(codeB, uniqueId("sess-b"));
+    const claimA = await claimConnectionCodeForSession(seededA.confirmationCode, uniqueId("sess-a"));
+    const claimB = await claimConnectionCodeForSession(seededB.confirmationCode, uniqueId("sess-b"));
     const scopeA = await prepareHttpToolSessionScope(uniqueId("use-a"), new Map(), undefined, claimA.connectionRef);
     await runWithActiveConnectionRef(claimA.connectionRef, () => runWithHttpToolSession(scopeA, async () => {
         assert.deepEqual(listConnectedCompanyNames(), ["Company A"]);
@@ -322,12 +324,12 @@ test("diagnostics contain no secrets", async () => {
     const { claimConnectionCodeForSession, prepareMcpTelemetryContext, } = await loadModules();
     const connectionId = uniqueId("conn-diag");
     const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-    await seedCompletedConnection({
+    const { confirmationCode } = await seedCompletedConnection({
         connectionId,
         code,
         companies: [{ name: "Company C", apiKey: "super-secret-api-key-value" }],
     });
-    const claimed = await claimConnectionCodeForSession(code, uniqueId("confirm-diag"));
+    const claimed = await claimConnectionCodeForSession(confirmationCode, uniqueId("confirm-diag"));
     const logs = [];
     const originalInfo = console.info;
     console.info = (...args) => {

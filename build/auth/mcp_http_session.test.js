@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 process.env.RED_CONNECT_CONNECTION_STORE = "memory";
 process.env.RED_CONNECT_HTTP_MODE = "true";
+import { seedClaimableConnection } from "./connection_test_helpers.js";
 function uniqueId(prefix) {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -14,44 +15,26 @@ async function loadModules() {
 test("confirm connection then list companies in the same detected session", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, getCompanyApiContexts, listConnectedCompanyNames, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionId = uniqueId("session-a");
     const clientKey = uniqueId("client-a");
     const keyStore = new Map();
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [
+            { companyName: "Company A", apiKey: "test-api-key-a" },
+            { companyName: "Company B", apiKey: "test-api-key-b" },
+            { companyName: "Company C", apiKey: "test-api-key-c" },
+            { companyName: "Company D", apiKey: "test-api-key-d" },
+        ],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company B",
-            apiKey: "test-api-key-b",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company C",
-            apiKey: "test-api-key-c",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company D",
-            apiKey: "test-api-key-d",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    await claimConnectionCodeForSession(code, sessionId, { clientKey });
+    await claimConnectionCodeForSession(confirmationCode, sessionId, {
+        clientKey,
+    });
     const scope = await prepareHttpToolSessionScope(sessionId, keyStore, clientKey);
     await runWithHttpToolSession(scope, async () => {
         const names = listConnectedCompanyNames();
@@ -67,26 +50,21 @@ test("confirm connection then list companies in the same detected session", asyn
 test("different session cannot see companies confirmed in another session", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, listConnectedCompanyNames, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionA = uniqueId("session-a");
     const sessionB = uniqueId("session-b");
     const clientKey = uniqueId("client");
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    await claimConnectionCodeForSession(code, sessionA, { clientKey });
+    await claimConnectionCodeForSession(confirmationCode, sessionA, {
+        clientKey,
+    });
     const scopeB = await prepareHttpToolSessionScope(sessionB, new Map(), uniqueId("other-client"));
     await runWithHttpToolSession(scopeB, async () => {
         assert.deepEqual(listConnectedCompanyNames(), []);
@@ -108,23 +86,16 @@ test("same API keys in different sessions remain isolated without a shared clien
     const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, listConnectedCompanyNames, } = await loadModules();
     const store = getConnectionStore();
     async function connectCompany(sessionId, companyName) {
-        const code = uniqueId("code");
+        const connectToken = uniqueId("connect");
+        const confirmationCode = uniqueId("confirm");
         const connectionId = uniqueId("connection");
-        await store.createPendingConnection({
-            code,
+        await seedClaimableConnection(store, {
+            connectToken,
+            confirmationCode,
             connectionId,
-            expiresAt: Date.now() + 60_000,
+            companies: [{ companyName, apiKey: "shared-test-api-key" }],
         });
-        await store.completePendingConnection(code);
-        await store.saveConnectedCompanies(connectionId, [
-            {
-                companyName,
-                apiKey: "shared-test-api-key",
-                expiresAt: Date.now() + 60_000,
-                credentialValidatedAt: Date.now(),
-            },
-        ]);
-        await claimConnectionCodeForSession(code, sessionId, {
+        await claimConnectionCodeForSession(confirmationCode, sessionId, {
             clientKey: uniqueId(`client-${sessionId}`),
         });
     }
@@ -144,7 +115,8 @@ test("same API keys in different sessions remain isolated without a shared clien
 test("rotated MCP session id inherits connection via stable client key", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, runHttpToolSessionFromExtra, listConnectedCompanyNames, buildHttpClientKeyFromHeaders, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const firstSessionId = uniqueId("session-1");
     const secondSessionId = uniqueId("session-2");
@@ -154,21 +126,15 @@ test("rotated MCP session id inherits connection via stable client key", async (
     };
     const clientKey = buildHttpClientKeyFromHeaders(headers, "203.0.113.10");
     const keyStore = new Map();
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [{ companyName: "Company C", apiKey: "test-api-key-c" }],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company C",
-            apiKey: "test-api-key-c",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    await claimConnectionCodeForSession(code, firstSessionId, { clientKey });
+    await claimConnectionCodeForSession(confirmationCode, firstSessionId, {
+        clientKey,
+    });
     await runHttpToolSessionFromExtra(firstSessionId, keyStore, {
         requestInfo: {
             headers,
@@ -239,43 +205,23 @@ test("tool-level diagnostic logs connectionRef resolution with loaded companies"
     process.env.RED_CONNECT_SESSION_DEBUG = "true";
     const { getConnectionStore, claimConnectionCodeForSession, runHttpToolSessionFromExtra, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionA = uniqueId("session-a");
     const keyStore = new Map();
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [
+            { companyName: "Company A", apiKey: "test-api-key-a" },
+            { companyName: "Company B", apiKey: "test-api-key-b" },
+            { companyName: "Company C", apiKey: "test-api-key-c" },
+            { companyName: "Company D", apiKey: "test-api-key-d" },
+        ],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company B",
-            apiKey: "test-api-key-b",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company C",
-            apiKey: "test-api-key-c",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-        {
-            companyName: "Company D",
-            apiKey: "test-api-key-d",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const claim = await claimConnectionCodeForSession(code, sessionA);
+    const claim = await claimConnectionCodeForSession(confirmationCode, sessionA);
     const logs = [];
     const originalInfo = console.info;
     console.info = (...args) => {

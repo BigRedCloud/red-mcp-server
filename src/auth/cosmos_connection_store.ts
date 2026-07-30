@@ -32,8 +32,12 @@ function sessionPartitionKey(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
-function pendingPartitionKey(code: string): string {
-  return `pending:${code}`;
+function pendingPartitionKey(connectToken: string): string {
+  return `pending:${connectToken}`;
+}
+
+function confirmationPartitionKey(confirmationCode: string): string {
+  return `confirm:${confirmationCode}`;
 }
 
 function connectionPartitionKey(connectionId: string): string {
@@ -82,11 +86,23 @@ type SessionBindingRecord = CosmosRecord & {
 
 type PendingConnectionDocument = CosmosRecord & {
   type: "pendingConnection";
+  /** Secure-page token. Legacy docs may only have `code`. */
+  connectToken?: string;
   code: string;
   connectionId: string;
   createdAt: number;
   expiresAt: number;
   used: boolean;
+  confirmationCode?: string;
+  ttl: number;
+};
+
+type ConfirmationCodeIndexDocument = CosmosRecord & {
+  type: "confirmationCodeIndex";
+  confirmationCode: string;
+  connectToken: string;
+  connectionId: string;
+  expiresAt: number;
   ttl: number;
 };
 
@@ -221,16 +237,23 @@ export class CosmosConnectionStore implements ConnectionStore {
   }
 
   async createPendingConnection(args: {
-    code: string;
+    connectToken?: string;
+    code?: string;
     connectionId: string;
     expiresAt: number;
   }): Promise<void> {
+    const connectToken = (args.connectToken ?? args.code ?? "").trim();
+    if (!connectToken) {
+      throw new Error("connectToken is required to create a pending connection.");
+    }
+
     const now = Date.now();
     const doc: PendingConnectionDocument = {
-      pk: pendingPartitionKey(args.code),
+      pk: pendingPartitionKey(connectToken),
       id: "pending",
       type: "pendingConnection",
-      code: args.code,
+      connectToken,
+      code: connectToken,
       connectionId: args.connectionId,
       createdAt: now,
       expiresAt: args.expiresAt,
@@ -242,11 +265,11 @@ export class CosmosConnectionStore implements ConnectionStore {
   }
 
   private async readPendingConnectionDocument(
-    code: string
+    connectToken: string
   ): Promise<PendingConnectionDocument | null> {
     try {
       const { resource } = await this.getContainer()
-        .item("pending", pendingPartitionKey(code))
+        .item("pending", pendingPartitionKey(connectToken))
         .read<PendingConnectionDocument>();
 
       if (!resource || resource.type !== "pendingConnection") {
@@ -255,9 +278,15 @@ export class CosmosConnectionStore implements ConnectionStore {
 
       if (isPendingConnectionExpired(resource.expiresAt)) {
         await this.getContainer()
-          .item("pending", pendingPartitionKey(code))
+          .item("pending", pendingPartitionKey(connectToken))
           .delete()
           .catch(() => {});
+        if (resource.confirmationCode) {
+          await this.getContainer()
+            .item("confirm", confirmationPartitionKey(resource.confirmationCode))
+            .delete()
+            .catch(() => {});
+        }
         return null;
       }
 
@@ -270,17 +299,22 @@ export class CosmosConnectionStore implements ConnectionStore {
   private pendingRecordFromDocument(
     resource: PendingConnectionDocument
   ): PendingConnectionRecord {
+    const connectToken = (resource.connectToken ?? resource.code).trim();
     return {
-      code: resource.code,
+      connectToken,
+      code: connectToken,
       connectionId: resource.connectionId,
       createdAt: resource.createdAt,
       expiresAt: resource.expiresAt,
       used: Boolean(resource.used),
+      confirmationCode: resource.confirmationCode?.trim() || undefined,
     };
   }
 
-  async getPendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const resource = await this.readPendingConnectionDocument(code);
+  async getPendingConnection(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(connectToken.trim());
     if (!resource || resource.used) {
       return null;
     }
@@ -288,8 +322,10 @@ export class CosmosConnectionStore implements ConnectionStore {
     return this.pendingRecordFromDocument(resource);
   }
 
-  async getConnectionByCode(code: string): Promise<PendingConnectionRecord | null> {
-    const resource = await this.readPendingConnectionDocument(code);
+  async getConnectionByConnectToken(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(connectToken.trim());
     if (!resource) {
       return null;
     }
@@ -297,14 +333,61 @@ export class CosmosConnectionStore implements ConnectionStore {
     return this.pendingRecordFromDocument(resource);
   }
 
-  async completePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const resource = await this.readPendingConnectionDocument(code);
+  async getConnectionByConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
+    const trimmed = confirmationCode.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const { resource: index } = await this.getContainer()
+        .item("confirm", confirmationPartitionKey(trimmed))
+        .read<ConfirmationCodeIndexDocument>();
+
+      if (!index || index.type !== "confirmationCodeIndex") {
+        return null;
+      }
+
+      if (isPendingConnectionExpired(index.expiresAt)) {
+        await this.getContainer()
+          .item("confirm", confirmationPartitionKey(trimmed))
+          .delete()
+          .catch(() => {});
+        return null;
+      }
+
+      const pending = await this.readPendingConnectionDocument(index.connectToken);
+      if (!pending || pending.confirmationCode !== trimmed) {
+        return null;
+      }
+
+      return this.pendingRecordFromDocument(pending);
+    } catch {
+      return null;
+    }
+  }
+
+  async getConnectionByCode(
+    code: string
+  ): Promise<PendingConnectionRecord | null> {
+    return this.getConnectionByConfirmationCode(code);
+  }
+
+  async completePendingConnection(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
+    const resource = await this.readPendingConnectionDocument(connectToken.trim());
     if (!resource || resource.used) {
       return null;
     }
 
+    const token = (resource.connectToken ?? resource.code).trim();
     const completed: PendingConnectionDocument = {
       ...resource,
+      connectToken: token,
+      code: token,
       used: true,
     };
 
@@ -312,16 +395,81 @@ export class CosmosConnectionStore implements ConnectionStore {
     return this.pendingRecordFromDocument(completed);
   }
 
-  async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const pending = await this.getConnectionByCode(code);
+  async issueConfirmationCode(
+    connectToken: string,
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
+    const token = connectToken.trim();
+    const confirm = confirmationCode.trim();
+    if (!token || !confirm || confirm === token) {
+      return null;
+    }
+
+    const resource = await this.readPendingConnectionDocument(token);
+    if (!resource || !resource.used) {
+      return null;
+    }
+
+    if (resource.confirmationCode && resource.confirmationCode !== confirm) {
+      await this.getContainer()
+        .item("confirm", confirmationPartitionKey(resource.confirmationCode))
+        .delete()
+        .catch(() => {});
+    }
+
+    const updated: PendingConnectionDocument = {
+      ...resource,
+      connectToken: token,
+      code: token,
+      confirmationCode: confirm,
+      used: true,
+    };
+
+    await this.getContainer().items.upsert(updated);
+
+    const indexDoc: ConfirmationCodeIndexDocument = {
+      pk: confirmationPartitionKey(confirm),
+      id: "confirm",
+      type: "confirmationCodeIndex",
+      confirmationCode: confirm,
+      connectToken: token,
+      connectionId: resource.connectionId,
+      expiresAt: resource.expiresAt,
+      ttl:
+        resource.expiresAt >= Number.MAX_SAFE_INTEGER / 2
+          ? PENDING_CONNECTION_NO_COSMOS_TTL
+          : Math.max(60, Math.ceil((resource.expiresAt - Date.now()) / 1000)),
+    };
+
+    await this.getContainer().items.upsert(indexDoc);
+    return this.pendingRecordFromDocument(updated);
+  }
+
+  async consumeConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
+    const pending = await this.getConnectionByConfirmationCode(confirmationCode);
     if (!pending) return null;
 
+    if (pending.confirmationCode) {
+      await this.getContainer()
+        .item("confirm", confirmationPartitionKey(pending.confirmationCode))
+        .delete()
+        .catch(() => {});
+    }
+
     await this.getContainer()
-      .item("pending", pendingPartitionKey(pending.code))
+      .item("pending", pendingPartitionKey(pending.connectToken))
       .delete()
       .catch(() => {});
 
     return pending;
+  }
+
+  async consumePendingConnection(
+    code: string
+  ): Promise<PendingConnectionRecord | null> {
+    return this.consumeConfirmationCode(code);
   }
 
   async bindSessionToConnection(

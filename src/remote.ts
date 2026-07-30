@@ -62,6 +62,7 @@ import {
 import {
   completeConnectionCode,
   getPendingConnection,
+  issueConfirmationCodeForConnectToken,
 } from "./auth/connection_code.js";
 import {
   ensureConnectionStoreInitialized,
@@ -678,8 +679,20 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         }
       }
 
+      const issued = await issueConfirmationCodeForConnectToken(code);
+      if (!issued) {
+        res
+          .status(400)
+          .send(
+            renderConnectionFailedPage(
+              "Your companies were connected, but Red could not create a confirmation code. Return to chat and ask Red to start a fresh company connection."
+            )
+          );
+        return;
+      }
+
       const { path: successPath } = await createConnectionSuccessPage({
-        confirmationCode: code,
+        confirmationCode: issued.confirmationCode,
         connectedNames: outcome.connectedCompanies,
         failedCompanies: outcome.failedCompanies,
       });

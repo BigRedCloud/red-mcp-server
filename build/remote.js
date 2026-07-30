@@ -14,7 +14,7 @@ import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSession
 import { buildTelemetryClientIdSetCookie, isValidTelemetryUuid, runWithRedTelemetryContext, } from "./telemetry.js";
 import { activatePreparedTelemetry, buildConnectTelemetryFlowDiagnostics, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, logConnectTelemetryFlowDiagnostics, logTelemetryClientIdPathDiagnostics, prepareMcpTelemetryContext, resolveAndPersistConnectTelemetryClientId, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { clearSessionPlatform, extractMcpInitializeClientInfo, getStoredSessionPlatform, logPlatformDetectionDiagnostics, resolveClientPlatform, storeSessionPlatform, toPlatformDetectionDiagnostics, } from "./telemetry/platform.js";
-import { completeConnectionCode, getPendingConnection, } from "./auth/connection_code.js";
+import { completeConnectionCode, getPendingConnection, issueConfirmationCodeForConnectToken, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, getConnectionStoreTargetName, getDeploymentEnvironmentLabel, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 import { applyConnectionSuccessPageHeaders, renderConnectPage, renderConnectionFailedPage, renderExpiredLinkPage, renderSuccessPage, } from "./auth/connection_page.js";
@@ -417,8 +417,15 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
                     await reloadSessionCredentialsFromConnectionStore(sessionId, pending.connectionId);
                 }
             }
+            const issued = await issueConfirmationCodeForConnectToken(code);
+            if (!issued) {
+                res
+                    .status(400)
+                    .send(renderConnectionFailedPage("Your companies were connected, but Red could not create a confirmation code. Return to chat and ask Red to start a fresh company connection."));
+                return;
+            }
             const { path: successPath } = await createConnectionSuccessPage({
-                confirmationCode: code,
+                confirmationCode: issued.confirmationCode,
                 connectedNames: outcome.connectedCompanies,
                 failedCompanies: outcome.failedCompanies,
             });
