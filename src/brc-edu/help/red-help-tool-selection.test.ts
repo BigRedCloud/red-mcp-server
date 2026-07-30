@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   getBrcMcpServerInstructions,
-  RED_HELP_ROUTING_OVERRIDE,
 } from "../../config/mcp_config.js";
 import { registerAllTools } from "../../register_all_tools.js";
 import { buildUnifiedFindHelpResourcesResponse } from "./unified-help-search.js";
@@ -113,23 +112,33 @@ test("brc_find_help_resources remains registered as compatibility alias", () => 
   assert.match(tool.description, /backward compatibility/i);
 });
 
-test("MCP server instructions begin with RED-HELP ROUTING OVERRIDE", () => {
-  assert.ok(instructions.startsWith(RED_HELP_ROUTING_OVERRIDE));
-  assert.match(instructions, /immediately call brc_red_help/i);
+test("MCP server instructions begin with request routing override", () => {
+  assert.ok(instructions.startsWith("MANDATORY ROUTING:"));
+  assert.match(instructions, /REQUEST ROUTING \(mandatory\)/i);
+  assert.match(instructions, /RED-HELP SHORTCUT/i);
+  assert.match(instructions, /brc_route_request/i);
+  assert.match(instructions, /brc_red_help/i);
+  assert.match(instructions, /routeToken/i);
   assert.match(
     instructions,
-    /Do not search for or call transactional accounting tools first/i,
+    /Do not let add\/create\/post\/update force action mode/i,
   );
   assert.match(
     instructions,
-    /MCP clients select the initial tool from metadata/i,
+    /classifiers alone cannot force tool selection|MCP clients select/i,
   );
 });
 
-test("ensureRedHelpQueryForUnifiedSearch forces help mode for cleaned queries", () => {
+test("ensureRedHelpQueryForUnifiedSearch forces help mode for cleaned non-how-to queries", () => {
+  // Cleaned text after red-help (no how-to phrase) must still enter help mode.
+  assert.equal(
+    ensureRedHelpQueryForUnifiedSearch("add a customer manually"),
+    "red-help add a customer manually",
+  );
+  // How-to wording is already help mode — no red-help prefix required.
   assert.equal(
     ensureRedHelpQueryForUnifiedSearch("how do I add a sales invoice"),
-    "red-help how do I add a sales invoice",
+    "how do I add a sales invoice",
   );
   assert.equal(
     ensureRedHelpQueryForUnifiedSearch("red-help how do I add a customer"),

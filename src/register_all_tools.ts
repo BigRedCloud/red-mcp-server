@@ -24,6 +24,7 @@ import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { registerHelpResourcesTools } from "./tools/edu/help_resources_tools.js";
 import { registerEduAdminTools } from "./tools/edu/edu_admin_tools.js";
+import { registerRouteRequestTools } from "./tools/routing/route_request_tools.js";
 import { wrapHttpSessionAwareToolHandler } from "./auth/mcp_http_session.js";
 import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
@@ -35,6 +36,12 @@ import {
   requiresWriteConfirmation,
   wrapWriteToolHandler,
 } from "./guards/write_confirmation.js";
+import {
+  appendRouteTokenDescription,
+  requiresRouteToken,
+  routeTokenSchema,
+  wrapRouteTokenHandler,
+} from "./routing/route-token.js";
 
 export function withConnectionRefSchema(
   schema: Record<string, unknown>
@@ -53,6 +60,7 @@ export function withConnectionRefSchema(
 export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_getting_started",
   "brc_get_deployment_policy",
+  "brc_route_request",
   "brc_red_help",
   "brc_find_help_resources",
   "brc_get_help_resource_details",
@@ -100,17 +108,33 @@ function createFilteredServer(server: McpServer): McpServer {
       ? schema
       : withConnectionRefSchema(schema);
 
+    const needsRouteToken = requiresRouteToken(toolName);
+    const schemaWithRouteToken = needsRouteToken
+      ? {
+          ...schemaWithConnectionRef,
+          routeToken: schema.routeToken ?? routeTokenSchema,
+        }
+      : schemaWithConnectionRef;
+
+    const descriptionWithRoute = needsRouteToken
+      ? appendRouteTokenDescription(description)
+      : description;
+
     if (!requiresWriteConfirmation(toolName)) {
+      const guardedHandler = needsRouteToken
+        ? wrapRouteTokenHandler(toolName, handler)
+        : handler;
+
       return originalTool(
         toolName,
-        description,
-        schemaWithConnectionRef,
-        wrapHttpSessionAwareToolHandler(handler, { toolName })
+        descriptionWithRoute,
+        schemaWithRouteToken,
+        wrapHttpSessionAwareToolHandler(guardedHandler, { toolName })
       );
     }
 
     const wrappedSchema = {
-      ...schemaWithConnectionRef,
+      ...schemaWithRouteToken,
       confirmWrite: schema.confirmWrite ?? confirmWriteSchema,
       ...(requiresCounterpartyConfirmation(toolName)
         ? {
@@ -120,18 +144,20 @@ function createFilteredServer(server: McpServer): McpServer {
         : {}),
     };
 
-    // connectionRef must be activated BEFORE write-confirmation preflight
-    // (Sales VAT / draft enrichment / credential lookup). If the write wrapper
-    // is outermost, Vibe-supplied connectionRef is ignored during preview and
-    // surfaces as "Vibe did not pass connectionRef".
+    // Order (outer → inner): HTTP session / connectionRef → routeToken guard →
+    // write confirmation. Route token fails before any company lookup or write.
     const writeWrappedHandler = wrapWriteToolHandler(toolName, handler);
-    const httpAwareHandler = wrapHttpSessionAwareToolHandler(writeWrappedHandler, {
+    const routeWrappedHandler = wrapRouteTokenHandler(
+      toolName,
+      writeWrappedHandler
+    );
+    const httpAwareHandler = wrapHttpSessionAwareToolHandler(routeWrappedHandler, {
       toolName,
     });
 
     return originalTool(
       toolName,
-      appendWriteConfirmationDescription(description, toolName),
+      appendWriteConfirmationDescription(descriptionWithRoute, toolName),
       wrappedSchema,
       httpAwareHandler
     );
@@ -158,6 +184,7 @@ export function registerAllTools(server: McpServer): void {
   registerBatchTools(filteredServer);
   registerSalesVatTools(filteredServer);
   registerDeploymentTools(filteredServer);
+  registerRouteRequestTools(filteredServer);
   registerHelpResourcesTools(filteredServer);
   registerEduAdminTools(filteredServer);
   registerAuditTools(filteredServer);

@@ -1,7 +1,16 @@
 /**
- * Reserved red-help command detection.
- * Only messages that begin with red-help / red-help: / red-help, / /red-help
- * enter manual-help mode. Ordinary "help me" / "how do I" wording stays normal mode.
+ * Manual-help intent detection for Red.
+ *
+ * Help mode covers:
+ * - reserved red-help / /red-help commands
+ * - how-to wording (how do I, show me how, what are the steps, …)
+ *
+ * Explicit action wording ("add a customer", "can you add a customer for me")
+ * stays outside help mode so Red can run transactional workflows.
+ *
+ * Classification is per-message and does not persist. MCP clients still select
+ * the initial tool from metadata and instructions — these helpers alone cannot
+ * force tool discovery.
  */
 
 export type HelpModeDetection = {
@@ -13,8 +22,8 @@ export type HelpModeToolPolicy = HelpModeDetection & {
   /** When true, create/update/delete/email/batch tools must not be auto-selected. */
   blockTransactionalTools: boolean;
   /**
-   * Connection tooling remains available in red-help mode only when the cleaned
-   * query is specifically about connecting companies.
+   * Connection tooling remains available in help mode only when the cleaned
+   * query is specifically about connecting companies (typically via red-help).
    */
   allowCompanyConnectionTool: boolean;
   preferredHelpTools: readonly string[];
@@ -28,6 +37,23 @@ export type HelpModeToolPolicy = HelpModeDetection & {
 const RED_HELP_COMMAND_PATTERN =
   /^\s*\/?red-help(?=\s*[:\-–—,]|\s+|$)\s*[:\-–—,]?\s*/i;
 
+/**
+ * Deterministic how-to / manual-instruction phrases.
+ * Checked before action verbs so "add"/"create" inside a how-to stay help mode.
+ */
+const HOW_TO_HELP_PATTERNS: RegExp[] = [
+  /\bhow\s+do\s+i\b/i,
+  /\bhow\s+can\s+i\b/i,
+  /\bhow\s+to\b/i,
+  /\bshow\s+me\s+how\b/i,
+  /\btell\s+me\s+how\b/i,
+  /\bwhere\s+do\s+i\b/i,
+  /\bwhat\s+are\s+the\s+steps(?:\s+to)?\b/i,
+  /\bmanual\s+steps\s+for\b/i,
+  /\bcan\s+you\s+show\s+me\s+how\b/i,
+  /\bcould\s+you\s+show\s+me\s+how\b/i,
+];
+
 const COMPANY_CONNECTION_QUERY_PATTERN =
   /\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?|connection\s+link|secure\s+(?:red\s+)?connection)\b.{0,40}\bcompan(?:y|ies)\b|\bcompan(?:y|ies)\b.{0,40}\b(?:connect(?:ing|ed)?|reconnect(?:ing|ed)?)\b/i;
 
@@ -39,11 +65,8 @@ export const HELP_MODE_PREFERRED_TOOLS = [
 
 export const RED_HELP_COMMAND = "red-help";
 
-/**
- * Detect whether a user message begins with the reserved red-help command and
- * strip that command from the searchable query.
- */
-export function detectHelpMode(userMessage: string): HelpModeDetection {
+/** Detect and strip a leading reserved red-help command. */
+export function detectRedHelpCommand(userMessage: string): HelpModeDetection {
   const original = typeof userMessage === "string" ? userMessage : "";
   const trimmedStart = original.replace(/^\s+/, "");
 
@@ -66,14 +89,54 @@ export function detectHelpMode(userMessage: string): HelpModeDetection {
   };
 }
 
-/** True when a red-help cleaned query is specifically about connecting companies. */
+/** True when the message contains deterministic how-to / manual-help wording. */
+export function isHowToHelpPhrase(userMessage: string): boolean {
+  const text = typeof userMessage === "string" ? userMessage.trim() : "";
+  if (!text) {
+    return false;
+  }
+  return HOW_TO_HELP_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/**
+ * Detect whether a user message is a manual-help request (red-help or how-to)
+ * and return a cleaned search query.
+ */
+export function detectHelpMode(userMessage: string): HelpModeDetection {
+  const original = typeof userMessage === "string" ? userMessage : "";
+  const trimmedStart = original.replace(/^\s+/, "").trim();
+
+  if (!trimmedStart) {
+    return { isHelpMode: false, cleanedQuery: "" };
+  }
+
+  const redHelp = detectRedHelpCommand(trimmedStart);
+  if (redHelp.isHelpMode) {
+    return redHelp;
+  }
+
+  if (isHowToHelpPhrase(trimmedStart)) {
+    return {
+      isHelpMode: true,
+      cleanedQuery: trimmedStart,
+    };
+  }
+
+  return {
+    isHelpMode: false,
+    cleanedQuery: trimmedStart,
+  };
+}
+
+/** True when a help cleaned query is specifically about connecting companies. */
 export function isRedHelpCompanyConnectionQuery(cleanedQuery: string): boolean {
   return COMPANY_CONNECTION_QUERY_PATTERN.test(cleanedQuery.trim());
 }
 
 /**
  * Query to pass into help search / details. Uses the cleaned red-help query
- * when the reserved command was present; otherwise the trimmed original message.
+ * when the reserved command was present; otherwise the trimmed original message
+ * (including how-to wording).
  */
 export function resolveHelpSearchQuery(userMessage: string): {
   isHelpMode: boolean;
@@ -97,7 +160,7 @@ export function resolveHelpSearchQuery(userMessage: string): {
 }
 
 /**
- * Tool-selection policy for red-help messages.
+ * Tool-selection policy for help-mode messages.
  * Callers (and MCP instructions) must not auto-invoke transactional tools.
  */
 export function resolveHelpModeToolPolicy(
@@ -117,4 +180,4 @@ export function resolveHelpModeToolPolicy(
 }
 
 export const HELP_MODE_INSTRUCTION_SUMMARY =
-  "red-help is Red's reserved manual-help command. When a user begins a message with red-help, provide customer-help resources and manual instructions instead of performing the accounting action. Call brc_red_help with the text after red-help as query (preferred), or brc_find_help_resources for compatibility, then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer. Use brc_start_company_connection only when the cleaned red-help query is specifically about connecting companies. MCP clients remain responsible for selecting the initial tool — detectHelpMode alone cannot force tool selection.";
+  "Manual help mode: when the user uses how-to wording (how do I, show me how, tell me how, where do I, what are the steps, manual steps for) or the reserved red-help command, provide customer-help resources and manual instructions instead of performing the accounting action. Prefer brc_route_request to classify, or call brc_red_help / brc_find_help_resources, then brc_get_help_resource_details for the best Freshdesk match. Do not ask for customer details first. Do not call create, update, delete, email, or batch tools unless the user later explicitly asks Red to perform the action. Put manual guidance and Sources before any optional Do this through Red offer. Explicit action wording such as add a customer or can you add a customer for me remains action mode. MCP clients remain responsible for selecting the initial tool — detectHelpMode alone cannot force tool selection.";

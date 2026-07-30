@@ -53,6 +53,29 @@ test("register_all_tools includes brc_red_help", () => {
     assert.ok(registeredTools.has("brc_red_help"));
     assert.equal(isToolEnabled("brc_red_help"), true);
 });
+test("register_all_tools includes brc_route_request", () => {
+    assert.ok(registeredTools.has("brc_route_request"));
+    assert.equal(isToolEnabled("brc_route_request"), true);
+    assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_route_request"));
+    const tool = registeredTools.get("brc_route_request");
+    assert.ok(tool);
+    assert.match(tool.description, /how do I/i);
+    assert.match(tool.description, /add a customer/i);
+    assert.match(tool.description, /routeToken/i);
+    assert.ok(tool.schema.message);
+    assert.equal(tool.schema.connectionRef, undefined);
+});
+test("transactional tools require routeToken in registered schema", () => {
+    const createCustomer = registeredTools.get("brc_create_customer");
+    assert.ok(createCustomer?.schema?.routeToken);
+    assert.match(createCustomer.description, /routeToken/i);
+    const createInvoice = registeredTools.get("brc_create_sales_invoice");
+    assert.ok(createInvoice?.schema?.routeToken);
+    const help = registeredTools.get("brc_red_help");
+    assert.equal(help?.schema?.routeToken, undefined);
+    const connect = registeredTools.get("brc_start_company_connection");
+    assert.equal(connect?.schema?.routeToken, undefined);
+});
 test("brc_red_help does not require company credentials", () => {
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_red_help"));
     const tool = registeredTools.get("brc_red_help");

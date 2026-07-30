@@ -42,13 +42,16 @@ test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () =
 });
 test("MCP server instructions define red-help mode and block auto transactional actions", () => {
     const instructions = getBrcMcpServerInstructions(50, false);
-    assert.ok(instructions.startsWith("RED-HELP ROUTING OVERRIDE: If the user's message begins with red-help or /red-help"));
-    assert.match(instructions, /immediately call brc_red_help/i);
-    assert.match(instructions, /Help mode \(mandatory\)/i);
-    assert.match(instructions, /red-help is Red's reserved manual-help command/i);
-    assert.match(instructions, /provide customer-help resources and manual instructions instead of performing the accounting action/i);
-    assert.match(instructions, /Do not call create, update, delete, email, or batch tools unless the user later explicitly asks/i);
+    assert.ok(instructions.startsWith("MANDATORY ROUTING:"));
+    assert.match(instructions, /valid routeToken returned by the router/i);
+    assert.match(instructions, /routeToken does not replace preview-before-posting/i);
+    assert.match(instructions, /REQUEST ROUTING \(mandatory\)/i);
+    assert.match(instructions, /brc_route_request/i);
+    assert.match(instructions, /Two behaviours \(mandatory\)/i);
+    assert.match(instructions, /how do I/i);
+    assert.match(instructions, /Do not let add\/create\/post\/update force action mode/i);
+    assert.match(instructions, /Help mode does not persist into the next/i);
+    assert.match(instructions, /RED-HELP SHORTCUT/i);
     assert.match(instructions, /red-help how do I add a customer/i);
-    assert.match(instructions, /Ordinary phrases such as "help me", "how do I"/i);
-    assert.match(instructions, /detectHelpMode alone cannot force tool selection/i);
+    assert.match(instructions, /classifiers alone cannot force tool selection/i);
 });

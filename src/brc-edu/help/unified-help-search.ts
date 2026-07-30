@@ -710,8 +710,8 @@ export function buildUnifiedFindHelpResourcesResponse(
           ? HELP_MODE_INSTRUCTION_SUMMARY
           : "Answer the customer's how-to question from returned help resources.",
         helpModeResolution.isHelpMode
-          ? "red-help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action. Use brc_start_company_connection only when the cleaned query is specifically about connecting companies."
-          : "When the customer asked Red to perform an action (not red-help mode), use the appropriate operational tools after any required confirmation.",
+          ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action. Use brc_start_company_connection only when the cleaned query is specifically about connecting companies."
+          : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
         "Provide a concise synthesized direct answer first.",
         "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
         emptyUpcomingWebinarResult

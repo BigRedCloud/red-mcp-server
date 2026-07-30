@@ -35,8 +35,11 @@ export function simulateRedHelpToolSelection(
   }
 
   const hasRoutingOverride =
-    /RED-HELP ROUTING OVERRIDE/i.test(instructions) &&
-    /\bbrc_red_help\b/.test(instructions);
+    (/REQUEST ROUTING|RED-HELP SHORTCUT|RED-HELP ROUTING OVERRIDE/i.test(
+      instructions,
+    ) &&
+      /\bbrc_red_help\b/.test(instructions)) ||
+    /\bbrc_route_request\b/.test(instructions);
 
   const redHelp = tools.find((tool) => tool.name === "brc_red_help");
   if (
