@@ -20,7 +20,9 @@ function runConfigProbe(env: NodeJS.ProcessEnv): Record<string, unknown> {
       updateToolGroup: mod.getToolSkillGroup("brc_create_customer"),
       batchToolGroup: mod.getToolSkillGroup("brc_batch_bank_accounts"),
       blacklisted: mod.isApiKeyBlacklisted("blocked-api-key"),
-      publicBaseUrl: mod.getPublicBaseUrl()
+      publicBaseUrl: mod.getPublicBaseUrl(),
+      connectPath: mod.getPublicBaseUrl() + "/connect",
+      connectDiagnostics: mod.getConnectPublicBaseUrlDiagnostics()
     };
 
     console.log(JSON.stringify(result));
@@ -142,4 +144,56 @@ test("production keeps configured BRC_PUBLIC_BASE_URL", () => {
   });
 
   assert.equal(result.publicBaseUrl, "https://red.bigredcloud.com");
+});
+
+test("staging slot with matching connect/public/base hostname resolves staging /connect", () => {
+  const result = runConfigProbe({
+    BRC_DEPLOYMENT_ENV: "staging",
+    BRC_CONNECT_PUBLIC_BASE_URL:
+      "https://brc-live-mcp-app-staging.azurewebsites.net",
+    BRC_PUBLIC_BASE_URL: "https://brc-live-mcp-app-staging.azurewebsites.net",
+    WEBSITE_HOSTNAME: "brc-live-mcp-app-staging.azurewebsites.net",
+    WEBSITE_SLOT_NAME: "",
+  });
+
+  assert.equal(
+    result.publicBaseUrl,
+    "https://brc-live-mcp-app-staging.azurewebsites.net"
+  );
+  assert.equal(
+    result.connectPath,
+    "https://brc-live-mcp-app-staging.azurewebsites.net/connect"
+  );
+
+  const diagnostics = result.connectDiagnostics as {
+    resolvedHost: string;
+    source: string;
+    connectOverridePresent: boolean;
+  };
+  assert.equal(
+    diagnostics.resolvedHost,
+    "brc-live-mcp-app-staging.azurewebsites.net"
+  );
+  assert.equal(diagnostics.source, "BRC_CONNECT_PUBLIC_BASE_URL");
+  assert.equal(diagnostics.connectOverridePresent, true);
+});
+
+test("connect URL diagnostics report host and source without secrets", () => {
+  const result = runConfigProbe({
+    BRC_DEPLOYMENT_ENV: "staging",
+    BRC_CONNECT_PUBLIC_BASE_URL:
+      "https://brc-live-mcp-app-staging.azurewebsites.net",
+    BRC_PUBLIC_BASE_URL: "https://brc-live-mcp-app-staging.azurewebsites.net",
+    WEBSITE_HOSTNAME: "brc-live-mcp-app-staging.azurewebsites.net",
+    RED_CONNECT_COSMOS_CONNECTION_STRING: "AccountKey=super-secret;",
+    RED_CONNECT_ENCRYPTION_KEY: "must-not-appear",
+  });
+
+  const blob = JSON.stringify(result.connectDiagnostics);
+  assert.equal(blob.includes("AccountKey"), false);
+  assert.equal(blob.includes("super-secret"), false);
+  assert.equal(blob.includes("must-not-appear"), false);
+  assert.equal(blob.includes("https://"), false);
+  assert.match(blob, /brc-live-mcp-app-staging\.azurewebsites\.net/);
+  assert.match(blob, /BRC_CONNECT_PUBLIC_BASE_URL/);
 });

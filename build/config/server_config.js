@@ -57,36 +57,65 @@ export const redServerConfig = {
 export function getApiKeyExpirationMs() {
     return redServerConfig.apiKeyTtlMinutes * 60 * 1000;
 }
-/**
- * Public base URL for the Red connection page.
- * Must match the MCP server instance (and connection store) the client is using.
- *
- * Resolution order:
- * 1. BRC_CONNECT_PUBLIC_BASE_URL — explicit connect-page override
- * 2. Non-production Azure slot / staging → https://WEBSITE_HOSTNAME
- *    (prevents staging MCP from sending users to production /connect)
- * 3. BRC_PUBLIC_BASE_URL — production / general hosted URL
- * 4. WEBSITE_HOSTNAME when present
- * 5. localhost for local dev
- */
-export function getPublicBaseUrl() {
-    const connectOverride = process.env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
+function resolvePublicBaseUrl(env = process.env) {
+    const connectOverride = env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
     if (connectOverride) {
-        return connectOverride.replace(/\/$/, "");
+        return {
+            baseUrl: connectOverride.replace(/\/$/, ""),
+            source: "BRC_CONNECT_PUBLIC_BASE_URL",
+        };
     }
-    const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase();
-    if (isNonProductionHostedSlot() && websiteHostname) {
-        return `https://${websiteHostname}`;
+    const websiteHostname = env.WEBSITE_HOSTNAME?.trim().toLowerCase();
+    if (isNonProductionHostedSlot(env) && websiteHostname) {
+        return {
+            baseUrl: `https://${websiteHostname}`,
+            source: "WEBSITE_HOSTNAME_NON_PRODUCTION_SLOT",
+        };
     }
-    const fromEnv = process.env.BRC_PUBLIC_BASE_URL?.trim();
+    const fromEnv = env.BRC_PUBLIC_BASE_URL?.trim();
     if (fromEnv) {
-        return fromEnv.replace(/\/$/, "");
+        return {
+            baseUrl: fromEnv.replace(/\/$/, ""),
+            source: "BRC_PUBLIC_BASE_URL",
+        };
     }
     if (websiteHostname) {
-        return `https://${websiteHostname}`;
+        return {
+            baseUrl: `https://${websiteHostname}`,
+            source: "WEBSITE_HOSTNAME",
+        };
     }
-    const port = process.env.PORT ?? "3000";
-    return `http://localhost:${port}`;
+    const port = env.PORT ?? "3000";
+    return {
+        baseUrl: `http://localhost:${port}`,
+        source: "localhost",
+    };
+}
+export function getPublicBaseUrl() {
+    return resolvePublicBaseUrl().baseUrl;
+}
+/**
+ * Safe connect-URL diagnostics for operators — hostname and which setting won only.
+ * Never includes full URLs with tokens, API keys, connection strings, or Cosmos ids.
+ */
+export function getConnectPublicBaseUrlDiagnostics(env = process.env) {
+    const { baseUrl, source } = resolvePublicBaseUrl(env);
+    let resolvedHost = "";
+    try {
+        resolvedHost = new URL(baseUrl).hostname.toLowerCase();
+    }
+    catch {
+        resolvedHost = "";
+    }
+    return {
+        resolvedHost,
+        source,
+        connectOverridePresent: Boolean(env.BRC_CONNECT_PUBLIC_BASE_URL?.trim()),
+        publicBaseUrlPresent: Boolean(env.BRC_PUBLIC_BASE_URL?.trim()),
+        websiteHostnamePresent: Boolean(env.WEBSITE_HOSTNAME?.trim()),
+        deploymentEnvPresent: Boolean(env.BRC_DEPLOYMENT_ENV?.trim()),
+        nonProductionSlot: isNonProductionHostedSlot(env),
+    };
 }
 /**
  * True when this process is a non-production Azure slot or staging deployment.
@@ -117,14 +146,8 @@ export function getConnectUrlHostMismatch() {
             configuredHost = "";
         }
     }
-    const resolved = getPublicBaseUrl();
-    let resolvedHost = "";
-    try {
-        resolvedHost = new URL(resolved).hostname.toLowerCase();
-    }
-    catch {
-        resolvedHost = "";
-    }
+    const diagnostics = getConnectPublicBaseUrlDiagnostics();
+    const resolvedHost = diagnostics.resolvedHost;
     const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
     const usingSlotHostname = Boolean(websiteHostname) && resolvedHost === websiteHostname;
     return {
@@ -132,6 +155,8 @@ export function getConnectUrlHostMismatch() {
         resolvedConnectHostPresent: Boolean(resolvedHost),
         hostsMatch: Boolean(configuredHost && resolvedHost && configuredHost === resolvedHost),
         usingSlotHostname,
+        resolvedHost,
+        source: diagnostics.source,
     };
 }
 export function getMaxBatchItems() {

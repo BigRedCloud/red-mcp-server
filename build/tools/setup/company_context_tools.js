@@ -2,7 +2,7 @@ import { z } from "zod";
 import { buildConfirmConnectionCustomerMessage, buildConnectionPresentationInstructions, buildConnectionExpiryMetadata, buildListCompanyContextsCustomerMessage, buildListCompanyContextsExpiryFields, } from "../../auth/connection_presentation.js";
 import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
 import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
-import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, getConnectUrlHostMismatch, } from "../../config/server_config.js";
+import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, getConnectUrlHostMismatch, getConnectPublicBaseUrlDiagnostics, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, getConnectionStoreTargetName, getDeploymentEnvironmentLabel, enterMcpSessionContext, } from "../../auth/connection_store.js";
 import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
@@ -22,8 +22,16 @@ export function registerCompanyContextTools(server) {
         const url = `${getPublicBaseUrl()}/connect?code=${encodeURIComponent(code)}`;
         try {
             const hostMismatch = getConnectUrlHostMismatch();
+            const urlDiagnostics = getConnectPublicBaseUrlDiagnostics();
             console.info("Red connect URL host check:", JSON.stringify({
                 ...hostMismatch,
+                resolvedHost: urlDiagnostics.resolvedHost,
+                source: urlDiagnostics.source,
+                connectOverridePresent: urlDiagnostics.connectOverridePresent,
+                publicBaseUrlPresent: urlDiagnostics.publicBaseUrlPresent,
+                websiteHostnamePresent: urlDiagnostics.websiteHostnamePresent,
+                deploymentEnvPresent: urlDiagnostics.deploymentEnvPresent,
+                nonProductionSlot: urlDiagnostics.nonProductionSlot,
                 targetEnvironment: getDeploymentEnvironmentLabel(),
                 targetStoreName: getConnectionStoreTargetName(),
             }));
