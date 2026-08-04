@@ -4,6 +4,15 @@ import {
   createConfiguredFreshdeskIndexContainer,
   loadFreshdeskArticlesIndex,
 } from "./freshdesk-index-store.js";
+import {
+  createConfiguredFreshdeskCatalogContainer,
+  loadFreshdeskEffectiveCatalog,
+  loadFreshdeskOverrides,
+} from "./freshdesk-catalog-store.js";
+import {
+  mergeFreshdeskCatalogWithOverrides,
+  visibleFreshdeskArticlesFromEffective,
+} from "./freshdesk-catalog-merge.js";
 
 import type { SyncedFreshdeskArticle } from "./freshdesk-sync-service.js";
 import { getSyncedFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
@@ -32,6 +41,10 @@ type FreshdeskHelpIndexCache =
 let freshdeskHelpIndexCache: FreshdeskHelpIndexCache | null = null;
 
 export function resetFreshdeskHelpIndexCacheForTests(): void {
+  freshdeskHelpIndexCache = null;
+}
+
+export function invalidateFreshdeskHelpIndexCache(): void {
   freshdeskHelpIndexCache = null;
 }
 
@@ -67,8 +80,18 @@ export type LoadFreshdeskArticlesForHelpSearchOptions = {
   ) => Promise<
     Awaited<ReturnType<typeof loadFreshdeskArticlesIndex>>
   >;
+  loadEffective?: (
+    container: ContainerClient,
+  ) => Promise<
+    Awaited<ReturnType<typeof loadFreshdeskEffectiveCatalog>>
+  >;
 };
 
+/**
+ * Loads visible Freshdesk articles for Red customer help search.
+ * Prefers effective-article-catalog.json; falls back to raw index + overrides
+ * for migration when the effective catalogue has not been built yet.
+ */
 export async function loadFreshdeskArticlesForHelpSearch(
   options: LoadFreshdeskArticlesForHelpSearchOptions = {},
 ): Promise<SyncedFreshdeskArticle[] | null> {
@@ -86,7 +109,8 @@ export async function loadFreshdeskArticlesForHelpSearch(
   try {
     const container =
       options.container === undefined
-        ? createConfiguredFreshdeskIndexContainer()
+        ? createConfiguredFreshdeskCatalogContainer() ??
+          createConfiguredFreshdeskIndexContainer()
         : options.container;
 
     if (!container) {
@@ -96,6 +120,26 @@ export async function loadFreshdeskArticlesForHelpSearch(
         expiresAt: now + ttlMs,
       };
       return null;
+    }
+
+    const loadEffective =
+      options.loadEffective ?? loadFreshdeskEffectiveCatalog;
+
+    let effective: Awaited<ReturnType<typeof loadFreshdeskEffectiveCatalog>> =
+      null;
+    try {
+      effective = await loadEffective(container);
+    } catch {
+      effective = null;
+    }
+
+    if (effective && effective.items.length > 0) {
+      const visible = visibleFreshdeskArticlesFromEffective(effective);
+      freshdeskHelpIndexCache = {
+        articles: visible,
+        expiresAt: now + ttlMs,
+      };
+      return visible;
     }
 
     const loadIndex = options.loadIndex ?? loadFreshdeskArticlesIndex;
@@ -110,12 +154,30 @@ export async function loadFreshdeskArticlesForHelpSearch(
       return null;
     }
 
-    freshdeskHelpIndexCache = {
+    let overridesLoad: Awaited<ReturnType<typeof loadFreshdeskOverrides>>;
+    try {
+      overridesLoad = await loadFreshdeskOverrides(container);
+    } catch {
+      overridesLoad = {
+        document: { updatedAt: new Date().toISOString(), overrides: {} },
+        etag: "",
+      };
+    }
+
+    const merged = mergeFreshdeskCatalogWithOverrides({
       articles: index.articles,
+      overrides: overridesLoad.document.overrides,
+      generatedAt: index.generatedAt,
+      lastSyncedAt: index.generatedAt,
+    });
+    const visible = visibleFreshdeskArticlesFromEffective(merged);
+
+    freshdeskHelpIndexCache = {
+      articles: visible,
       expiresAt: now + ttlMs,
     };
 
-    return index.articles;
+    return visible;
   } catch {
     logFreshdeskIndexUnavailable("load_failed");
     freshdeskHelpIndexCache = {

@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  findFreshdeskArticleById,
   getHelpResourceDetails,
   helpResourceDetailResponse,
 } from "./help-resource-details.js";
 import type { SyncedFreshdeskArticle } from "../freshdesk/freshdesk-sync-service.js";
+import {
+  DEFAULT_BRC_FRESHDESK_EFFECTIVE_CATALOG_BLOB,
+  DEFAULT_BRC_FRESHDESK_OVERRIDES_BLOB,
+  freshdeskArticleIdsMatch,
+} from "../freshdesk/freshdesk-catalog-types.js";
+import { FRESHDESK_ARTICLES_INDEX_BLOB_PATH } from "../freshdesk/freshdesk-index-store.js";
 
 function freshdeskArticle(): SyncedFreshdeskArticle {
   return {
@@ -1042,4 +1049,239 @@ test("explicit image contentBlocks still preserve step placement", async () => {
     );
     assert.ok(result.payload.customerFacingSourcesMarkdown);
   }
+});
+
+function mockBlobContainer(blobs: Record<string, unknown>) {
+  return {
+    getBlockBlobClient(blobPath: string) {
+      return {
+        async exists() {
+          return Object.prototype.hasOwnProperty.call(blobs, blobPath);
+        },
+        async getProperties() {
+          return { etag: `"etag-${blobPath}"` };
+        },
+        async download() {
+          const value = blobs[blobPath];
+          if (value === undefined) {
+            throw new Error(`Missing blob: ${blobPath}`);
+          }
+          return {
+            readableStreamBody: (async function* () {
+              yield Buffer.from(JSON.stringify(value), "utf8");
+            })(),
+          };
+        },
+      };
+    },
+  };
+}
+
+test("visible article from effective catalogue returns instructionBlocks and syncedImages", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const article = freshdeskArticle();
+  article.contentBlocks = [
+    {
+      type: "text",
+      text: "Click Customers, then click Add.",
+      sectionHeading: "Add Customer",
+    },
+    {
+      type: "image",
+      imageIndex: 0,
+      sourceUrl: "https://cdn.freshdesk.com/a.png",
+      sectionHeading: "Add Customer",
+    },
+  ];
+
+  const container = mockBlobContainer({
+    [DEFAULT_BRC_FRESHDESK_EFFECTIVE_CATALOG_BLOB]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      itemCount: 1,
+      visibleCount: 1,
+      excludedCount: 0,
+      items: [
+        {
+          ...article,
+          articleId: "1001",
+          topic: "cash_book",
+          topicLabel: "Cash Book",
+          excluded: false,
+          lastSyncedAt: "2026-07-20T00:00:00.000Z",
+          // Intentionally omit rich fields from effective item to prove
+          // details are loaded from the raw catalogue.
+          contentBlocks: undefined,
+          syncedImages: [],
+        },
+      ],
+    },
+    [FRESHDESK_ARTICLES_INDEX_BLOB_PATH]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      articleCount: 1,
+      failureCount: 0,
+      articles: [article],
+      failures: [],
+    },
+  });
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: container as never,
+    freshdeskImageContainer: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.ok(result.payload.instructionBlocks);
+    assert.equal(result.payload.instructionBlocks?.[0]?.type, "text");
+    assert.equal(result.payload.instructionBlocks?.[1]?.type, "screenshot");
+    assert.equal(result.payload.imageAvailable, true);
+    assert.equal(result.payload.screenshotUrls?.length, 1);
+  }
+});
+
+test("excluded Freshdesk article is not returned for help details", async () => {
+  const article = freshdeskArticle();
+  const container = mockBlobContainer({
+    [DEFAULT_BRC_FRESHDESK_EFFECTIVE_CATALOG_BLOB]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      itemCount: 1,
+      visibleCount: 0,
+      excludedCount: 1,
+      items: [
+        {
+          ...article,
+          articleId: "1001",
+          topic: "cash_book",
+          topicLabel: "Cash Book",
+          excluded: true,
+          exclusionReason: "Staff only",
+          lastSyncedAt: "2026-07-20T00:00:00.000Z",
+        },
+      ],
+    },
+    [FRESHDESK_ARTICLES_INDEX_BLOB_PATH]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      articleCount: 1,
+      failureCount: 0,
+      articles: [article],
+      failures: [],
+    },
+  });
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: container as never,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.error, /not found/i);
+  }
+});
+
+test("raw catalogue fallback returns rich fields when effective catalogue is missing", async () => {
+  process.env.BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET = "help-details-secret";
+  process.env.RED_PUBLIC_BASE_URL = "https://red.example.com";
+
+  const article = freshdeskArticle();
+  article.contentBlocks = [
+    {
+      type: "text",
+      text: "Click Customers, then click Add.",
+      workflow: "add_customer",
+      nearbyActions: ["Customers", "Add"],
+      sectionHeading: "Add Customer",
+    },
+    {
+      type: "image",
+      imageIndex: 0,
+      sourceUrl: "https://cdn.freshdesk.com/a.png",
+      altText: "image",
+      nearbyHeading: "Add Customer",
+      sectionHeading: "Add Customer",
+      workflow: "add_customer",
+      nearbyActions: ["Customers", "Add"],
+    },
+  ];
+
+  const container = mockBlobContainer({
+    [FRESHDESK_ARTICLES_INDEX_BLOB_PATH]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      articleCount: 1,
+      failureCount: 0,
+      articles: [article],
+      failures: [],
+    },
+  });
+
+  const found = await findFreshdeskArticleById("1001", container as never);
+  assert.ok(found);
+  assert.equal(found?.contentBlocks?.length, 2);
+  assert.equal(found?.syncedImages?.length, 1);
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: container as never,
+    freshdeskImageContainer: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.ok(result.payload.instructionBlocks);
+    assert.equal(result.payload.instructionBlocks?.[1]?.type, "screenshot");
+    assert.equal(result.payload.screenshotUrls?.length, 1);
+  }
+});
+
+test("raw catalogue fallback honours exclusion overrides", async () => {
+  const article = freshdeskArticle();
+  const container = mockBlobContainer({
+    [FRESHDESK_ARTICLES_INDEX_BLOB_PATH]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      articleCount: 1,
+      failureCount: 0,
+      articles: [article],
+      failures: [],
+    },
+    [DEFAULT_BRC_FRESHDESK_OVERRIDES_BLOB]: {
+      updatedAt: "2026-07-20T00:00:00.000Z",
+      overrides: {
+        "1001": {
+          excluded: true,
+          reason: "Hidden",
+          updatedAt: "2026-07-20T00:00:00.000Z",
+        },
+      },
+    },
+  });
+
+  const result = await getHelpResourceDetails("freshdesk:1001", {
+    freshdeskIndexContainer: container as never,
+  });
+
+  assert.equal(result.ok, false);
+});
+
+test("string and numeric Freshdesk article IDs match safely", async () => {
+  assert.equal(freshdeskArticleIdsMatch("1001", 1001), true);
+  assert.equal(freshdeskArticleIdsMatch(" 1001 ", "1001"), true);
+  assert.equal(freshdeskArticleIdsMatch("1001", "1002"), false);
+
+  const article = freshdeskArticle();
+  const container = mockBlobContainer({
+    [FRESHDESK_ARTICLES_INDEX_BLOB_PATH]: {
+      generatedAt: "2026-07-20T00:00:00.000Z",
+      articleCount: 1,
+      failureCount: 0,
+      articles: [article],
+      failures: [],
+    },
+  });
+
+  const found = await findFreshdeskArticleById("1001", container as never);
+  assert.equal(found?.freshdeskArticleId, 1001);
+  assert.equal(
+    await findFreshdeskArticleById("9999", container as never),
+    null,
+  );
 });

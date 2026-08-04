@@ -9,6 +9,7 @@ import {
   assessVibeConnectionHealth,
   buildMcpSessionDiagnostic,
 } from "./mcp_http_session.js";
+import { seedClaimableConnection } from "./connection_test_helpers.js";
 
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -150,27 +151,23 @@ test("valid connectionRef across rotated MCP sessions never falls back to global
   } = await loadModules();
 
   const store = getConnectionStore();
-  const code = uniqueId("code");
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
   const connectionId = uniqueId("connection");
   const confirmSession = uniqueId("session-confirm");
   const rotatedSession = uniqueId("session-rotated");
 
-  await store.createPendingConnection({
-    code,
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
     connectionId,
-    expiresAt: Date.now() + 60_000,
+    companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
   });
-  await store.completePendingConnection(code);
-  await store.saveConnectedCompanies(connectionId, [
-    {
-      companyName: "Company A",
-      apiKey: "test-api-key-a",
-      expiresAt: Date.now() + 60_000,
-      credentialValidatedAt: Date.now(),
-    },
-  ]);
 
-  const claim = await claimConnectionCodeForSession(code, confirmSession);
+  const claim = await claimConnectionCodeForSession(
+    confirmationCode,
+    confirmSession
+  );
 
   const foreignScope = await prepareHttpToolSessionScope(
     uniqueId("foreign-session"),
@@ -209,27 +206,20 @@ test("tool-level diagnostics log for session-bound tools without connectionRef",
   } = await loadModules();
 
   const store = getConnectionStore();
-  const code = uniqueId("code");
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
   const connectionId = uniqueId("connection");
   const sessionId = uniqueId("session-a");
   const keyStore = new Map();
 
-  await store.createPendingConnection({
-    code,
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
     connectionId,
-    expiresAt: Date.now() + 60_000,
+    companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
   });
-  await store.completePendingConnection(code);
-  await store.saveConnectedCompanies(connectionId, [
-    {
-      companyName: "Company A",
-      apiKey: "test-api-key-a",
-      expiresAt: Date.now() + 60_000,
-      credentialValidatedAt: Date.now(),
-    },
-  ]);
 
-  await claimConnectionCodeForSession(code, sessionId);
+  await claimConnectionCodeForSession(confirmationCode, sessionId);
 
   const logs: string[] = [];
   const originalInfo = console.info;

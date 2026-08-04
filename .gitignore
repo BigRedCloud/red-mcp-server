@@ -1,7 +1,39 @@
 node_modules/
-build/
-functions/
+
+functions/*
+!functions/brc-edu-resource-processor/
+!functions/brc-edu-resource-processor/**
+functions/brc-edu-resource-processor/node_modules/
+functions/brc-edu-resource-processor/local.settings.json
+
 logs/
 .env
 .env.*
 !.env.example
+
+# Local test output containing potentially sensitive data
+reports/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# Local TypeScript build metadata
+*.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+# Generated or internal BRC Edu data
+data/brc_edu_synced_resources.json
+data/dev_only_video_routing_index_updated.csv
+
+# Internal development scripts and outputs
+scripts/tests/dev-only/
+scripts/exports/*.xlsx

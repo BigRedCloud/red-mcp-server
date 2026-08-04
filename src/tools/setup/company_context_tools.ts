@@ -20,7 +20,6 @@ import {
   textResponse,
   ensureCredentialsForCurrentSession,
   resolveActiveMcpSessionId,
-  resolveHttpClientKey,
   getCurrentMcpSessionId,
   getCurrentConnectionId,
 } from "../../shared.js";
@@ -30,6 +29,7 @@ import {
   getApiKeyExpirationMs,
   getPublicBaseUrl,
   getConnectUrlHostMismatch,
+  getConnectPublicBaseUrlDiagnostics,
 } from "../../config/server_config.js";
 import {
   claimConnectionCodeForSession,
@@ -41,6 +41,13 @@ import {
   getDeploymentEnvironmentLabel,
   enterMcpSessionContext,
 } from "../../auth/connection_store.js";
+import {
+  resolveClientKeyDetailsForToolSession,
+  clientKeyForClaimInheritance,
+  registerSessionClientKey,
+  logConnectionClaimSaved,
+  type McpToolRequestExtra,
+} from "../../auth/mcp_http_session.js";
 import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import {
@@ -74,10 +81,18 @@ export function registerCompanyContextTools(server: ServerType) {
 
       try {
         const hostMismatch = getConnectUrlHostMismatch();
+        const urlDiagnostics = getConnectPublicBaseUrlDiagnostics();
         console.info(
           "Red connect URL host check:",
           JSON.stringify({
             ...hostMismatch,
+            resolvedHost: urlDiagnostics.resolvedHost,
+            source: urlDiagnostics.source,
+            connectOverridePresent: urlDiagnostics.connectOverridePresent,
+            publicBaseUrlPresent: urlDiagnostics.publicBaseUrlPresent,
+            websiteHostnamePresent: urlDiagnostics.websiteHostnamePresent,
+            deploymentEnvPresent: urlDiagnostics.deploymentEnvPresent,
+            nonProductionSlot: urlDiagnostics.nonProductionSlot,
             targetEnvironment: getDeploymentEnvironmentLabel(),
             targetStoreName: getConnectionStoreTargetName(),
           })
@@ -101,7 +116,7 @@ export function registerCompanyContextTools(server: ServerType) {
           "The connection code from the secure Red connection page success message."
         ),
     },
-    async ({ code }) => {
+    async ({ code }, extra?: McpToolRequestExtra) => {
       await ensureConnectionStoreInitialized();
 
       const sessionId = resolveActiveMcpSessionId();
@@ -116,8 +131,24 @@ export function registerCompanyContextTools(server: ServerType) {
       }
 
       try {
+        const clientKeyDetails = resolveClientKeyDetailsForToolSession(
+          sessionId,
+          extra
+        );
+        if (clientKeyDetails) {
+          registerSessionClientKey(sessionId, clientKeyDetails);
+        }
+        // Only durable-claim inherit-eligible keys (stable identity). IP-only
+        // keys rotate under Claude/Azure and must not seed cross-session inheritance.
+        const durableClaimKey = clientKeyForClaimInheritance(clientKeyDetails);
+
         const result = await claimConnectionCodeForSession(code, sessionId, {
-          clientKey: resolveHttpClientKey(),
+          clientKey: durableClaimKey,
+        });
+        logConnectionClaimSaved({
+          clientKey: durableClaimKey,
+          connectionPresent: Boolean(result.connectionId),
+          durableStoreWriteSucceeded: Boolean(durableClaimKey),
         });
         await ensureCredentialsForCurrentSession();
 

@@ -1,0 +1,299 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+process.env.RED_CONNECT_CONNECTION_STORE = "memory";
+process.env.RED_CONNECT_HTTP_MODE = "true";
+import { seedClaimableConnection } from "./connection_test_helpers.js";
+function uniqueId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+async function loadModules() {
+    const connectionStore = await import("./connection_store.js");
+    const shared = await import("../shared.js");
+    const mcpHttpSession = await import("./mcp_http_session.js");
+    return { ...connectionStore, ...shared, ...mcpHttpSession };
+}
+test("confirm connection then list companies in the same detected session", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, getCompanyApiContexts, listConnectedCompanyNames, } = await loadModules();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    const sessionId = uniqueId("session-a");
+    const clientKey = uniqueId("client-a");
+    const keyStore = new Map();
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "test-api-key-a" },
+            { companyName: "Company B", apiKey: "test-api-key-b" },
+            { companyName: "Company C", apiKey: "test-api-key-c" },
+            { companyName: "Company D", apiKey: "test-api-key-d" },
+        ],
+    });
+    await claimConnectionCodeForSession(confirmationCode, sessionId, {
+        clientKey,
+    });
+    const scope = await prepareHttpToolSessionScope(sessionId, keyStore, clientKey);
+    await runWithHttpToolSession(scope, async () => {
+        const names = listConnectedCompanyNames();
+        assert.deepEqual(names.sort(), [
+            "Company A",
+            "Company B",
+            "Company C",
+            "Company D",
+        ]);
+        assert.equal(getCompanyApiContexts().size, 4);
+    });
+});
+test("different session cannot see companies confirmed in another session", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, listConnectedCompanyNames, } = await loadModules();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    const sessionA = uniqueId("session-a");
+    const sessionB = uniqueId("session-b");
+    const clientKey = uniqueId("client");
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
+    });
+    await claimConnectionCodeForSession(confirmationCode, sessionA, {
+        clientKey,
+    });
+    const scopeB = await prepareHttpToolSessionScope(sessionB, new Map(), uniqueId("other-client"));
+    await runWithHttpToolSession(scopeB, async () => {
+        assert.deepEqual(listConnectedCompanyNames(), []);
+    });
+});
+test("missing session scope in HTTP mode does not fall back to a global credential store", async () => {
+    const { getCompanyApiContexts } = await loadModules();
+    const contexts = getCompanyApiContexts();
+    contexts.set("should-not-leak", {
+        companyName: "SHOULD-NOT-LEAK",
+        apiKey: "secret-key",
+        expiresAt: Date.now() + 60_000,
+    });
+    const freshLookup = getCompanyApiContexts();
+    assert.equal(freshLookup.has("should-not-leak"), false);
+    assert.equal(freshLookup.size, 0);
+});
+test("same API keys in different sessions remain isolated without a shared client claim", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, runWithHttpToolSession, prepareHttpToolSessionScope, listConnectedCompanyNames, } = await loadModules();
+    const store = getConnectionStore();
+    async function connectCompany(sessionId, companyName) {
+        const connectToken = uniqueId("connect");
+        const confirmationCode = uniqueId("confirm");
+        const connectionId = uniqueId("connection");
+        await seedClaimableConnection(store, {
+            connectToken,
+            confirmationCode,
+            connectionId,
+            companies: [{ companyName, apiKey: "shared-test-api-key" }],
+        });
+        await claimConnectionCodeForSession(confirmationCode, sessionId, {
+            clientKey: uniqueId(`client-${sessionId}`),
+        });
+    }
+    const sessionA = uniqueId("session-a");
+    const sessionB = uniqueId("session-b");
+    await connectCompany(sessionA, "Company A");
+    await connectCompany(sessionB, "Company B");
+    const scopeA = await prepareHttpToolSessionScope(sessionA, new Map());
+    await runWithHttpToolSession(scopeA, async () => {
+        assert.deepEqual(listConnectedCompanyNames(), ["Company A"]);
+    });
+    const scopeB = await prepareHttpToolSessionScope(sessionB, new Map());
+    await runWithHttpToolSession(scopeB, async () => {
+        assert.deepEqual(listConnectedCompanyNames(), ["Company B"]);
+    });
+});
+test("rotated MCP session id inherits connection via stable client key", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, runHttpToolSessionFromExtra, listConnectedCompanyNames, buildHttpClientKeyFromHeaders, } = await loadModules();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    const firstSessionId = uniqueId("session-1");
+    const secondSessionId = uniqueId("session-2");
+    const headers = {
+        authorization: "Bearer stable-user-token",
+        "x-forwarded-for": "203.0.113.10",
+    };
+    const clientKey = buildHttpClientKeyFromHeaders(headers, "203.0.113.10");
+    const keyStore = new Map();
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [{ companyName: "Company C", apiKey: "test-api-key-c" }],
+    });
+    await claimConnectionCodeForSession(confirmationCode, firstSessionId, {
+        clientKey,
+    });
+    await runHttpToolSessionFromExtra(firstSessionId, keyStore, {
+        requestInfo: {
+            headers,
+        },
+    }, async () => {
+        assert.deepEqual(listConnectedCompanyNames(), ["Company C"]);
+    });
+    await runHttpToolSessionFromExtra(secondSessionId, new Map(), {
+        requestInfo: {
+            headers,
+        },
+    }, async () => {
+        assert.deepEqual(listConnectedCompanyNames(), ["Company C"]);
+    });
+    assert.equal(await store.getConnectionIdForSession(secondSessionId), connectionId);
+});
+test("buildHttpClientKeyFromHeaders fingerprints authorization without exposing it", async () => {
+    const { buildHttpClientKeyFromHeaders, resolveHttpClientKeyFromHeaders, } = await import("./mcp_http_session.js");
+    const first = buildHttpClientKeyFromHeaders({
+        authorization: "Bearer secret-token-value",
+        "x-forwarded-for": "203.0.113.10",
+    }, "203.0.113.10");
+    const second = buildHttpClientKeyFromHeaders({
+        authorization: "Bearer secret-token-value",
+        "x-forwarded-for": "203.0.113.10",
+    }, "203.0.113.10");
+    const different = buildHttpClientKeyFromHeaders({
+        authorization: "Bearer different-token",
+        "x-forwarded-for": "203.0.113.10",
+    }, "203.0.113.10");
+    // Same identity must survive IP rotation (Claude/Azure staging failure mode).
+    const rotatedIp = buildHttpClientKeyFromHeaders({
+        authorization: "Bearer secret-token-value",
+        "x-forwarded-for": "198.51.100.77",
+    }, "198.51.100.77");
+    assert.equal(first, second);
+    assert.equal(first, rotatedIp);
+    assert.notEqual(first, different);
+    assert.equal(first.includes("secret-token-value"), false);
+    const stable = resolveHttpClientKeyFromHeaders({ authorization: "Bearer secret-token-value" }, "203.0.113.10");
+    assert.equal(stable.source, "stable-identity");
+    assert.equal(stable.inheritEligible, true);
+    const ipOnly = resolveHttpClientKeyFromHeaders({ "x-forwarded-for": "203.0.113.10" }, "203.0.113.10");
+    assert.equal(ipOnly.source, "ip-only");
+    assert.equal(ipOnly.inheritEligible, false);
+    assert.notEqual(stable.clientKey, ipOnly.clientKey);
+});
+test("ip-only client keys do not inherit durable claims across sessions", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, prepareHttpToolSessionScope, resolveHttpClientKeyFromHeaders, clearSessionClientKeysForTests, } = await loadModules();
+    clearSessionClientKeysForTests();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    const confirmSession = uniqueId("session-confirm");
+    const routeSession = uniqueId("session-route");
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [{ companyName: "IP Only Co", apiKey: "test-api-key-ip" }],
+    });
+    const confirmKey = resolveHttpClientKeyFromHeaders({ "x-forwarded-for": "203.0.113.10" }, "203.0.113.10");
+    assert.equal(confirmKey.inheritEligible, false);
+    // Confirm may see an IP-only key; it must NOT be recorded for inheritance.
+    await claimConnectionCodeForSession(confirmationCode, confirmSession, {
+        clientKey: confirmKey.inheritEligible
+            ? confirmKey.clientKey
+            : undefined,
+    });
+    const rotatedIp = resolveHttpClientKeyFromHeaders({ "x-forwarded-for": "198.51.100.20" }, "198.51.100.20");
+    const scope = await prepareHttpToolSessionScope(routeSession, new Map(), rotatedIp);
+    assert.equal(scope.connectionId, "");
+    assert.equal(scope.resolution.clientClaimInherited, false);
+});
+test("resolveMcpSessionIdFromHeaders supports mcp-session-id and x-mcp-session-id", async () => {
+    const { resolveMcpSessionIdFromHeaders } = await import("./mcp_http_session.js");
+    assert.equal(resolveMcpSessionIdFromHeaders({ "mcp-session-id": "session-123" }), "session-123");
+    assert.equal(resolveMcpSessionIdFromHeaders({ "x-mcp-session-id": "session-456" }), "session-456");
+});
+test("session diagnostic omits secrets and truncates identifiers", async () => {
+    const { buildMcpSessionDiagnostic } = await import("./mcp_http_session.js");
+    const diagnostic = buildMcpSessionDiagnostic({
+        transportSessionId: "abcdefgh-ijklmnop",
+        extra: {
+            requestInfo: {
+                headers: {
+                    authorization: "Bearer super-secret",
+                    "mcp-session-id": "session-abcdef",
+                },
+            },
+        },
+        resolution: {
+            connectionId: "connection-12345678",
+            sessionBindingFound: true,
+            clientClaimInherited: false,
+            connectionRefResolved: false,
+            connectionRefInvalid: false,
+        },
+        credentialCount: 2,
+        companiesLoaded: ["Company A", "Company B"],
+    });
+    assert.equal(diagnostic.transportSessionId, "abcdefgh");
+    assert.equal(diagnostic.connectionIdPrefix, "connecti");
+    assert.equal(diagnostic.clientIdentityHeaderNamesPresent.includes("authorization"), true);
+    assert.equal(JSON.stringify(diagnostic).includes("super-secret"), false);
+});
+test("tool-level diagnostic logs connectionRef resolution with loaded companies", async () => {
+    process.env.RED_CONNECT_SESSION_DEBUG = "true";
+    const { getConnectionStore, claimConnectionCodeForSession, runHttpToolSessionFromExtra, } = await loadModules();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    const sessionA = uniqueId("session-a");
+    const keyStore = new Map();
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [
+            { companyName: "Company A", apiKey: "test-api-key-a" },
+            { companyName: "Company B", apiKey: "test-api-key-b" },
+            { companyName: "Company C", apiKey: "test-api-key-c" },
+            { companyName: "Company D", apiKey: "test-api-key-d" },
+        ],
+    });
+    const claim = await claimConnectionCodeForSession(confirmationCode, sessionA);
+    const logs = [];
+    const originalInfo = console.info;
+    console.info = (...args) => {
+        logs.push(args.map(String).join(" "));
+    };
+    try {
+        await runHttpToolSessionFromExtra(sessionA, keyStore, undefined, async () => "ok", {
+            connectionRef: claim.connectionRef,
+            companyName: "Company C",
+            toolName: "brc_list_sales_invoices",
+        });
+    }
+    finally {
+        console.info = originalInfo;
+        delete process.env.RED_CONNECT_SESSION_DEBUG;
+    }
+    const diagnosticLine = logs.find((line) => line.includes("Red MCP session:"));
+    assert.ok(diagnosticLine, "expected Red MCP session diagnostic log");
+    const payload = JSON.parse(diagnosticLine.replace(/^Red MCP session:\s*/, ""));
+    assert.equal(payload.connectionRefPresent, true);
+    assert.equal(payload.connectionRefResolved, true);
+    assert.equal(payload.connectionIdPresent, true);
+    assert.equal(payload.credentialCount, 4);
+    assert.deepEqual(payload.companiesLoaded.sort(), [
+        "Company A",
+        "Company B",
+        "Company C",
+        "Company D",
+    ]);
+    assert.equal(payload.requestedCompany, "Company C");
+    assert.equal(payload.requestedCompanyLoaded, true);
+    assert.equal(payload.toolName, "brc_list_sales_invoices");
+    assert.equal(payload.vibeConnectionHealthy, true);
+});
