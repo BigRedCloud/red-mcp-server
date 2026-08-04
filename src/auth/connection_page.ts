@@ -20,13 +20,23 @@ const BRC_RED = "#b5121b";
 const BRC_RED_DARK = "#8f0e16";
 const BRC_RED_LIGHT = "#fdf2f2";
 
-function pageShell(title: string, header: string, content: string, trailingScript = ""): string {
+function pageShell(
+  title: string,
+  header: string,
+  content: string,
+  trailingScript = "",
+  options: { noReferrer?: boolean } = {}
+): string {
+  const referrerMeta = options.noReferrer
+    ? `\n    <meta name="referrer" content="no-referrer" />`
+    : "";
+
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <title>${escapeHtml(title)}</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />${referrerMeta}
     <link rel="icon" href="${RED_LOGO_URL}" type="image/png" sizes="any" />
     <link rel="shortcut icon" href="${RED_LOGO_URL}" type="image/png" />
     <link rel="apple-touch-icon" href="${RED_LOGO_URL}" />
@@ -313,6 +323,75 @@ function pageShell(title: string, header: string, content: string, trailingScrip
         box-shadow: 0 0 0 3px rgba(181, 18, 27, 0.35);
       }
 
+      .btn-secondary {
+        display: block;
+        width: 100%;
+        max-width: 360px;
+        margin: 12px auto 0;
+        padding: 12px 24px;
+        font-size: 15px;
+        font-weight: 600;
+        color: #991b1b;
+        background: #ffffff;
+        border: 1px solid #fecaca;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+
+      .btn-secondary:hover {
+        background: ${BRC_RED_LIGHT};
+        border-color: #f87171;
+      }
+
+      .btn-secondary:focus {
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(181, 18, 27, 0.2);
+      }
+
+      .copy-actions .btn-primary {
+        margin-top: 16px;
+      }
+
+      .confirmation-code-block {
+        margin: 16px 0 0;
+        padding: 16px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        text-align: center;
+      }
+
+      .confirmation-code-label {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #6b7280;
+      }
+
+      .confirmation-code {
+        margin: 0;
+        padding: 10px 12px;
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        font-size: clamp(1rem, 2.4vw, 1.25rem);
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: #111827;
+        word-break: break-all;
+        background: #f9fafb;
+        border-radius: 8px;
+        user-select: all;
+      }
+
+      .copy-status {
+        margin: 12px 0 0;
+        font-size: 13px;
+        color: #15803d;
+        text-align: center;
+      }
+
       .trust-note strong {
         color: #991b1b;
       }
@@ -530,6 +609,14 @@ export function renderExpiredLinkPage(): string {
   return pageShell("Connection link not available", brandBar(), content);
 }
 
+export function applyConnectionSuccessPageHeaders(res: {
+  setHeader(name: string, value: string): void;
+}): void {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Referrer-Policy", "no-referrer");
+}
+
 export function renderSuccessPage(
   connectedNames: string[],
   code: string,
@@ -561,6 +648,9 @@ export function renderSuccessPage(
         </div>`
       : "";
 
+  const escapedCode = escapeHtml(code);
+  const chatMessageJson = JSON.stringify(`Confirm connection code ${code}`);
+
   const content = `
       <div class="card">
         <div class="status-icon success" aria-hidden="true">✓</div>
@@ -569,11 +659,80 @@ export function renderSuccessPage(
         <ul class="company-list">${listItems}</ul>
         ${failedSection}
         <div class="next-step">
-          Connection complete. Return to this chat and copy/paste this confirmation code: <strong>Confirm connection code ${escapeHtml(code)}</strong>
+          <p style="margin:0 0 12px;">
+            Connection complete. Return to this chat and copy/paste this confirmation code.
+          </p>
+          <div class="confirmation-code-block">
+            <p class="confirmation-code-label">Confirmation code</p>
+            <p class="confirmation-code" id="confirmation-code">${escapedCode}</p>
+          </div>
+          <p style="margin:14px 0 0;">
+            Paste into chat as: <strong>Confirm connection code ${escapedCode}</strong>
+          </p>
+          <div class="copy-actions">
+            <button type="button" class="btn-primary" id="copy-chat-message">
+              Copy message for chat
+            </button>
+          </div>
+          <p class="copy-status" id="copy-status" hidden></p>
         </div>
       </div>`;
 
-  return pageShell("Companies connected", brandBar(), content);
+  const copyScript = `
+<script>
+(function () {
+  var chatMessage = ${chatMessageJson};
+  var statusEl = document.getElementById("copy-status");
+  var messageBtn = document.getElementById("copy-chat-message");
+
+  function showStatus(message) {
+    if (!statusEl) return;
+    statusEl.hidden = false;
+    statusEl.textContent = message;
+  }
+
+  function copyText(value, successMessage) {
+    function fallbackCopy() {
+      var area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.left = "-9999px";
+      document.body.appendChild(area);
+      area.select();
+      try {
+        document.execCommand("copy");
+        showStatus(successMessage);
+      } catch (err) {
+        showStatus("Copy failed. Select the confirmation code above and copy it manually.");
+      }
+      document.body.removeChild(area);
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(function () {
+        showStatus(successMessage);
+      }).catch(fallbackCopy);
+      return;
+    }
+    fallbackCopy();
+  }
+
+  if (messageBtn) {
+    messageBtn.addEventListener("click", function () {
+      copyText(chatMessage, "Message copied. Return to the chat and paste it there.");
+    });
+  }
+})();
+</script>`;
+
+  return pageShell(
+    "Companies connected",
+    brandBar(),
+    content,
+    copyScript,
+    { noReferrer: true }
+  );
 }
 
 export function renderConnectionFailedPage(message: string): string {

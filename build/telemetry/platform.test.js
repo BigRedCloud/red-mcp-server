@@ -140,30 +140,30 @@ test("platform survives MCP session rotation/rehydration", async () => {
 });
 test("existing telemetry client/session identity remains unchanged", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, ensureConnectionStoreInitialized, } = await import("../auth/connection_store.js");
+    const { seedClaimableConnection } = await import("../auth/connection_test_helpers.js");
     await ensureConnectionStoreInitialized();
     const store = getConnectionStore();
     const connectionId = uniqueId("conn-plat");
     const clientId = generateTelemetryUuid();
-    const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
+    const connectToken = uniqueId("connect").replace(/-/g, "").slice(0, 32);
+    const confirmationCode = uniqueId("confirm").replace(/-/g, "").slice(0, 32);
     const sessionId = uniqueId("session-plat");
     await store.saveConnectionTelemetry(connectionId, {
         telemetryClientId: clientId,
     });
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
+        companies: [
+            {
+                companyName: "Company A",
+                apiKey: "test-key-plat-a",
+            },
+        ],
         expiresAt: Number.MAX_SAFE_INTEGER,
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-key-plat-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const claim = await claimConnectionCodeForSession(code, sessionId);
+    const claim = await claimConnectionCodeForSession(confirmationCode, sessionId);
     assert.equal(typeof claim.connectionSessionId, "string");
     storeSessionPlatform(sessionId, "claude");
     const prepared = await prepareMcpTelemetryContext({

@@ -1,8 +1,13 @@
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "./freshdesk-index-store.js";
+import { createConfiguredFreshdeskCatalogContainer, loadFreshdeskEffectiveCatalog, loadFreshdeskOverrides, } from "./freshdesk-catalog-store.js";
+import { mergeFreshdeskCatalogWithOverrides, visibleFreshdeskArticlesFromEffective, } from "./freshdesk-catalog-merge.js";
 import { getSyncedFreshdeskArticlePublicUrl } from "./freshdesk-article-url.js";
 export const FRESHDESK_HELP_EXCERPT_MAX_LENGTH = 200;
 let freshdeskHelpIndexCache = null;
 export function resetFreshdeskHelpIndexCacheForTests() {
+    freshdeskHelpIndexCache = null;
+}
+export function invalidateFreshdeskHelpIndexCache() {
     freshdeskHelpIndexCache = null;
 }
 function getFreshdeskHelpCacheTtlMs() {
@@ -20,6 +25,11 @@ function logFreshdeskIndexUnavailable(reason) {
     }
     console.warn("Red BRC Edu: Freshdesk support articles index could not be loaded; continuing with webinar resources only.");
 }
+/**
+ * Loads visible Freshdesk articles for Red customer help search.
+ * Prefers effective-article-catalog.json; falls back to raw index + overrides
+ * for migration when the effective catalogue has not been built yet.
+ */
 export async function loadFreshdeskArticlesForHelpSearch(options = {}) {
     const now = options.now ?? Date.now();
     const ttlMs = getFreshdeskHelpCacheTtlMs();
@@ -31,7 +41,8 @@ export async function loadFreshdeskArticlesForHelpSearch(options = {}) {
     }
     try {
         const container = options.container === undefined
-            ? createConfiguredFreshdeskIndexContainer()
+            ? createConfiguredFreshdeskCatalogContainer() ??
+                createConfiguredFreshdeskIndexContainer()
             : options.container;
         if (!container) {
             logFreshdeskIndexUnavailable("missing");
@@ -40,6 +51,22 @@ export async function loadFreshdeskArticlesForHelpSearch(options = {}) {
                 expiresAt: now + ttlMs,
             };
             return null;
+        }
+        const loadEffective = options.loadEffective ?? loadFreshdeskEffectiveCatalog;
+        let effective = null;
+        try {
+            effective = await loadEffective(container);
+        }
+        catch {
+            effective = null;
+        }
+        if (effective && effective.items.length > 0) {
+            const visible = visibleFreshdeskArticlesFromEffective(effective);
+            freshdeskHelpIndexCache = {
+                articles: visible,
+                expiresAt: now + ttlMs,
+            };
+            return visible;
         }
         const loadIndex = options.loadIndex ?? loadFreshdeskArticlesIndex;
         const index = await loadIndex(container);
@@ -51,11 +78,28 @@ export async function loadFreshdeskArticlesForHelpSearch(options = {}) {
             };
             return null;
         }
-        freshdeskHelpIndexCache = {
+        let overridesLoad;
+        try {
+            overridesLoad = await loadFreshdeskOverrides(container);
+        }
+        catch {
+            overridesLoad = {
+                document: { updatedAt: new Date().toISOString(), overrides: {} },
+                etag: "",
+            };
+        }
+        const merged = mergeFreshdeskCatalogWithOverrides({
             articles: index.articles,
+            overrides: overridesLoad.document.overrides,
+            generatedAt: index.generatedAt,
+            lastSyncedAt: index.generatedAt,
+        });
+        const visible = visibleFreshdeskArticlesFromEffective(merged);
+        freshdeskHelpIndexCache = {
+            articles: visible,
             expiresAt: now + ttlMs,
         };
-        return index.articles;
+        return visible;
     }
     catch {
         logFreshdeskIndexUnavailable("load_failed");

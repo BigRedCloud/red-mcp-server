@@ -15,13 +15,33 @@ test("repeat visit reuses the same client ID from cookie", () => {
         headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${id}` },
         body: {},
     });
-    const second = resolveTelemetryClientIdFromRequest({
-        headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${id}` },
-        body: { telemetryClientId: generateTelemetryUuid() },
-    });
     assert.equal(first.clientId, id.toLowerCase());
-    assert.equal(second.clientId, id.toLowerCase());
-    assert.equal(second.fromCookie, true);
+    assert.equal(first.fromCookie, true);
+    assert.equal(first.cookieClientIdPresent, true);
+});
+test("valid form body client ID is preferred over cookie (localStorage submit path)", () => {
+    const cookieId = generateTelemetryUuid();
+    const bodyId = generateTelemetryUuid();
+    const result = resolveTelemetryClientIdFromRequest({
+        headers: { cookie: `${TELEMETRY_CLIENT_ID_COOKIE}=${cookieId}` },
+        body: { telemetryClientId: bodyId },
+    });
+    assert.equal(result.clientId, bodyId.toLowerCase());
+    assert.equal(result.fromBody, true);
+    assert.equal(result.fromCookie, false);
+    assert.equal(result.postClientIdPresent, true);
+    assert.equal(result.postClientIdValid, true);
+    assert.equal(result.cookieClientIdPresent, true);
+});
+test("missing client ID gets server fallback UUID", () => {
+    const result = resolveTelemetryClientIdFromRequest({
+        headers: {},
+        body: { telemetryClientId: "" },
+    });
+    assert.equal(isValidTelemetryUuid(result.clientId), true);
+    assert.equal(result.postClientIdPresent, false);
+    assert.equal(result.postClientIdValid, false);
+    assert.equal(result.replacedMalformed, false);
 });
 test("malformed client ID is rejected or replaced safely", () => {
     const result = resolveTelemetryClientIdFromRequest({
@@ -31,6 +51,8 @@ test("malformed client ID is rejected or replaced safely", () => {
     assert.equal(isValidTelemetryUuid(result.clientId), true);
     assert.notEqual(result.clientId, "not-a-uuid");
     assert.equal(result.replacedMalformed, true);
+    assert.equal(result.postClientIdPresent, true);
+    assert.equal(result.postClientIdValid, false);
     assert.equal(isValidTelemetryUuid(normaliseTelemetryClientId("")), true);
     assert.equal(isValidTelemetryUuid(normaliseTelemetryClientId("abc")), true);
     assert.equal(normaliseTelemetryClientId("550e8400-e29b-41d4-a716-446655440000"), "550e8400-e29b-41d4-a716-446655440000");
@@ -45,6 +67,46 @@ test("cookie helper builds SameSite Secure cookie without HttpOnly", () => {
     assert.equal(/HttpOnly/i.test(cookie), false);
     assert.equal(readTelemetryClientIdFromCookieHeader(cookie.split(";")[0]), id.toLowerCase());
 });
+test("GET /connect cookie and page HTML use the same client ID", async () => {
+    const { renderConnectPage } = await import("../auth/connection_page.js");
+    const id = generateTelemetryUuid();
+    const cookie = buildTelemetryClientIdSetCookie(id, { secure: false });
+    const html = renderConnectPage("connect-code", { telemetryClientId: id });
+    assert.equal(readTelemetryClientIdFromCookieHeader(cookie.split(";")[0]), id.toLowerCase());
+    assert.match(html, new RegExp(`name="telemetryClientId" value="${id.toLowerCase()}"`));
+    assert.match(html, new RegExp(`SERVER_ID = "${id.toLowerCase()}"`));
+    assert.match(html, /localStorage\.setItem\(LS, id\)/);
+    assert.equal(/crypto\.randomUUID\s*\(/.test(html), false);
+    assert.equal(/function createId\s*\(/.test(html), false);
+});
+test("form submission body includes telemetryClientId field name", () => {
+    const id = generateTelemetryUuid();
+    const result = resolveTelemetryClientIdFromRequest({
+        headers: {},
+        body: { telemetryClientId: id },
+    });
+    assert.equal(result.clientId, id.toLowerCase());
+    assert.equal(result.fromBody, true);
+    assert.equal(result.postClientIdPresent, true);
+    assert.equal(result.postClientIdValid, true);
+});
+test("rendered connect HTML posts telemetryClientId with exact multipart field name", async () => {
+    const { TELEMETRY_CLIENT_ID_FORM_FIELD } = await import("./identity.js");
+    const { renderConnectPage } = await import("../auth/connection_page.js");
+    const id = generateTelemetryUuid();
+    const html = renderConnectPage("code-xyz", { telemetryClientId: id });
+    assert.match(html, /method="POST"/i);
+    assert.match(html, /action="\/connect"/i);
+    assert.match(html, /enctype="multipart\/form-data"/i);
+    assert.match(html, new RegExp(`<input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${id.toLowerCase()}"`));
+    const parsed = resolveTelemetryClientIdFromRequest({
+        headers: {},
+        body: { [TELEMETRY_CLIENT_ID_FORM_FIELD]: id },
+    });
+    assert.equal(parsed.postClientIdPresent, true);
+    assert.equal(parsed.postClientIdValid, true);
+    assert.equal(parsed.clientId, id.toLowerCase());
+});
 test("parseCookieHeader reads multiple cookies", () => {
     const parsed = parseCookieHeader("a=1; red_telemetry_client_id=550e8400-e29b-41d4-a716-446655440000");
     assert.equal(parsed.a, "1");
@@ -54,14 +116,14 @@ test("telemetry dimensions are attached without sensitive fields", () => {
     const dims = buildTelemetryCustomDimensions({
         telemetryClientId: "550e8400-e29b-41d4-a716-446655440000",
         connectionSessionId: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-        clientPlatform: "vibe",
+        clientPlatform: "mistral",
         environment: "staging",
         connectedCompanyCount: 2,
         toolName: "brc_list_customers",
     });
     assert.equal(dims["red.telemetry_client_id"], "550e8400-e29b-41d4-a716-446655440000");
     assert.equal(dims["red.connection_session_id"], "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
-    assert.equal(dims["red.client_platform"], "vibe");
+    assert.equal(dims["red.client_platform"], "mistral");
     assert.equal(dims["red.environment"], "staging");
     assert.equal(dims["red.connected_company_count"], "2");
     assert.equal(dims["red.tool_name"], "brc_list_customers");
@@ -105,11 +167,12 @@ test("span processor swallows enrichment errors", () => {
     assert.doesNotThrow(() => processor.onEnd({ attributes: null }));
 });
 test("platform is set correctly where known", () => {
-    assert.equal(detectClientPlatform({ "x-vibe-user-id": "abc" }), "vibe");
+    assert.equal(detectClientPlatform({ "x-vibe-user-id": "abc" }), "mistral");
     assert.equal(detectClientPlatform({ "x-mistral-user-id": "abc" }), "mistral");
     assert.equal(detectClientPlatform({ "user-agent": "ChatGPT-User/1.0" }), "chatgpt");
     assert.equal(detectClientPlatform({ "user-agent": "claude-desktop" }), "claude");
-    assert.equal(detectClientPlatform({ "user-agent": "Cursor/1.0" }), "cursor");
+    // Cursor is unsupported for customer platform telemetry.
+    assert.equal(detectClientPlatform({ "user-agent": "Cursor/1.0" }), "unknown");
 });
 test("unknown platform fallback", () => {
     assert.equal(detectClientPlatform({}), "unknown");
@@ -137,7 +200,7 @@ test("buildRequestTelemetryContext stays free of secrets", () => {
         toolName: "brc_list_customers",
     });
     const dims = buildTelemetryCustomDimensions(ctx);
-    assert.equal(dims["red.client_platform"], "vibe");
+    assert.equal(dims["red.client_platform"], "mistral");
     assert.equal(dims["red.connected_company_count"], "3");
     assert.equal(/session/i.test(JSON.stringify(dims).replace(/connection_session/g, "")), false);
 });

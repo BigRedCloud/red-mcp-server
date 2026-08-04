@@ -1,15 +1,37 @@
 import { encodeStoredApiKey } from "./credential_secret.js";
 import { isPendingConnectionExpired } from "./connection_pending.js";
+import { mergeConnectionTelemetryRecord } from "./connection_telemetry_merge.js";
 function normaliseCompanyName(companyName) {
     return companyName.trim().toLowerCase();
 }
 const pendingConnections = new Map();
+/** confirmationCode → connectToken */
+const confirmationCodeIndex = new Map();
 const sessionBindings = new Map();
 const companiesByConnection = new Map();
 const clientLastClaims = new Map();
 const connectionRefs = new Map();
 const failedValidationsByConnection = new Map();
 const telemetryByConnection = new Map();
+const successPagesById = new Map();
+function resolveConnectTokenArg(args) {
+    const token = (args.connectToken ?? args.code ?? "").trim();
+    if (!token) {
+        throw new Error("connectToken is required to create a pending connection.");
+    }
+    return token;
+}
+function clonePending(pending) {
+    return {
+        connectToken: pending.connectToken,
+        code: pending.connectToken,
+        connectionId: pending.connectionId,
+        createdAt: pending.createdAt,
+        expiresAt: pending.expiresAt,
+        used: pending.used,
+        confirmationCode: pending.confirmationCode,
+    };
+}
 function companyMapForConnection(connectionId) {
     let map = companiesByConnection.get(connectionId);
     if (!map) {
@@ -19,12 +41,22 @@ function companyMapForConnection(connectionId) {
     return map;
 }
 function cleanupExpiredPendingConnections() {
-    for (const [code, pending] of pendingConnections.entries()) {
+    for (const [connectToken, pending] of pendingConnections.entries()) {
         if (pending.used) {
             continue;
         }
         if (isPendingConnectionExpired(pending.expiresAt)) {
-            pendingConnections.delete(code);
+            if (pending.confirmationCode) {
+                confirmationCodeIndex.delete(pending.confirmationCode);
+            }
+            pendingConnections.delete(connectToken);
+        }
+    }
+}
+function cleanupExpiredSuccessPages(now = Date.now()) {
+    for (const [successId, page] of successPagesById.entries()) {
+        if (page.expiresAt <= now) {
+            successPagesById.delete(successId);
         }
     }
 }
@@ -34,55 +66,112 @@ export class MemoryConnectionStore {
     }
     async createPendingConnection(args) {
         cleanupExpiredPendingConnections();
-        pendingConnections.set(args.code, {
-            code: args.code,
+        const connectToken = resolveConnectTokenArg(args);
+        pendingConnections.set(connectToken, {
+            connectToken,
+            code: connectToken,
             connectionId: args.connectionId,
             createdAt: Date.now(),
             expiresAt: args.expiresAt,
             used: false,
         });
     }
-    async getPendingConnection(code) {
+    async getPendingConnection(connectToken) {
         cleanupExpiredPendingConnections();
-        const pending = pendingConnections.get(code);
+        const pending = pendingConnections.get(connectToken.trim());
         if (!pending ||
             pending.used ||
             isPendingConnectionExpired(pending.expiresAt)) {
-            if (pending)
-                pendingConnections.delete(code);
+            if (pending && !pending.used) {
+                pendingConnections.delete(connectToken.trim());
+            }
             return null;
         }
-        return { ...pending };
+        return clonePending(pending);
+    }
+    async getConnectionByConnectToken(connectToken) {
+        cleanupExpiredPendingConnections();
+        const pending = pendingConnections.get(connectToken.trim());
+        if (!pending || isPendingConnectionExpired(pending.expiresAt)) {
+            if (pending) {
+                if (pending.confirmationCode) {
+                    confirmationCodeIndex.delete(pending.confirmationCode);
+                }
+                pendingConnections.delete(connectToken.trim());
+            }
+            return null;
+        }
+        return clonePending(pending);
+    }
+    async getConnectionByConfirmationCode(confirmationCode) {
+        cleanupExpiredPendingConnections();
+        const trimmed = confirmationCode.trim();
+        if (!trimmed) {
+            return null;
+        }
+        const connectToken = confirmationCodeIndex.get(trimmed);
+        if (!connectToken) {
+            return null;
+        }
+        const pending = pendingConnections.get(connectToken);
+        if (!pending ||
+            pending.confirmationCode !== trimmed ||
+            isPendingConnectionExpired(pending.expiresAt)) {
+            confirmationCodeIndex.delete(trimmed);
+            if (pending && isPendingConnectionExpired(pending.expiresAt)) {
+                pendingConnections.delete(connectToken);
+            }
+            return null;
+        }
+        return clonePending(pending);
     }
     async getConnectionByCode(code) {
-        cleanupExpiredPendingConnections();
-        const pending = pendingConnections.get(code);
-        if (!pending || isPendingConnectionExpired(pending.expiresAt)) {
-            if (pending)
-                pendingConnections.delete(code);
-            return null;
-        }
-        return { ...pending };
+        return this.getConnectionByConfirmationCode(code);
     }
-    async completePendingConnection(code) {
+    async completePendingConnection(connectToken) {
         cleanupExpiredPendingConnections();
-        const pending = pendingConnections.get(code);
+        const pending = pendingConnections.get(connectToken.trim());
         if (!pending ||
             pending.used ||
             isPendingConnectionExpired(pending.expiresAt)) {
-            if (pending)
-                pendingConnections.delete(code);
+            if (pending && !pending.used) {
+                pendingConnections.delete(connectToken.trim());
+            }
             return null;
         }
         pending.used = true;
-        return { ...pending };
+        return clonePending(pending);
     }
-    async consumePendingConnection(code) {
-        const pending = await this.getPendingConnection(code);
+    async issueConfirmationCode(connectToken, confirmationCode) {
+        cleanupExpiredPendingConnections();
+        const token = connectToken.trim();
+        const confirm = confirmationCode.trim();
+        if (!token || !confirm || confirm === token) {
+            return null;
+        }
+        const pending = pendingConnections.get(token);
+        if (!pending ||
+            !pending.used ||
+            isPendingConnectionExpired(pending.expiresAt)) {
+            return null;
+        }
+        if (pending.confirmationCode) {
+            confirmationCodeIndex.delete(pending.confirmationCode);
+        }
+        pending.confirmationCode = confirm;
+        confirmationCodeIndex.set(confirm, token);
+        return clonePending(pending);
+    }
+    async consumeConfirmationCode(confirmationCode) {
+        const pending = await this.getConnectionByConfirmationCode(confirmationCode);
         if (!pending)
             return null;
-        pendingConnections.delete(code);
+        confirmationCodeIndex.delete(pending.confirmationCode);
+        pendingConnections.delete(pending.connectToken);
         return pending;
+    }
+    async consumePendingConnection(code) {
+        return this.consumeConfirmationCode(code);
     }
     async bindSessionToConnection(sessionId, connectionId) {
         sessionBindings.set(sessionId.trim(), {
@@ -186,17 +275,36 @@ export class MemoryConnectionStore {
         failedValidationsByConnection.delete(connectionId);
     }
     async saveConnectionTelemetry(connectionId, patch) {
-        const existing = telemetryByConnection.get(connectionId);
-        telemetryByConnection.set(connectionId, {
-            connectionId,
-            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
-            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
-            updatedAt: Date.now(),
-        });
+        const existing = telemetryByConnection.get(connectionId) ?? null;
+        const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+        telemetryByConnection.set(connectionId, merged);
     }
     async getConnectionTelemetry(connectionId) {
         const record = telemetryByConnection.get(connectionId);
         return record ? { ...record } : null;
+    }
+    async saveConnectionSuccessPage(record) {
+        cleanupExpiredSuccessPages();
+        successPagesById.set(record.successId, {
+            ...record,
+            connectedNames: [...record.connectedNames],
+            failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+        });
+    }
+    async getConnectionSuccessPage(successId) {
+        cleanupExpiredSuccessPages();
+        const record = successPagesById.get(successId.trim());
+        if (!record || record.expiresAt <= Date.now()) {
+            if (record) {
+                successPagesById.delete(successId.trim());
+            }
+            return null;
+        }
+        return {
+            ...record,
+            connectedNames: [...record.connectedNames],
+            failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+        };
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

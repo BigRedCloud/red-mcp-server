@@ -39,7 +39,6 @@
     "cors": "^2.8.6",
     "csv-parse": "^7.0.1",
     "dotenv": "latest",
-    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "multer": "^2.2.0",
     "readline-sync": "^1.4.10",

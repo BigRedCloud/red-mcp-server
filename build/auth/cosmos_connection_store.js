@@ -2,6 +2,8 @@ import { CosmosClient } from "@azure/cosmos";
 import { isPendingConnectionExpired } from "./connection_pending.js";
 import { redServerConfig } from "../config/server_config.js";
 import { encodeStoredApiKey } from "./credential_secret.js";
+import { mergeConnectionTelemetryRecord, pickValidTelemetryUuid, } from "./connection_telemetry_merge.js";
+import { isValidTelemetryUuid } from "../telemetry/identity.js";
 const PENDING_CONNECTION_NO_COSMOS_TTL = -1;
 function sessionTtlSeconds() {
     return redServerConfig.sessionTtlMinutes * 60;
@@ -12,8 +14,11 @@ function normaliseCompanyName(companyName) {
 function sessionPartitionKey(sessionId) {
     return `session:${sessionId}`;
 }
-function pendingPartitionKey(code) {
-    return `pending:${code}`;
+function pendingPartitionKey(connectToken) {
+    return `pending:${connectToken}`;
+}
+function confirmationPartitionKey(confirmationCode) {
+    return `confirm:${confirmationCode}`;
 }
 function connectionPartitionKey(connectionId) {
     return `connection:${connectionId}`;
@@ -24,6 +29,9 @@ function clientPartitionKey(clientKey) {
 function connectionRefPartitionKey(ref) {
     return `ref:${ref}`;
 }
+function successPagePartitionKey(successId) {
+    return `success:${successId}`;
+}
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
 }
@@ -32,6 +40,31 @@ function failedValidationDocumentId(normalisedName) {
 }
 function apiKeyTtlSeconds() {
     return redServerConfig.apiKeyTtlMinutes * 60;
+}
+function isCosmosNotFoundError(error) {
+    const statusCode = error && typeof error === "object" && "code" in error
+        ? Number(error.code)
+        : error && typeof error === "object" && "statusCode" in error
+            ? Number(error.statusCode)
+            : NaN;
+    return statusCode === 404;
+}
+function buildConnectionTelemetryDocument(record, pk, ttl) {
+    const doc = {
+        pk,
+        id: "telemetry",
+        type: "connectionTelemetry",
+        connectionId: record.connectionId,
+        updatedAt: record.updatedAt,
+        ttl,
+    };
+    if (record.telemetryClientId) {
+        doc.telemetryClientId = record.telemetryClientId;
+    }
+    if (record.connectionSessionId) {
+        doc.connectionSessionId = record.connectionSessionId;
+    }
+    return doc;
 }
 export class CosmosConnectionStore {
     client;
@@ -64,12 +97,17 @@ export class CosmosConnectionStore {
         return "cosmos";
     }
     async createPendingConnection(args) {
+        const connectToken = (args.connectToken ?? args.code ?? "").trim();
+        if (!connectToken) {
+            throw new Error("connectToken is required to create a pending connection.");
+        }
         const now = Date.now();
         const doc = {
-            pk: pendingPartitionKey(args.code),
+            pk: pendingPartitionKey(connectToken),
             id: "pending",
             type: "pendingConnection",
-            code: args.code,
+            connectToken,
+            code: connectToken,
             connectionId: args.connectionId,
             createdAt: now,
             expiresAt: args.expiresAt,
@@ -78,19 +116,25 @@ export class CosmosConnectionStore {
         };
         await this.getContainer().items.upsert(doc);
     }
-    async readPendingConnectionDocument(code) {
+    async readPendingConnectionDocument(connectToken) {
         try {
             const { resource } = await this.getContainer()
-                .item("pending", pendingPartitionKey(code))
+                .item("pending", pendingPartitionKey(connectToken))
                 .read();
             if (!resource || resource.type !== "pendingConnection") {
                 return null;
             }
             if (isPendingConnectionExpired(resource.expiresAt)) {
                 await this.getContainer()
-                    .item("pending", pendingPartitionKey(code))
+                    .item("pending", pendingPartitionKey(connectToken))
                     .delete()
                     .catch(() => { });
+                if (resource.confirmationCode) {
+                    await this.getContainer()
+                        .item("confirm", confirmationPartitionKey(resource.confirmationCode))
+                        .delete()
+                        .catch(() => { });
+                }
                 return null;
             }
             return resource;
@@ -100,49 +144,135 @@ export class CosmosConnectionStore {
         }
     }
     pendingRecordFromDocument(resource) {
+        const connectToken = (resource.connectToken ?? resource.code).trim();
         return {
-            code: resource.code,
+            connectToken,
+            code: connectToken,
             connectionId: resource.connectionId,
             createdAt: resource.createdAt,
             expiresAt: resource.expiresAt,
             used: Boolean(resource.used),
+            confirmationCode: resource.confirmationCode?.trim() || undefined,
         };
     }
-    async getPendingConnection(code) {
-        const resource = await this.readPendingConnectionDocument(code);
+    async getPendingConnection(connectToken) {
+        const resource = await this.readPendingConnectionDocument(connectToken.trim());
         if (!resource || resource.used) {
             return null;
         }
         return this.pendingRecordFromDocument(resource);
     }
-    async getConnectionByCode(code) {
-        const resource = await this.readPendingConnectionDocument(code);
+    async getConnectionByConnectToken(connectToken) {
+        const resource = await this.readPendingConnectionDocument(connectToken.trim());
         if (!resource) {
             return null;
         }
         return this.pendingRecordFromDocument(resource);
     }
-    async completePendingConnection(code) {
-        const resource = await this.readPendingConnectionDocument(code);
+    async getConnectionByConfirmationCode(confirmationCode) {
+        const trimmed = confirmationCode.trim();
+        if (!trimmed) {
+            return null;
+        }
+        try {
+            const { resource: index } = await this.getContainer()
+                .item("confirm", confirmationPartitionKey(trimmed))
+                .read();
+            if (!index || index.type !== "confirmationCodeIndex") {
+                return null;
+            }
+            if (isPendingConnectionExpired(index.expiresAt)) {
+                await this.getContainer()
+                    .item("confirm", confirmationPartitionKey(trimmed))
+                    .delete()
+                    .catch(() => { });
+                return null;
+            }
+            const pending = await this.readPendingConnectionDocument(index.connectToken);
+            if (!pending || pending.confirmationCode !== trimmed) {
+                return null;
+            }
+            return this.pendingRecordFromDocument(pending);
+        }
+        catch {
+            return null;
+        }
+    }
+    async getConnectionByCode(code) {
+        return this.getConnectionByConfirmationCode(code);
+    }
+    async completePendingConnection(connectToken) {
+        const resource = await this.readPendingConnectionDocument(connectToken.trim());
         if (!resource || resource.used) {
             return null;
         }
+        const token = (resource.connectToken ?? resource.code).trim();
         const completed = {
             ...resource,
+            connectToken: token,
+            code: token,
             used: true,
         };
         await this.getContainer().items.upsert(completed);
         return this.pendingRecordFromDocument(completed);
     }
-    async consumePendingConnection(code) {
-        const pending = await this.getPendingConnection(code);
+    async issueConfirmationCode(connectToken, confirmationCode) {
+        const token = connectToken.trim();
+        const confirm = confirmationCode.trim();
+        if (!token || !confirm || confirm === token) {
+            return null;
+        }
+        const resource = await this.readPendingConnectionDocument(token);
+        if (!resource || !resource.used) {
+            return null;
+        }
+        if (resource.confirmationCode && resource.confirmationCode !== confirm) {
+            await this.getContainer()
+                .item("confirm", confirmationPartitionKey(resource.confirmationCode))
+                .delete()
+                .catch(() => { });
+        }
+        const updated = {
+            ...resource,
+            connectToken: token,
+            code: token,
+            confirmationCode: confirm,
+            used: true,
+        };
+        await this.getContainer().items.upsert(updated);
+        const indexDoc = {
+            pk: confirmationPartitionKey(confirm),
+            id: "confirm",
+            type: "confirmationCodeIndex",
+            confirmationCode: confirm,
+            connectToken: token,
+            connectionId: resource.connectionId,
+            expiresAt: resource.expiresAt,
+            ttl: resource.expiresAt >= Number.MAX_SAFE_INTEGER / 2
+                ? PENDING_CONNECTION_NO_COSMOS_TTL
+                : Math.max(60, Math.ceil((resource.expiresAt - Date.now()) / 1000)),
+        };
+        await this.getContainer().items.upsert(indexDoc);
+        return this.pendingRecordFromDocument(updated);
+    }
+    async consumeConfirmationCode(confirmationCode) {
+        const pending = await this.getConnectionByConfirmationCode(confirmationCode);
         if (!pending)
             return null;
+        if (pending.confirmationCode) {
+            await this.getContainer()
+                .item("confirm", confirmationPartitionKey(pending.confirmationCode))
+                .delete()
+                .catch(() => { });
+        }
         await this.getContainer()
-            .item("pending", pendingPartitionKey(code))
+            .item("pending", pendingPartitionKey(pending.connectToken))
             .delete()
             .catch(() => { });
         return pending;
+    }
+    async consumePendingConnection(code) {
+        return this.consumeConfirmationCode(code);
     }
     async bindSessionToConnection(sessionId, connectionId) {
         const normalizedSessionId = sessionId.trim();
@@ -404,18 +534,46 @@ export class CosmosConnectionStore {
         }
     }
     async saveConnectionTelemetry(connectionId, patch) {
-        const existing = await this.getConnectionTelemetry(connectionId);
-        const doc = {
-            pk: connectionPartitionKey(connectionId),
-            id: "telemetry",
-            type: "connectionTelemetry",
-            connectionId,
-            telemetryClientId: patch.telemetryClientId ?? existing?.telemetryClientId,
-            connectionSessionId: patch.connectionSessionId ?? existing?.connectionSessionId,
-            updatedAt: Date.now(),
-            ttl: apiKeyTtlSeconds(),
-        };
-        await this.getContainer().items.upsert(doc);
+        const pk = connectionPartitionKey(connectionId);
+        const item = this.getContainer().item("telemetry", pk);
+        const updatedAt = Date.now();
+        const ttl = apiKeyTtlSeconds();
+        // Patch-first: only set fields present in this call. A session-id update must
+        // never replace the whole document (Cosmos upsert would drop omitted fields).
+        const ops = [
+            { op: "set", path: "/type", value: "connectionTelemetry" },
+            { op: "set", path: "/connectionId", value: connectionId },
+            { op: "set", path: "/updatedAt", value: updatedAt },
+            { op: "set", path: "/ttl", value: ttl },
+        ];
+        const clientId = pickValidTelemetryUuid(patch.telemetryClientId);
+        const sessionId = pickValidTelemetryUuid(patch.connectionSessionId);
+        if (clientId) {
+            ops.push({ op: "set", path: "/telemetryClientId", value: clientId });
+        }
+        if (sessionId) {
+            ops.push({ op: "set", path: "/connectionSessionId", value: sessionId });
+        }
+        try {
+            await item.patch(ops);
+            return;
+        }
+        catch (error) {
+            if (!isCosmosNotFoundError(error)) {
+                // Document may exist but patch failed; merge-read then upsert only as
+                // last resort, preserving any fields returned by a successful read.
+                const existing = await this.getConnectionTelemetry(connectionId);
+                if (existing) {
+                    const merged = mergeConnectionTelemetryRecord(connectionId, existing, patch);
+                    await this.getContainer().items.upsert(buildConnectionTelemetryDocument(merged, pk, ttl));
+                    return;
+                }
+                throw error;
+            }
+        }
+        // First write: create with only the fields supplied in this patch.
+        const created = mergeConnectionTelemetryRecord(connectionId, null, patch);
+        await this.getContainer().items.upsert(buildConnectionTelemetryDocument(created, pk, ttl));
     }
     async getConnectionTelemetry(connectionId) {
         try {
@@ -427,9 +585,67 @@ export class CosmosConnectionStore {
             }
             return {
                 connectionId: resource.connectionId,
-                telemetryClientId: resource.telemetryClientId,
-                connectionSessionId: resource.connectionSessionId,
+                telemetryClientId: isValidTelemetryUuid(resource.telemetryClientId)
+                    ? resource.telemetryClientId.trim().toLowerCase()
+                    : undefined,
+                connectionSessionId: isValidTelemetryUuid(resource.connectionSessionId)
+                    ? resource.connectionSessionId.trim().toLowerCase()
+                    : undefined,
                 updatedAt: resource.updatedAt,
+            };
+        }
+        catch {
+            return null;
+        }
+    }
+    async saveConnectionSuccessPage(record) {
+        const ttlSeconds = Math.max(60, Math.ceil((record.expiresAt - Date.now()) / 1000));
+        const doc = {
+            pk: successPagePartitionKey(record.successId),
+            id: "success",
+            type: "connectionSuccessPage",
+            successId: record.successId,
+            confirmationCode: record.confirmationCode,
+            connectedNames: [...record.connectedNames],
+            failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+            createdAt: record.createdAt,
+            expiresAt: record.expiresAt,
+            ttl: ttlSeconds,
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getConnectionSuccessPage(successId) {
+        const trimmed = successId.trim();
+        if (!trimmed) {
+            return null;
+        }
+        try {
+            const { resource } = await this.getContainer()
+                .item("success", successPagePartitionKey(trimmed))
+                .read();
+            if (!resource || resource.type !== "connectionSuccessPage") {
+                return null;
+            }
+            if (resource.expiresAt <= Date.now()) {
+                try {
+                    await this.getContainer()
+                        .item("success", successPagePartitionKey(trimmed))
+                        .delete();
+                }
+                catch {
+                    // already gone
+                }
+                return null;
+            }
+            return {
+                successId: resource.successId,
+                confirmationCode: resource.confirmationCode,
+                connectedNames: [...(resource.connectedNames ?? [])],
+                failedCompanies: (resource.failedCompanies ?? []).map((failure) => ({
+                    ...failure,
+                })),
+                createdAt: resource.createdAt,
+                expiresAt: resource.expiresAt,
             };
         }
         catch {

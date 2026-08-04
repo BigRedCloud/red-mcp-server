@@ -62,6 +62,7 @@ import {
 import {
   completeConnectionCode,
   getPendingConnection,
+  issueConfirmationCodeForConnectToken,
 } from "./auth/connection_code.js";
 import {
   ensureConnectionStoreInitialized,
@@ -72,11 +73,16 @@ import {
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
 
 import {
+  applyConnectionSuccessPageHeaders,
   renderConnectPage,
   renderConnectionFailedPage,
   renderExpiredLinkPage,
   renderSuccessPage,
 } from "./auth/connection_page.js";
+import {
+  createConnectionSuccessPage,
+  getConnectionSuccessPage,
+} from "./auth/connection_success_session.js";
 
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
@@ -89,35 +95,39 @@ import {
 } from "./edu/brc_edu_synced_store.js";
 import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
 import {
-  downloadWebinarWorkbookForAdmin,
-  loadWebinarWorkbookForAdmin,
-  saveWebinarWorkbookForAdmin,
-  createConfiguredWorkbookBlobAccess,
-} from "./edu/brc_edu_workbook_store.js";
-import {
   authorizeBrcEduAdminRequest,
   BRC_EDU_ADMIN_STAFF_DENIED_MESSAGE,
   getBrcEduAdminProtectedPath,
   type BrcEduAdminAuthResult,
 } from "./edu/brc_edu_admin_auth.js";
-import {
-  BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY,
-  BRC_EDU_UPLOAD_FIELD_NAME,
-  BRC_EDU_UPLOAD_MAX_BYTES,
-  createConfiguredBrcEduBlobUploader,
-  handleBrcEduResourceUpload,
-} from "./edu/brc_edu_upload_store.js";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "./edu/brc_edu_upload_store.js";
 import {
   renderBrcEduStaffDeniedPage,
   renderBrcEduUploadErrorPage,
   renderBrcEduUploadPage,
   renderBrcEduUploadPlainError,
-  renderBrcEduUploadSuccessPage,
+  parseBrcEduAdminView,
+  BRC_EDU_ADMIN_PATH,
   type BrcEduAdminPageAuth,
-  WORKBOOK_API_PATH,
-  WORKBOOK_DOWNLOAD_PATH,
 } from "./edu/brc_edu_upload_page.js";
 import { registerFreshdeskPublicImageRoute } from "./brc-edu/freshdesk/freshdesk-public-image-route.js";
+import {
+  authorizeYouTubeServiceSyncSecret,
+  handleYouTubeAdminListVideos,
+  handleYouTubeAdminManualSync,
+  handleYouTubeServiceSync,
+  handleYouTubeVisibilityUpdate,
+  handleYouTubeWebhookRequest,
+} from "./brc-edu/youtube/youtube-admin-http.js";
+import {
+  authorizeFreshdeskServiceSyncSecret,
+  handleFreshdeskAdminListArticles,
+  handleFreshdeskAdminManualSync,
+  handleFreshdeskServiceSync,
+  handleFreshdeskVisibilityUpdate,
+} from "./brc-edu/freshdesk/freshdesk-admin-http.js";
+import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
+import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
 function createMcpServer(): McpServer {
   const server = createBrcMcpServer();
@@ -323,13 +333,6 @@ const upload = multer({
   },
 });
 
-const eduResourceUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: BRC_EDU_UPLOAD_MAX_BYTES,
-  },
-});
-
 function getBrcEduAdminUploadSecretFromQuery(req: Request): string | undefined {
   const secret = req.query[BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY];
   if (Array.isArray(secret)) {
@@ -461,6 +464,10 @@ app.get("/favicon.ico", (_req, res) => {
   res.type("png").sendFile(RED_FAVICON_PATH);
 });
 app.use(express.urlencoded({ extended: false }));
+app.use(
+  "/internal/brc-edu/youtube/webhook",
+  express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }),
+);
 app.use(express.json());
 
 registerFreshdeskPublicImageRoute(app);
@@ -672,13 +679,27 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         }
       }
 
-      res.send(
-        renderSuccessPage(
-          outcome.connectedCompanies,
-          code,
-          outcome.failedCompanies
-        )
-      );
+      const issued = await issueConfirmationCodeForConnectToken(code);
+      if (!issued) {
+        res
+          .status(400)
+          .send(
+            renderConnectionFailedPage(
+              "Your companies were connected, but Red could not create a confirmation code. Return to chat and ask Red to start a fresh company connection."
+            )
+          );
+        return;
+      }
+
+      const { path: successPath } = await createConnectionSuccessPage({
+        confirmationCode: issued.confirmationCode,
+        connectedNames: outcome.connectedCompanies,
+        failedCompanies: outcome.failedCompanies,
+      });
+
+      applyConnectionSuccessPageHeaders(res);
+      // PRG: opaque success id only — confirmation code stays server-side / page body.
+      res.redirect(303, successPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
 
@@ -832,6 +853,30 @@ app.get("/connect", async (req, res) => {
   });
 });
 
+app.get("/connect/success/:successId", async (req, res) => {
+  await ensureConnectionStoreInitialized();
+  applyConnectionSuccessPageHeaders(res);
+
+  const successId = String(req.params.successId ?? "");
+  const successPage = await getConnectionSuccessPage(successId);
+
+  if (!successPage) {
+    res.status(400).send(renderExpiredLinkPage());
+    return;
+  }
+
+  // Do not log confirmationCode — it must not appear in access/App Insights URLs.
+  res
+    .type("html")
+    .send(
+      renderSuccessPage(
+        successPage.connectedNames,
+        successPage.confirmationCode,
+        successPage.failedCompanies
+      )
+    );
+});
+
 
 app.get("/mcp", async (req: Request, res: Response) => {
   await ensureConnectionStoreInitialized();
@@ -872,7 +917,7 @@ app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
   res.status(result.status).json(result.body);
 });
 
-app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+app.get(BRC_EDU_ADMIN_PATH, (req: Request, res: Response) => {
   const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
   const authResult = authorizeBrcEduAdminHttpRequest(req);
 
@@ -882,172 +927,206 @@ app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
   }
 
   const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
-  res.send(renderBrcEduUploadPage(pageAuth));
+  const view = parseBrcEduAdminView(req.query.view);
+  res.send(renderBrcEduUploadPage(pageAuth, view));
 });
 
-app.get(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
+app.get("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(req.query)) {
+    if (typeof value === "string") {
+      query.set(key, value);
+    } else if (Array.isArray(value) && typeof value[0] === "string") {
+      query.set(key, value[0]);
+    }
+  }
 
+  if (!query.has("view")) {
+    query.set("view", "overview");
+  }
+
+  const suffix = query.toString();
+  res.redirect(302, `${BRC_EDU_ADMIN_PATH}${suffix ? `?${suffix}` : ""}`);
+});
+
+app.get("/internal/brc-edu/resources/upload/workbook", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Workbook editing has been removed. Use YouTube video management." });
+});
+
+app.put("/internal/brc-edu/resources/upload/workbook", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Workbook editing has been removed. Use YouTube video management." });
+});
+
+app.get(
+  "/internal/brc-edu/resources/upload/workbook/download",
+  (_req: Request, res: Response) => {
+    res
+      .status(404)
+      .json({ error: "Workbook download has been removed. Use YouTube video management." });
+  },
+);
+
+app.post("/internal/brc-edu/resources/upload", (_req: Request, res: Response) => {
+  res.status(404).json({ error: "Excel/CSV upload has been removed. Use YouTube video management." });
+});
+
+app.get(CONTENT_OVERVIEW_API_PATH, async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
   if (!authResult.ok) {
     sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
-  const result = await loadWebinarWorkbookForAdmin(createConfiguredWorkbookBlobAccess());
+  const result = await handleContentOverview();
+  res.status(result.status).json(result.body);
+});
 
-  if (!result.ok) {
-    if (result.status === 404) {
-      res.status(200).json({
-        rows: [],
-        etag: "",
-        lastModified: "",
-        rowCount: 0,
-      });
+app.get("/internal/brc-edu/freshdesk/articles", async (req: Request, res: Response) => {
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleFreshdeskAdminListArticles();
+  res.status(result.status).json(result.body);
+});
+
+app.post("/internal/brc-edu/freshdesk/sync", async (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret)
+    ? requestSecret[0]
+    : requestSecret;
+  const serviceAuth = authorizeFreshdeskServiceSyncSecret(
+    typeof normalizedSecret === "string" ? normalizedSecret : undefined,
+  );
+
+  if (serviceAuth.ok) {
+    const result = await handleFreshdeskServiceSync();
+    res.status(result.status).json(result.body);
+    return;
+  }
+
+  const authResult = authorizeBrcEduAdminHttpRequest(req);
+  if (!authResult.ok) {
+    sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+    return;
+  }
+
+  const result = await handleFreshdeskAdminManualSync();
+  res.status(result.status).json(result.body);
+});
+
+app.post(
+  "/internal/brc-edu/freshdesk/articles/:articleId/visibility",
+  async (req: Request, res: Response) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+      sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
       return;
     }
 
-    res.status(result.status).json({ error: result.error });
-    return;
-  }
+    const result = await handleFreshdeskVisibilityUpdate({
+      articleId: String(req.params.articleId ?? ""),
+      body: req.body,
+      excludedBy: authResult.identity,
+    });
+    res.status(result.status).json(result.body);
+  },
+);
 
-  res.json(result.payload);
-});
-
-app.get(WORKBOOK_DOWNLOAD_PATH, async (req: Request, res: Response) => {
+app.get("/internal/brc-edu/youtube/videos", async (req: Request, res: Response) => {
   const authResult = authorizeBrcEduAdminHttpRequest(req);
-
   if (!authResult.ok) {
     sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
-  const result = await downloadWebinarWorkbookForAdmin(
-    createConfiguredWorkbookBlobAccess(),
+  const result = await handleYouTubeAdminListVideos();
+  res.status(result.status).json(result.body);
+});
+
+app.post("/internal/brc-edu/youtube/sync", async (req: Request, res: Response) => {
+  const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
+  const normalizedSecret = Array.isArray(requestSecret)
+    ? requestSecret[0]
+    : requestSecret;
+  const serviceAuth = authorizeYouTubeServiceSyncSecret(
+    typeof normalizedSecret === "string" ? normalizedSecret : undefined,
   );
 
-  if (!result.ok) {
-    res.status(result.status).json({ error: result.error });
+  if (serviceAuth.ok) {
+    const sourceHeader = req.headers["x-red-youtube-sync-source"];
+    const sourceValue = Array.isArray(sourceHeader) ? sourceHeader[0] : sourceHeader;
+    const source =
+      sourceValue === "webhook" || sourceValue === "timer" ? sourceValue : "timer";
+    const result = await handleYouTubeServiceSync(source);
+    res.status(result.status).json(result.body);
     return;
   }
 
-  res.setHeader(
-    "Content-Type",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
-  res.setHeader(
-    "Content-Disposition",
-    'attachment; filename="webinar_video_routing_index.xlsx"',
-  );
-  res.send(result.buffer);
-});
-
-app.put(WORKBOOK_API_PATH, async (req: Request, res: Response) => {
   const authResult = authorizeBrcEduAdminHttpRequest(req);
-
   if (!authResult.ok) {
     sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
     return;
   }
 
-  const body = req.body as {
-    rows?: unknown;
-    ifMatch?: unknown;
-  };
-
-  const rows = Array.isArray(body?.rows) ? body.rows : null;
-  if (!rows) {
-    res.status(400).json({ error: "Workbook rows are required." });
-    return;
-  }
-
-  const result = await saveWebinarWorkbookForAdmin(
-    {
-      rows,
-      ifMatch: typeof body?.ifMatch === "string" ? body.ifMatch : undefined,
-    },
-    createConfiguredWorkbookBlobAccess(),
-  );
-
-  if (!result.ok) {
-    res.status(result.status).json({
-      error: result.error,
-      errors: result.errors,
-    });
-    return;
-  }
-
-  invalidateEduResourcesCache();
-
-  res.json({
-    rows,
-    etag: result.etag,
-    lastModified: result.lastModified,
-    rowCount: result.rowCount,
-    latestBlob: result.latestBlob,
-    archiveBlob: result.archiveBlob,
-    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
-  });
+  const result = await handleYouTubeAdminManualSync();
+  res.status(result.status).json(result.body);
 });
 
-app.post("/internal/brc-edu/resources/upload", (req: Request, res: Response) => {
-  const providedSecret = getBrcEduAdminUploadSecretFromQuery(req);
-  const authResult = authorizeBrcEduAdminHttpRequest(req);
+app.post(
+  "/internal/brc-edu/youtube/videos/:videoId/visibility",
+  async (req: Request, res: Response) => {
+    const authResult = authorizeBrcEduAdminHttpRequest(req);
+    if (!authResult.ok) {
+      sendBrcEduAdminAuthFailure(res, authResult, { asJson: true });
+      return;
+    }
 
-  if (!authResult.ok) {
-    sendBrcEduAdminAuthFailure(res, authResult);
+    const result = await handleYouTubeVisibilityUpdate({
+      videoId: String(req.params.videoId ?? ""),
+      body: req.body,
+      excludedBy: authResult.identity,
+    });
+    res.status(result.status).json(result.body);
+  },
+);
+
+app.all("/internal/brc-edu/youtube/webhook", async (req: Request, res: Response) => {
+  const configuredSecret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim();
+  if (configuredSecret) {
+    const headerSecret = req.headers["x-red-youtube-webhook-secret"];
+    const provided = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
+    const querySecret =
+      typeof req.query.token === "string" ? req.query.token : undefined;
+    const candidate = (provided || querySecret || "").trim();
+    if (candidate !== configuredSecret) {
+      // For hub verification GET, allow hub.verify_token path inside handler.
+      if (req.method.toUpperCase() !== "GET") {
+        res.status(401).send("Unauthorized.");
+        return;
+      }
+    }
+  }
+
+  const handled = handleYouTubeWebhookRequest(req);
+  if (handled.contentType) {
+    res.setHeader("Content-Type", handled.contentType);
+  }
+
+  if (handled.shouldSync) {
+    void handleYouTubeServiceSync("webhook").catch(() => {
+      // Webhook acknowledgements should not fail the publisher; timer sync recovers.
+    });
+  }
+
+  if (handled.status === 204) {
+    res.status(204).end();
     return;
   }
 
-  const pageAuth = brcEduAdminPageAuthFromResult(authResult, providedSecret);
-
-  eduResourceUpload.single(BRC_EDU_UPLOAD_FIELD_NAME)(req, res, (uploadError) => {
-    void (async () => {
-      if (uploadError) {
-        const message =
-          uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE"
-            ? "File exceeds the maximum size of 5 MB."
-            : "Upload failed.";
-
-        res.status(400).send(renderBrcEduUploadErrorPage(message, pageAuth));
-        return;
-      }
-
-      const file = req.file
-        ? {
-            buffer: req.file.buffer,
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size,
-          }
-        : undefined;
-
-      const uploadResult = await handleBrcEduResourceUpload(
-        file,
-        createConfiguredBrcEduBlobUploader(),
-      );
-
-      if (!uploadResult.ok) {
-        res
-          .status(uploadResult.status)
-          .send(renderBrcEduUploadErrorPage(uploadResult.error, pageAuth));
-        return;
-      }
-
-      invalidateEduResourcesCache();
-
-      res.send(
-        renderBrcEduUploadSuccessPage(
-          uploadResult.latestBlob,
-          uploadResult.archiveBlob,
-          pageAuth,
-        ),
-      );
-    })().catch(() => {
-      if (!res.headersSent) {
-        res.status(500).send(renderBrcEduUploadErrorPage("Upload failed.", pageAuth));
-      }
-    });
-  });
+  res.status(handled.status).send(handled.body ?? "");
 });
 
 app.delete("/mcp", async (req: Request, res: Response) => {

@@ -57,18 +57,107 @@ export const redServerConfig = {
 export function getApiKeyExpirationMs() {
     return redServerConfig.apiKeyTtlMinutes * 60 * 1000;
 }
-/**
- * Public base URL for the Red connection page.
- * Must match the MCP server instance Cursor is connected to (same host/port).
- * Set BRC_PUBLIC_BASE_URL in hosted deployments; defaults to localhost for local dev.
- */
-export function getPublicBaseUrl() {
-    const fromEnv = process.env.BRC_PUBLIC_BASE_URL?.trim();
-    if (fromEnv) {
-        return fromEnv.replace(/\/$/, "");
+function resolvePublicBaseUrl(env = process.env) {
+    const connectOverride = env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
+    if (connectOverride) {
+        return {
+            baseUrl: connectOverride.replace(/\/$/, ""),
+            source: "BRC_CONNECT_PUBLIC_BASE_URL",
+        };
     }
-    const port = process.env.PORT ?? "3000";
-    return `http://localhost:${port}`;
+    const websiteHostname = env.WEBSITE_HOSTNAME?.trim().toLowerCase();
+    if (isNonProductionHostedSlot(env) && websiteHostname) {
+        return {
+            baseUrl: `https://${websiteHostname}`,
+            source: "WEBSITE_HOSTNAME_NON_PRODUCTION_SLOT",
+        };
+    }
+    const fromEnv = env.BRC_PUBLIC_BASE_URL?.trim();
+    if (fromEnv) {
+        return {
+            baseUrl: fromEnv.replace(/\/$/, ""),
+            source: "BRC_PUBLIC_BASE_URL",
+        };
+    }
+    if (websiteHostname) {
+        return {
+            baseUrl: `https://${websiteHostname}`,
+            source: "WEBSITE_HOSTNAME",
+        };
+    }
+    const port = env.PORT ?? "3000";
+    return {
+        baseUrl: `http://localhost:${port}`,
+        source: "localhost",
+    };
+}
+export function getPublicBaseUrl() {
+    return resolvePublicBaseUrl().baseUrl;
+}
+/**
+ * Safe connect-URL diagnostics for operators — hostname and which setting won only.
+ * Never includes full URLs with tokens, API keys, connection strings, or Cosmos ids.
+ */
+export function getConnectPublicBaseUrlDiagnostics(env = process.env) {
+    const { baseUrl, source } = resolvePublicBaseUrl(env);
+    let resolvedHost = "";
+    try {
+        resolvedHost = new URL(baseUrl).hostname.toLowerCase();
+    }
+    catch {
+        resolvedHost = "";
+    }
+    return {
+        resolvedHost,
+        source,
+        connectOverridePresent: Boolean(env.BRC_CONNECT_PUBLIC_BASE_URL?.trim()),
+        publicBaseUrlPresent: Boolean(env.BRC_PUBLIC_BASE_URL?.trim()),
+        websiteHostnamePresent: Boolean(env.WEBSITE_HOSTNAME?.trim()),
+        deploymentEnvPresent: Boolean(env.BRC_DEPLOYMENT_ENV?.trim()),
+        nonProductionSlot: isNonProductionHostedSlot(env),
+    };
+}
+/**
+ * True when this process is a non-production Azure slot or staging deployment.
+ * Staging must serve its own /connect page so telemetryClientId is written to
+ * the same store staging MCP later reads.
+ */
+export function isNonProductionHostedSlot(env = process.env) {
+    const slotName = env.WEBSITE_SLOT_NAME?.trim().toLowerCase();
+    if (slotName && slotName !== "production") {
+        return true;
+    }
+    const deploymentEnv = env.BRC_DEPLOYMENT_ENV?.trim().toLowerCase();
+    if (deploymentEnv === "staging") {
+        return true;
+    }
+    const hostname = env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
+    return hostname.includes("-staging.") || hostname.endsWith("-staging.azurewebsites.net");
+}
+/** Safe host comparison for connect-URL vs instance diagnostics (no secrets). */
+export function getConnectUrlHostMismatch() {
+    const configured = process.env.BRC_PUBLIC_BASE_URL?.trim();
+    let configuredHost = "";
+    if (configured) {
+        try {
+            configuredHost = new URL(configured).hostname.toLowerCase();
+        }
+        catch {
+            configuredHost = "";
+        }
+    }
+    const diagnostics = getConnectPublicBaseUrlDiagnostics();
+    const resolvedHost = diagnostics.resolvedHost;
+    const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
+    const usingSlotHostname = Boolean(websiteHostname) && resolvedHost === websiteHostname;
+    return {
+        configuredPublicBaseHostPresent: Boolean(configuredHost),
+        resolvedConnectHostPresent: Boolean(resolvedHost),
+        hostsMatch: Boolean(configuredHost && resolvedHost && configuredHost === resolvedHost),
+        usingSlotHostname,
+        resolvedHost,
+        source: diagnostics.source,
+    };
 }
 export function getMaxBatchItems() {
     return redServerConfig.maxBatchItems;
@@ -85,6 +174,8 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_clear_all_company_api_keys",
     "brc_getting_started",
     "brc_get_deployment_policy",
+    "brc_route_request",
+    "brc_red_help",
     "brc_find_help_resources",
     "brc_get_help_resource_details",
     "brc_open_edu_admin",

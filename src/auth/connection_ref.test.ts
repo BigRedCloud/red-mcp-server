@@ -4,6 +4,8 @@ import test from "node:test";
 process.env.RED_CONNECT_CONNECTION_STORE = "memory";
 process.env.RED_CONNECT_HTTP_MODE = "true";
 
+import { seedClaimableConnection } from "./connection_test_helpers.js";
+
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -14,20 +16,6 @@ async function loadModules() {
   const mcpHttpSession = await import("./mcp_http_session.js");
   const shared = await import("../shared.js");
   return { ...connectionStore, ...connectionRef, ...mcpHttpSession, ...shared };
-}
-
-async function seedConnection(connectionId: string, companies: string[]) {
-  const { getConnectionStore } = await loadModules();
-  const store = getConnectionStore();
-  await store.saveConnectedCompanies(
-    connectionId,
-    companies.map((companyName) => ({
-      companyName,
-      apiKey: `test-api-key-${companyName}`,
-      expiresAt: Date.now() + 60_000,
-      credentialValidatedAt: Date.now(),
-    }))
-  );
 }
 
 test("confirm issues connectionRef and rotated Vibe session can reload companies with it", async () => {
@@ -41,20 +29,28 @@ test("confirm issues connectionRef and rotated Vibe session can reload companies
   } = await loadModules();
 
   const store = getConnectionStore();
-  const code = uniqueId("code");
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
   const connectionId = uniqueId("connection");
   const confirmSession = uniqueId("vibe-session-confirm");
   const rotatedSession = uniqueId("vibe-session-next");
 
-  await store.createPendingConnection({
-    code,
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
     connectionId,
-    expiresAt: Date.now() + 60_000,
+    companies: [
+      { companyName: "Company A", apiKey: "test-api-key-Company A" },
+      { companyName: "Company B", apiKey: "test-api-key-Company B" },
+      { companyName: "Company C", apiKey: "test-api-key-Company C" },
+      { companyName: "Company D", apiKey: "test-api-key-Company D" },
+    ],
   });
-  await store.completePendingConnection(code);
-  await seedConnection(connectionId, ["Company A", "Company B", "Company C", "Company D"]);
 
-  const result = await claimConnectionCodeForSession(code, confirmSession);
+  const result = await claimConnectionCodeForSession(
+    confirmationCode,
+    confirmSession
+  );
   assert.equal(isConnectionRefFormat(result.connectionRef), true);
   assert.deepEqual(result.companyNames.sort(), [
     "Company A",
@@ -93,20 +89,20 @@ test("rotated session without connectionRef or stable client identity stays unbo
   } = await loadModules();
 
   const store = getConnectionStore();
-  const code = uniqueId("code");
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
   const connectionId = uniqueId("connection");
   const confirmSession = uniqueId("session-confirm");
   const rotatedSession = uniqueId("session-rotated");
 
-  await store.createPendingConnection({
-    code,
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
     connectionId,
-    expiresAt: Date.now() + 60_000,
+    companies: [{ companyName: "Company C", apiKey: "test-api-key-Company C" }],
   });
-  await store.completePendingConnection(code);
-  await seedConnection(connectionId, ["Company C"]);
 
-  await claimConnectionCodeForSession(code, confirmSession);
+  await claimConnectionCodeForSession(confirmationCode, confirmSession);
 
   const scope = await prepareHttpToolSessionScope(rotatedSession, new Map());
   assert.equal(scope.resolution.connectionId, null);
@@ -127,8 +123,23 @@ test("different connectionRef cannot access another connection", async () => {
 
   const connectionA = uniqueId("connection-a");
   const connectionB = uniqueId("connection-b");
-  await seedConnection(connectionA, ["Company A"]);
-  await seedConnection(connectionB, ["Company B"]);
+  const store = getConnectionStore();
+  await store.saveConnectedCompanies(connectionA, [
+    {
+      companyName: "Company A",
+      apiKey: "test-api-key-Company A",
+      expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
+    },
+  ]);
+  await store.saveConnectedCompanies(connectionB, [
+    {
+      companyName: "Company B",
+      apiKey: "test-api-key-Company B",
+      expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
+    },
+  ]);
 
   const refA = await issueConnectionRef(connectionA);
   const refB = await issueConnectionRef(connectionB);
@@ -166,10 +177,17 @@ test("expired connectionRef fails safely", async () => {
   } = await loadModules();
 
   const connectionId = uniqueId("connection");
-  await seedConnection(connectionId, ["Company A"]);
+  const store = getConnectionStore();
+  await store.saveConnectedCompanies(connectionId, [
+    {
+      companyName: "Company A",
+      apiKey: "test-api-key-Company A",
+      expiresAt: Date.now() + 60_000,
+      credentialValidatedAt: Date.now(),
+    },
+  ]);
 
   const { connectionRef } = await issueConnectionRef(connectionId);
-  const store = getConnectionStore();
 
   await store.createConnectionRef({
     ref: connectionRef,
@@ -190,7 +208,6 @@ test("expired connectionRef fails safely", async () => {
 
 test("audit log remains scoped to resolved connection across rotated MCP sessions", async () => {
   const {
-    auditEntryMatchesScope,
     recordRedAuditEntry,
     getRedAuditLog,
     runWithHttpToolSession,
@@ -203,20 +220,20 @@ test("audit log remains scoped to resolved connection across rotated MCP session
   __resetRedAuditLogForTests();
 
   const store = getConnectionStore();
-  const code = uniqueId("code");
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
   const connectionId = uniqueId("connection");
   const sessionA = uniqueId("session-a");
   const sessionB = uniqueId("session-b");
 
-  await store.createPendingConnection({
-    code,
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
     connectionId,
-    expiresAt: Date.now() + 60_000,
+    companies: [{ companyName: "Company C", apiKey: "test-api-key-Company C" }],
   });
-  await store.completePendingConnection(code);
-  await seedConnection(connectionId, ["Company C"]);
 
-  const claim = await claimConnectionCodeForSession(code, sessionA);
+  const claim = await claimConnectionCodeForSession(confirmationCode, sessionA);
 
   const scopeA = await prepareHttpToolSessionScope(
     sessionA,

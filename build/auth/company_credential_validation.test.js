@@ -8,6 +8,24 @@ import { claimConnectionCodeForSession, getConnectionStore, } from "./connection
 import { CompanyNotConnectedError, buildCompanyCredentialInvalidResponse, buildCompanyNotConnectedResponse, } from "./company_connection_errors.js";
 import { brcFetch, jsonResponse, listConnectedCompanyNames, runWithSessionKeyStore, setApiKeyForCompany, } from "../shared.js";
 import { hydrateSessionKeyStoreFromConnectionStore } from "./connection_persistence.js";
+async function seedClaimableAfterValidation(args) {
+    const store = getConnectionStore();
+    await store.createPendingConnection({
+        code: args.connectToken,
+        connectionId: args.connectionId,
+        expiresAt: Date.now() + 60_000,
+    });
+    await store.completePendingConnection(args.connectToken);
+    await validateAndPersistConnectedCompanies({
+        connectionId: args.connectionId,
+        companies: args.companies,
+        expiresAt: Date.now() + 60_000,
+    });
+    const issued = await store.issueConfirmationCode(args.connectToken, args.confirmationCode);
+    if (!issued?.confirmationCode) {
+        throw new Error("Failed to issue confirmation code in test seed.");
+    }
+}
 function uniqueId(prefix) {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -91,25 +109,20 @@ test("claim returns connected and failed companies separately", async () => {
         "Company A": "invalid_or_expired_api_key",
         "Company B": "valid",
     });
-    const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionId = uniqueId("session");
-    await store.createPendingConnection({
-        code,
-        connectionId,
-        expiresAt: Date.now() + 60_000,
-    });
-    await store.completePendingConnection(code);
-    await validateAndPersistConnectedCompanies({
+    await seedClaimableAfterValidation({
+        connectToken,
+        confirmationCode,
         connectionId,
         companies: [
             { companyName: "Company A", apiKey: "bad-key" },
             { companyName: "Company B", apiKey: "good-key" },
         ],
-        expiresAt: Date.now() + 60_000,
     });
-    const result = await claimConnectionCodeForSession(code, sessionId);
+    const result = await claimConnectionCodeForSession(confirmationCode, sessionId);
     assert.deepEqual(result.connectedCompanies, ["Company B"]);
     assert.equal(result.failedCompanies.length, 1);
     assert.equal(result.failedCompanies[0]?.companyName, "Company A");
@@ -213,24 +226,19 @@ test("confirm json response includes connectedCompanies and failedCompanies with
         "Company A": "invalid_or_expired_api_key",
         "Company B": "valid",
     });
-    const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
-    await store.createPendingConnection({
-        code,
-        connectionId,
-        expiresAt: Date.now() + 60_000,
-    });
-    await store.completePendingConnection(code);
-    await validateAndPersistConnectedCompanies({
+    await seedClaimableAfterValidation({
+        connectToken,
+        confirmationCode,
         connectionId,
         companies: [
             { companyName: "Company A", apiKey: "bad-key" },
             { companyName: "Company B", apiKey: "good-key" },
         ],
-        expiresAt: Date.now() + 60_000,
     });
-    const result = await claimConnectionCodeForSession(code, uniqueId("session"));
+    const result = await claimConnectionCodeForSession(confirmationCode, uniqueId("session"));
     const payload = jsonResponse({
         connectedCompanies: result.connectedCompanies,
         failedCompanies: result.failedCompanies,
@@ -346,25 +354,20 @@ test("confirm after CSV upload excludes invalid company before any tool call", a
     resetCompanyCredentialValidator();
     resetValidationFetch();
     mockBrcValidationFetchForKeys(new Set(["good-key"]), new Set(["bad-key"]));
-    const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionId = uniqueId("session");
-    await store.createPendingConnection({
-        code,
-        connectionId,
-        expiresAt: Date.now() + 60_000,
-    });
-    await store.completePendingConnection(code);
-    await validateAndPersistConnectedCompanies({
+    await seedClaimableAfterValidation({
+        connectToken,
+        confirmationCode,
         connectionId,
         companies: [
             { companyName: "Company A", apiKey: "bad-key" },
             { companyName: "Company B", apiKey: "good-key" },
         ],
-        expiresAt: Date.now() + 60_000,
     });
-    const result = await claimConnectionCodeForSession(code, sessionId);
+    const result = await claimConnectionCodeForSession(confirmationCode, sessionId);
     assert.deepEqual(result.connectedCompanies, ["Company B"]);
     assert.equal(result.failedCompanies.length, 1);
     assert.equal(result.failedCompanies[0]?.companyName, "Company A");
@@ -379,14 +382,15 @@ test("claim revalidates stale stored credentials before returning connected comp
     resetValidationFetch();
     mockBrcValidationFetchForKeys(new Set(["good-key"]), new Set(["bad-key-stored"]));
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     await store.createPendingConnection({
-        code,
+        code: connectToken,
         connectionId,
         expiresAt: Date.now() + 60_000,
     });
-    await store.completePendingConnection(code);
+    await store.completePendingConnection(connectToken);
     await store.saveConnectedCompanies(connectionId, [
         {
             companyName: "Company A",
@@ -399,7 +403,8 @@ test("claim revalidates stale stored credentials before returning connected comp
             expiresAt: Date.now() + 60_000,
         },
     ]);
-    const result = await claimConnectionCodeForSession(code, uniqueId("session"));
+    await store.issueConfirmationCode(connectToken, confirmationCode);
+    const result = await claimConnectionCodeForSession(confirmationCode, uniqueId("session"));
     assert.deepEqual(result.connectedCompanies, ["Company B"]);
     assert.equal(result.failedCompanies.length, 1);
     assert.equal(result.failedCompanies[0]?.companyName, "Company A");

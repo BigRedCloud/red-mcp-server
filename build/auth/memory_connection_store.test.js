@@ -68,3 +68,18 @@ test("MemoryConnectionStore only returns recent client claims", async () => {
     });
     assert.equal(await store.getRecentClientClaim(clientKey, 1), null);
 });
+test("MemoryConnectionStore preserves telemetryClientId across session-only update", async () => {
+    const store = new MemoryConnectionStore();
+    const connectionId = uniqueId("connection");
+    const clientId = "550e8400-e29b-41d4-a716-446655440000";
+    const sessionId = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+    await store.saveConnectionTelemetry(connectionId, {
+        telemetryClientId: clientId,
+    });
+    await store.saveConnectionTelemetry(connectionId, {
+        connectionSessionId: sessionId,
+    });
+    const loaded = await store.getConnectionTelemetry(connectionId);
+    assert.equal(loaded?.telemetryClientId, clientId);
+    assert.equal(loaded?.connectionSessionId, sessionId);
+});

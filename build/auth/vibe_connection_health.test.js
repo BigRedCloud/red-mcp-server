@@ -4,6 +4,7 @@ process.env.RED_CONNECT_CONNECTION_STORE = "memory";
 process.env.RED_CONNECT_HTTP_MODE = "true";
 import { CONNECTION_REF_INVALID_MESSAGE } from "./connection_ref.js";
 import { assessVibeConnectionHealth, buildMcpSessionDiagnostic, } from "./mcp_http_session.js";
+import { seedClaimableConnection } from "./connection_test_helpers.js";
 function uniqueId(prefix) {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -98,25 +99,18 @@ test("invalid expired connectionRef returns clear reconnect message", async () =
 test("valid connectionRef across rotated MCP sessions never falls back to global credentials", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, prepareHttpToolSessionScope, runWithHttpToolSession, runWithActiveConnectionRef, listConnectedCompanyNames, getCompanyApiContexts, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const confirmSession = uniqueId("session-confirm");
     const rotatedSession = uniqueId("session-rotated");
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const claim = await claimConnectionCodeForSession(code, confirmSession);
+    const claim = await claimConnectionCodeForSession(confirmationCode, confirmSession);
     const foreignScope = await prepareHttpToolSessionScope(uniqueId("foreign-session"), new Map(), undefined, undefined);
     await runWithHttpToolSession(foreignScope, async () => {
         assert.deepEqual(listConnectedCompanyNames(), []);
@@ -132,25 +126,18 @@ test("tool-level diagnostics log for session-bound tools without connectionRef",
     process.env.RED_CONNECT_SESSION_DEBUG = "true";
     const { getConnectionStore, claimConnectionCodeForSession, runHttpToolSessionFromExtra, } = await loadModules();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionId = uniqueId("session-a");
     const keyStore = new Map();
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [{ companyName: "Company A", apiKey: "test-api-key-a" }],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    await claimConnectionCodeForSession(code, sessionId);
+    await claimConnectionCodeForSession(confirmationCode, sessionId);
     const logs = [];
     const originalInfo = console.info;
     console.info = (...args) => {

@@ -21,7 +21,7 @@ test("brc_open_edu_admin description forbids exposing the admin secret", () => {
 test("brc_open_edu_admin only returns the protected URL without secrets", async () => {
     restoreEnv();
     process.env.BRC_EDU_ADMIN_PUBLIC_URL =
-        "https://red.example.com/internal/brc-edu/resources/upload";
+        "https://red.example.com/internal/brc-edu/admin";
     process.env.BRC_EDU_ADMIN_UPLOAD_SECRET = "must-never-appear-in-mcp-output";
     const server = createBrcMcpServer();
     const registered = new Map();
@@ -43,8 +43,8 @@ test("brc_open_edu_admin only returns the protected URL without secrets", async 
     const result = (await tool.handler({}));
     const text = result.content.map((part) => part.text).join("\n");
     const parsed = JSON.parse(text);
-    assert.equal(parsed.adminUrl, "https://red.example.com/internal/brc-edu/resources/upload");
-    assert.equal(parsed.protectedPath, "/internal/brc-edu/resources/upload");
+    assert.equal(parsed.adminUrl, "https://red.example.com/internal/brc-edu/admin");
+    assert.equal(parsed.protectedPath, "/internal/brc-edu/admin");
     assert.match(parsed.customerFacingMarkdown, /\[Open Red's BRC Edu admin page\]/);
     assert.equal(text.includes("must-never-appear-in-mcp-output"), false);
     assert.equal(text.includes(BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY), false);

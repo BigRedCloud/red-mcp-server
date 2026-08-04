@@ -1,6 +1,10 @@
 node_modules/
 build/
-functions/
+functions/*
+!functions/brc-edu-resource-processor/
+!functions/brc-edu-resource-processor/**
+functions/brc-edu-resource-processor/node_modules/
+functions/brc-edu-resource-processor/local.settings.json
 logs/
 .env
 .env.*

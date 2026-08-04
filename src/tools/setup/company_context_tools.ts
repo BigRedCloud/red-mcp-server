@@ -30,6 +30,7 @@ import {
   getApiKeyExpirationMs,
   getPublicBaseUrl,
   getConnectUrlHostMismatch,
+  getConnectPublicBaseUrlDiagnostics,
 } from "../../config/server_config.js";
 import {
   claimConnectionCodeForSession,
@@ -74,10 +75,18 @@ export function registerCompanyContextTools(server: ServerType) {
 
       try {
         const hostMismatch = getConnectUrlHostMismatch();
+        const urlDiagnostics = getConnectPublicBaseUrlDiagnostics();
         console.info(
           "Red connect URL host check:",
           JSON.stringify({
             ...hostMismatch,
+            resolvedHost: urlDiagnostics.resolvedHost,
+            source: urlDiagnostics.source,
+            connectOverridePresent: urlDiagnostics.connectOverridePresent,
+            publicBaseUrlPresent: urlDiagnostics.publicBaseUrlPresent,
+            websiteHostnamePresent: urlDiagnostics.websiteHostnamePresent,
+            deploymentEnvPresent: urlDiagnostics.deploymentEnvPresent,
+            nonProductionSlot: urlDiagnostics.nonProductionSlot,
             targetEnvironment: getDeploymentEnvironmentLabel(),
             targetStoreName: getConnectionStoreTargetName(),
           })

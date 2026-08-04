@@ -98,9 +98,10 @@ Key shared modules:
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
 - `src/telemetry/` — anonymous client/session identity and platform detection for hosted operational telemetry
-- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, screenshots, and unified help search
-- `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
+- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, YouTube catalogue sync, screenshots, and unified help search
+- `src/edu/` — shared help-resource loading, enrichment, and storage configuration
 - `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
+- `functions/brc-edu-resource-processor/` — Azure Functions for hourly YouTube reconciliation and optional YouTube webhook forwarding
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -327,7 +328,7 @@ For a detailed developer guide to the source layout and MCP tool coverage, see [
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
 - **Audit and session** — session connection management and the session audit log.
-- **Help and training** — Freshdesk articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
+- **Help and training** — Freshdesk articles, customer documentation, recorded webinars, Big Red Cloud YouTube videos, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
 
@@ -350,10 +351,31 @@ For a specific VAT-sensitive workflow (sales invoice, purchase, cash receipt, st
 
 Red includes two read-only MCP tools for Big Red Cloud help and training questions:
 
-- `brc_find_help_resources` — searches official articles, customer documentation, recorded webinars, and upcoming webinars.
+- `brc_find_help_resources` — searches official articles, customer documentation, recorded webinars, Big Red Cloud YouTube videos, and upcoming webinars.
 - `brc_get_help_resource_details` — returns the full details for a selected resource, including step-by-step guidance and relevant screenshot links where available.
 
 These tools do not require a connected Big Red Cloud company.
+
+### YouTube catalogue synchronisation (operators)
+
+Hosted Red deployments can synchronise the Big Red Cloud YouTube channel automatically:
+
+- Videos on webinar playlist `PL2rEGgtssfJ9w74MU2yi88FIUB345pp2D` are classified as **recorded webinars**.
+- Other channel uploads are classified as **Big Red Cloud videos**.
+- Staff can exclude or restore videos on the protected BRC Edu admin page; exclusions are keyed by YouTube `videoId` and survive every future sync.
+- Excluded videos remain visible (greyed out) to staff but are never returned to customers in help search.
+- Authoritative JSON lives in Azure Blob Storage under `brc-edu/youtube/` (`youtube-videos.json`, `video-overrides.json`, `effective-video-catalog.json`).
+- An Azure Function timer (default hourly, `BRC_YOUTUBE_SYNC_SCHEDULE`) and optional YouTube PubSubHubbub webhook keep the catalogue fresh; staff can also click **Sync YouTube now**.
+
+Required Azure settings are listed in `.env.example` (YouTube API key, channel id, blob paths, sync secret, webhook secret). Prefer App Service / Function App application settings or Key Vault — never commit real secrets.
+
+**Local test sketch**
+
+1. Configure storage + YouTube env vars in `.env` (example values only in `.env.example`).
+2. Run `npm run build` and start Red with `npm run start`.
+3. Sign in to the BRC Edu admin page, click **Sync YouTube now**, then confirm videos appear.
+4. Exclude a video and confirm help search omits it while the admin list still shows it greyed out.
+5. Deploy to staging first; confirm timer settings on the Function App before production.
 
 Help answers may include:
 

@@ -1,47 +1,86 @@
 import { escapeHtml } from "../auth/connection_page.js";
 import { RED_LOGO_URL } from "../auth/red_assets.js";
+import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "./brc_edu_upload_store.js";
 import {
-  BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY,
-  BRC_EDU_UPLOAD_FIELD_NAME,
-} from "./brc_edu_upload_store.js";
+  renderYouTubeAdminSectionHtml,
+  youtubeAdminSectionCss,
+  YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS,
+  youtubeSyncApiUrl,
+} from "../brc-edu/youtube/youtube-admin-page.js";
+import {
+  renderFreshdeskAdminSectionHtml,
+  freshdeskAdminSectionCss,
+  FRESHDESK_ADMIN_REQUIRED_ELEMENT_IDS,
+  freshdeskSyncApiUrl,
+} from "../brc-edu/freshdesk/freshdesk-admin-page.js";
+import { CONTENT_OVERVIEW_API_PATH } from "../brc-edu/content/content-overview-service.js";
 
 const BRC_RED = "#b5121b";
-const BRC_RED_DARK = "#8f0e16";
-const UPLOAD_PATH = "/internal/brc-edu/resources/upload";
-const WORKBOOK_API_PATH = `${UPLOAD_PATH}/workbook`;
-const WORKBOOK_DOWNLOAD_PATH = `${UPLOAD_PATH}/workbook/download`;
 
-/** Element IDs the admin page script requires at init time. */
-export const BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS = [
-  "admin-status",
-  "meta-updated",
-  "meta-count",
-  "unsaved-badge",
-  "resource-rows",
-  "refresh-btn",
-  "download-btn",
-  "upload-excel-btn",
-  "add-btn",
-  "save-btn",
-  "cancel-btn",
-] as const;
+export const BRC_EDU_ADMIN_PATH = "/internal/brc-edu/admin";
+/** @deprecated Legacy path — redirects to BRC_EDU_ADMIN_PATH. */
+export const BRC_EDU_UPLOAD_PATH = "/internal/brc-edu/resources/upload";
 
-/** Element IDs referenced by the admin script but safe to omit. */
-export const BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS = [
-  BRC_EDU_UPLOAD_FIELD_NAME,
-] as const;
+export type BrcEduAdminView = "overview" | "youtube" | "freshdesk";
 
-export function getAdminPageScriptReferencedElementIds(): string[] {
-  return [
-    ...BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS,
-    ...BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS,
-  ];
+export function parseBrcEduAdminView(value: unknown): BrcEduAdminView {
+  if (value === "youtube" || value === "freshdesk" || value === "overview") {
+    return value;
+  }
+  return "overview";
 }
 
-/** Returns every `id="..."` value appearing in HTML before the admin init script. */
+/** Element IDs the overview view requires. */
+export const CONTENT_OVERVIEW_REQUIRED_ELEMENT_IDS = [
+  "overview-status",
+  "overview-refresh-summary",
+  "overview-count-total",
+  "overview-count-freshdesk",
+  "overview-count-youtube",
+  "overview-count-webinars",
+  "overview-count-excluded",
+  "overview-topics",
+  "overview-refresh-btn",
+  "overview-sync-freshdesk-btn",
+  "overview-sync-youtube-btn",
+] as const;
+
+export const BRC_EDU_UPLOAD_ADMIN_REQUIRED_ELEMENT_IDS = [
+  ...CONTENT_OVERVIEW_REQUIRED_ELEMENT_IDS,
+  ...YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS,
+  ...FRESHDESK_ADMIN_REQUIRED_ELEMENT_IDS,
+] as const;
+
+export const BRC_EDU_UPLOAD_ADMIN_OPTIONAL_ELEMENT_IDS = [] as const;
+
+export function getAdminPageScriptReferencedElementIds(
+  view: BrcEduAdminView = "overview",
+): string[] {
+  if (view === "youtube") {
+    return [...YOUTUBE_ADMIN_REQUIRED_ELEMENT_IDS];
+  }
+  if (view === "freshdesk") {
+    return [...FRESHDESK_ADMIN_REQUIRED_ELEMENT_IDS];
+  }
+  return [...CONTENT_OVERVIEW_REQUIRED_ELEMENT_IDS];
+}
+
+/** Returns every `id="..."` value appearing in HTML before the first admin script. */
 export function findAdminPageElementIdsBeforeScript(html: string): Set<string> {
-  const scriptMarker = "function requireElement(id)";
-  const scriptIndex = html.indexOf(scriptMarker);
+  const markers = [
+    "function requireOverviewElement(id)",
+    "function requireYoutubeElement(id)",
+    "function requireFreshdeskElement(id)",
+  ];
+
+  let scriptIndex = -1;
+  for (const marker of markers) {
+    const index = html.indexOf(marker);
+    if (index >= 0 && (scriptIndex < 0 || index < scriptIndex)) {
+      scriptIndex = index;
+    }
+  }
+
   const markup =
     scriptIndex >= 0 ? html.slice(0, scriptIndex) : html.slice(0, html.indexOf("</main>"));
 
@@ -53,6 +92,281 @@ export function findAdminPageElementIdsBeforeScript(html: string): Set<string> {
   }
 
   return ids;
+}
+
+/** How the admin page authenticates subsequent API calls. */
+export type BrcEduAdminPageAuth =
+  | { mode: "session" }
+  | { mode: "secret"; secret: string };
+
+function withOptionalSecretQuery(path: string, auth: BrcEduAdminPageAuth): string {
+  if (auth.mode !== "secret") {
+    return path;
+  }
+
+  return `${path}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(auth.secret)}`;
+}
+
+function adminPageUrl(
+  auth: BrcEduAdminPageAuth,
+  view: BrcEduAdminView = "overview",
+): string {
+  const base =
+    view === "overview"
+      ? BRC_EDU_ADMIN_PATH
+      : `${BRC_EDU_ADMIN_PATH}?view=${encodeURIComponent(view)}`;
+
+  if (auth.mode !== "secret") {
+    return base;
+  }
+
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(auth.secret)}`;
+}
+
+function resolvePageAuth(secretOrAuth?: string | BrcEduAdminPageAuth): BrcEduAdminPageAuth {
+  if (!secretOrAuth) {
+    return { mode: "session" };
+  }
+
+  if (typeof secretOrAuth === "string") {
+    return { mode: "secret", secret: secretOrAuth };
+  }
+
+  return secretOrAuth;
+}
+
+function renderAdminNav(auth: BrcEduAdminPageAuth, view: BrcEduAdminView): string {
+  const items: Array<{ view: BrcEduAdminView; label: string }> = [
+    { view: "overview", label: "Content overview" },
+    { view: "youtube", label: "YouTube videos" },
+    { view: "freshdesk", label: "Freshdesk articles" },
+  ];
+
+  return `
+      <nav class="admin-nav" aria-label="Content administration">
+        ${items
+          .map((item) => {
+            const href = escapeHtml(adminPageUrl(auth, item.view));
+            const active = item.view === view;
+            return `<a href="${href}" class="admin-nav-link${active ? " nav-active" : ""}"${
+              active ? ' aria-current="page"' : ""
+            }>${escapeHtml(item.label)}</a>`;
+          })
+          .join("")}
+      </nav>`;
+}
+
+function renderOverviewSectionHtml(auth: BrcEduAdminPageAuth): string {
+  const overviewUrl = withOptionalSecretQuery(CONTENT_OVERVIEW_API_PATH, auth);
+  const freshdeskSyncUrl = freshdeskSyncApiUrl(auth);
+  const youtubeSyncUrl = youtubeSyncApiUrl(auth);
+
+  return `
+      <div class="card instructions">
+        <h2>How Red help content works</h2>
+        <ol class="lead">
+          <li>Red uses Freshdesk articles and YouTube videos as help content for customers.</li>
+          <li>Content below is grouped by topic from structured help-routing and folder categories.</li>
+          <li>Excluding an item on the YouTube or Freshdesk pages prevents Red from presenting it to customers.</li>
+          <li>Source content remains synchronised and can be restored later.</li>
+        </ol>
+      </div>
+
+      <div class="card" id="content-overview-card">
+        <h2>Visible content by topic</h2>
+        <div class="meta-bar">
+          <span><strong>Total visible:</strong> <span id="overview-count-total">0</span></span>
+          <span><strong>Freshdesk:</strong> <span id="overview-count-freshdesk">0</span></span>
+          <span><strong>YouTube videos:</strong> <span id="overview-count-youtube">0</span></span>
+          <span><strong>Recorded webinars:</strong> <span id="overview-count-webinars">0</span></span>
+          <span><strong>Excluded:</strong> <span id="overview-count-excluded">0</span></span>
+        </div>
+        <p class="hint" id="overview-refresh-summary">Last content refresh: not yet available</p>
+        <div id="overview-status" class="notice" style="display:none" role="status" aria-live="polite"></div>
+        <div class="toolbar">
+          <button type="button" class="btn" id="overview-refresh-btn">Refresh overview</button>
+          <button type="button" class="btn btn-primary" id="overview-sync-freshdesk-btn">Sync Freshdesk</button>
+          <button type="button" class="btn btn-primary" id="overview-sync-youtube-btn">Sync YouTube</button>
+        </div>
+        <div id="overview-topics" class="overview-topics"></div>
+      </div>
+
+      <script>
+(() => {
+  const overviewApiUrl = ${JSON.stringify(overviewUrl)};
+  const freshdeskSyncApiUrl = ${JSON.stringify(freshdeskSyncUrl)};
+  const youtubeSyncApiUrl = ${JSON.stringify(youtubeSyncUrl)};
+
+  function requireOverviewElement(id) {
+    const element = document.getElementById(id);
+    if (!element) {
+      throw new Error("Overview admin element missing: " + id);
+    }
+    return element;
+  }
+
+  const statusEl = requireOverviewElement("overview-status");
+  const summaryEl = requireOverviewElement("overview-refresh-summary");
+  const totalEl = requireOverviewElement("overview-count-total");
+  const freshdeskEl = requireOverviewElement("overview-count-freshdesk");
+  const youtubeEl = requireOverviewElement("overview-count-youtube");
+  const webinarsEl = requireOverviewElement("overview-count-webinars");
+  const excludedEl = requireOverviewElement("overview-count-excluded");
+  const topicsEl = requireOverviewElement("overview-topics");
+  const refreshBtn = requireOverviewElement("overview-refresh-btn");
+  const syncFreshdeskBtn = requireOverviewElement("overview-sync-freshdesk-btn");
+  const syncYoutubeBtn = requireOverviewElement("overview-sync-youtube-btn");
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function setStatus(kind, message) {
+    statusEl.style.display = "block";
+    statusEl.className = "notice " + kind;
+    statusEl.textContent = message;
+  }
+
+  function formatDate(value) {
+    if (!value) return "—";
+    try {
+      return new Date(value).toLocaleString();
+    } catch {
+      return String(value);
+    }
+  }
+
+  function typeLabel(type) {
+    if (type === "freshdesk_article") return "Freshdesk article";
+    if (type === "recorded_webinar") return "Recorded webinar";
+    return "YouTube video";
+  }
+
+  function renderTopics(payload) {
+    const topics = Array.isArray(payload.topics) ? payload.topics : [];
+    if (!topics.length) {
+      topicsEl.innerHTML = '<p class="hint">No visible Red help content is available yet. Run a Freshdesk or YouTube sync.</p>';
+      return;
+    }
+
+    topicsEl.innerHTML = topics.map((topic) => {
+      const counts = topic.counts || {};
+      const summaryParts = [];
+      if (counts.freshdeskArticles) {
+        summaryParts.push(counts.freshdeskArticles + " Freshdesk article" + (counts.freshdeskArticles === 1 ? "" : "s"));
+      }
+      if (counts.youtubeVideos) {
+        summaryParts.push(counts.youtubeVideos + " YouTube video" + (counts.youtubeVideos === 1 ? "" : "s"));
+      }
+      if (counts.recordedWebinars) {
+        summaryParts.push(counts.recordedWebinars + " recorded webinar" + (counts.recordedWebinars === 1 ? "" : "s"));
+      }
+
+      const items = Array.isArray(topic.items) ? topic.items : [];
+      const itemsHtml = items.map((item) => {
+        const link = item.url
+          ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">Open</a>'
+          : "";
+        const manage = item.manageUrl
+          ? '<a href="' + escapeHtml(item.manageUrl) + '">Manage</a>'
+          : "";
+        return (
+          '<li class="overview-item">' +
+          "<div><strong>" + escapeHtml(item.title) + "</strong>" +
+          '<div class="hint">' + escapeHtml(typeLabel(item.type)) +
+          " · " + escapeHtml(item.source) +
+          (item.updatedAt ? " · " + escapeHtml(formatDate(item.updatedAt)) : "") +
+          "</div>" +
+          (item.description ? '<div class="hint">' + escapeHtml(item.description) + "</div>" : "") +
+          '<div class="overview-item-actions">' + [link, manage].filter(Boolean).join(" · ") + "</div>" +
+          "</div></li>"
+        );
+      }).join("");
+
+      return (
+        '<details class="overview-topic">' +
+        '<summary><span class="overview-topic-title">' + escapeHtml(topic.label) +
+        '</span><span class="hint">' + escapeHtml(summaryParts.join(" · ") || "0 items") +
+        "</span></summary>" +
+        '<ul class="overview-item-list">' + itemsHtml + "</ul>" +
+        "</details>"
+      );
+    }).join("");
+  }
+
+  function applyPayload(payload) {
+    const counts = payload.counts || {};
+    totalEl.textContent = String(counts.totalVisible ?? 0);
+    freshdeskEl.textContent = String(counts.freshdeskArticles ?? 0);
+    youtubeEl.textContent = String(counts.youtubeVideos ?? 0);
+    webinarsEl.textContent = String(counts.recordedWebinars ?? 0);
+    excludedEl.textContent = String(counts.excluded ?? 0);
+
+    if (payload.lastContentRefreshAt) {
+      summaryEl.textContent = "Last content refresh: " + formatDate(payload.lastContentRefreshAt);
+    } else {
+      summaryEl.textContent = "Last content refresh: not yet available";
+    }
+
+    renderTopics(payload);
+  }
+
+  async function loadOverview() {
+    try {
+      const response = await fetch(overviewApiUrl, { credentials: "same-origin" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setStatus("error", payload.error || "Could not load content overview.");
+        return;
+      }
+      applyPayload(payload);
+      statusEl.style.display = "none";
+    } catch {
+      setStatus("error", "Could not load content overview.");
+    }
+  }
+
+  async function runSync(url, label) {
+    syncFreshdeskBtn.disabled = true;
+    syncYoutubeBtn.disabled = true;
+    refreshBtn.disabled = true;
+    setStatus("warning", "Synchronising " + label + "…");
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setStatus("error", payload.error || label + " sync failed.");
+        return;
+      }
+      setStatus("success", label + " synchronised.");
+      await loadOverview();
+    } catch {
+      setStatus("error", label + " sync failed.");
+    } finally {
+      syncFreshdeskBtn.disabled = false;
+      syncYoutubeBtn.disabled = false;
+      refreshBtn.disabled = false;
+    }
+  }
+
+  refreshBtn.addEventListener("click", () => { void loadOverview(); });
+  syncFreshdeskBtn.addEventListener("click", () => { void runSync(freshdeskSyncApiUrl, "Freshdesk"); });
+  syncYoutubeBtn.addEventListener("click", () => { void runSync(youtubeSyncApiUrl, "YouTube"); });
+
+  void loadOverview();
+})();
+      </script>`;
 }
 
 function pageShell(title: string, content: string, extraHead = ""): string {
@@ -75,144 +389,151 @@ function pageShell(title: string, content: string, extraHead = ""): string {
         font-size: 16px;
         line-height: 1.6;
         color: #1f2937;
-        background: linear-gradient(180deg, #eef0f3 0%, #f8f9fb 100%);
-        padding: 0 0 clamp(32px, 5vw, 64px);
+        background:
+          radial-gradient(circle at top left, rgba(181, 18, 27, 0.08), transparent 40%),
+          linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
       }
 
       .brand-bar {
-        width: 100%;
-        background: linear-gradient(90deg, #c8102e 0%, #b5121b 42%, #9a0f18 100%);
-        color: #ffffff;
-        padding: clamp(28px, 4vw, 44px) clamp(16px, 3vw, 32px);
+        background: linear-gradient(135deg, ${BRC_RED} 0%, #8f0e16 100%);
+        color: #fff;
+        padding: 20px 0;
       }
 
-      .brand-shell,
-      .page {
-        width: min(100%, 1200px);
+      .brand-shell, .page {
+        width: min(1120px, calc(100% - 32px));
         margin: 0 auto;
-      }
-
-      .page {
-        padding: clamp(20px, 3vw, 32px) clamp(16px, 3vw, 32px) 0;
       }
 
       .brand-inner {
         display: flex;
         align-items: center;
-        gap: clamp(16px, 2.5vw, 24px);
+        gap: 16px;
       }
 
       .brand-logo {
-        flex-shrink: 0;
-        width: clamp(64px, 8vw, 76px);
-        height: clamp(64px, 8vw, 76px);
-        border-radius: 50%;
-        background: #ffffff;
-        padding: clamp(10px, 1.5vw, 14px);
-        object-fit: contain;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-      }
-
-      .brand-copy h1 {
-        margin: 0;
-        font-size: clamp(1.75rem, 4vw, 2.5rem);
-        line-height: 1;
-        font-weight: 800;
+        border-radius: 12px;
+        background: #fff;
+        padding: 6px;
       }
 
       .eyebrow {
         margin: 0 0 4px;
-        font-size: 0.9rem;
-        opacity: 0.92;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        opacity: 0.9;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+
+      .page { padding: 24px 0 48px; }
+
+      .admin-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0 0 20px;
+      }
+
+      .admin-nav-link {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid #d1d5db;
+        background: #fff;
+        color: #111827;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .admin-nav-link:hover {
+        border-color: ${BRC_RED};
+        color: ${BRC_RED};
+      }
+
+      .admin-nav-link.nav-active,
+      .admin-nav-link[aria-current="page"] {
+        background: ${BRC_RED};
+        border-color: ${BRC_RED};
+        color: #fff;
       }
 
       .card {
-        background: #ffffff;
-        padding: clamp(24px, 3.5vw, 40px);
+        background: #fff;
+        border: 1px solid #e5e7eb;
         border-radius: 16px;
-        box-shadow:
-          0 1px 2px rgba(15, 23, 42, 0.06),
-          0 12px 40px rgba(15, 23, 42, 0.12);
+        padding: 20px;
         margin-bottom: 20px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
       }
 
-      .lead, .hint {
-        color: #4b5563;
+      h2 { margin: 0 0 12px; font-size: 20px; }
+
+      .lead { margin: 0 0 16px; color: #4b5563; }
+
+      .meta-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 12px;
+        font-size: 14px;
       }
 
-      .lead { margin: 0 0 20px; }
-      .hint { margin: 8px 0 0; font-size: 14px; color: #6b7280; }
-
-      .notice {
-        margin: 0 0 20px;
-        padding: 12px 14px;
-        border-radius: 8px;
-        font-size: 15px;
-      }
-
-      .notice.error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
-      .notice.success { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; }
-      .notice.warning { color: #92400e; background: #fffbeb; border: 1px solid #fde68a; }
+      .hint { color: #6b7280; font-size: 13px; margin: 0 0 12px; }
 
       .toolbar {
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
         margin: 16px 0;
+        align-items: center;
       }
 
       .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 10px 16px;
-        font-size: 14px;
-        font-weight: 600;
-        border-radius: 8px;
+        appearance: none;
         border: 1px solid #d1d5db;
-        background: #ffffff;
-        color: #1f2937;
+        background: #fff;
+        color: #111827;
+        border-radius: 10px;
+        padding: 8px 14px;
+        font: inherit;
+        font-weight: 600;
         cursor: pointer;
       }
 
-      .btn:hover:not(:disabled) { background: #f9fafb; }
+      .btn:hover { border-color: #9ca3af; }
       .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .btn-primary { background: ${BRC_RED}; border-color: ${BRC_RED}; color: #fff; }
+      .btn-danger { background: #fff; border-color: #fca5a5; color: #b91c1c; }
 
-      .btn-primary {
-        color: #ffffff;
-        background: linear-gradient(180deg, ${BRC_RED} 0%, ${BRC_RED_DARK} 100%);
-        border: none;
-      }
-
-      .btn-danger {
-        color: #991b1b;
-        border-color: #fecaca;
-        background: #fff5f5;
-      }
-
-      .meta-bar {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
+      .notice {
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin: 12px 0;
         font-size: 14px;
-        color: #4b5563;
-        margin-bottom: 12px;
       }
 
-      .table-wrap {
-        overflow-x: auto;
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-      }
+      .notice.success { background: #ecfdf5; color: #065f46; }
+      .notice.error { background: #fef2f2; color: #991b1b; }
+      .notice.warning { background: #fffbeb; color: #92400e; }
+
+      .table-wrap { overflow-x: auto; }
 
       table {
         width: 100%;
         border-collapse: collapse;
-        min-width: 960px;
+        font-size: 14px;
       }
 
       th, td {
-        padding: 10px;
+        padding: 10px 8px;
         border-bottom: 1px solid #e5e7eb;
         vertical-align: top;
         text-align: left;
@@ -225,42 +546,6 @@ function pageShell(title: string, content: string, extraHead = ""): string {
         letter-spacing: 0.03em;
       }
 
-      td input, td select {
-        width: 100%;
-        padding: 8px 10px;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        font: inherit;
-      }
-
-      td input.invalid, td select.invalid {
-        border-color: #dc2626;
-        background: #fef2f2;
-      }
-
-      .field-error {
-        margin-top: 4px;
-        font-size: 12px;
-        color: #b91c1c;
-      }
-
-      label {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 14px;
-        font-weight: 600;
-        color: #374151;
-      }
-
-      input[type="file"] {
-        width: 100%;
-        padding: 11px 12px;
-        font-size: 15px;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
-        background: #ffffff;
-      }
-
       .instructions ol {
         margin: 0;
         padding-left: 20px;
@@ -268,17 +553,37 @@ function pageShell(title: string, content: string, extraHead = ""): string {
 
       .instructions li { margin-bottom: 6px; }
 
-      .unsaved-badge {
-        display: none;
-        padding: 4px 10px;
-        border-radius: 999px;
-        background: #fffbeb;
-        color: #92400e;
-        font-size: 13px;
-        font-weight: 600;
+      .overview-topic {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        background: #fafafa;
       }
 
-      .unsaved-badge.visible { display: inline-flex; }
+      .overview-topic summary {
+        cursor: pointer;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: baseline;
+        list-style: none;
+      }
+
+      .overview-topic summary::-webkit-details-marker { display: none; }
+
+      .overview-topic-title {
+        font-weight: 700;
+        color: #111827;
+      }
+
+      .overview-item-list {
+        margin: 12px 0 4px;
+        padding-left: 18px;
+      }
+
+      .overview-item { margin-bottom: 12px; }
+      .overview-item-actions { margin-top: 4px; font-size: 13px; }
 
       .sr-only {
         position: absolute;
@@ -296,6 +601,9 @@ function pageShell(title: string, content: string, extraHead = ""): string {
         .toolbar { flex-direction: column; }
         .btn { width: 100%; }
       }
+
+      ${youtubeAdminSectionCss()}
+      ${freshdeskAdminSectionCss()}
     </style>
   </head>
   <body>
@@ -305,7 +613,7 @@ function pageShell(title: string, content: string, extraHead = ""): string {
           <img class="brand-logo" src="${RED_LOGO_URL}" alt="Red logo" width="72" height="72" />
           <div class="brand-copy">
             <p class="eyebrow">Internal admin</p>
-            <h1>BRC Edu webinar resources</h1>
+            <h1>Red content administration</h1>
           </div>
         </div>
       </div>
@@ -317,419 +625,39 @@ function pageShell(title: string, content: string, extraHead = ""): string {
 </html>`;
 }
 
-/** How the admin page authenticates subsequent API calls. */
-export type BrcEduAdminPageAuth =
-  | { mode: "session" }
-  | { mode: "secret"; secret: string };
-
-function withOptionalSecretQuery(path: string, auth: BrcEduAdminPageAuth): string {
-  if (auth.mode !== "secret") {
-    return path;
-  }
-
-  return `${path}?${BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY}=${encodeURIComponent(auth.secret)}`;
-}
-
-function uploadActionUrl(auth: BrcEduAdminPageAuth): string {
-  return withOptionalSecretQuery(UPLOAD_PATH, auth);
-}
-
-function workbookApiUrl(auth: BrcEduAdminPageAuth): string {
-  return withOptionalSecretQuery(WORKBOOK_API_PATH, auth);
-}
-
-function workbookDownloadUrl(auth: BrcEduAdminPageAuth): string {
-  return withOptionalSecretQuery(WORKBOOK_DOWNLOAD_PATH, auth);
-}
-
-function resolvePageAuth(secretOrAuth?: string | BrcEduAdminPageAuth): BrcEduAdminPageAuth {
-  if (!secretOrAuth) {
-    return { mode: "session" };
-  }
-
-  if (typeof secretOrAuth === "string") {
-    return { mode: "secret", secret: secretOrAuth };
-  }
-
-  return secretOrAuth;
-}
-
-function adminPageScript(auth: BrcEduAdminPageAuth): string {
-  const apiUrl = workbookApiUrl(auth);
-  const downloadUrl = workbookDownloadUrl(auth);
-
-  return `<script>
-(() => {
-  function requireElement(id) {
-    const element = document.getElementById(id);
-    if (!element) {
-      throw new Error("Admin page element missing: " + id);
-    }
-    return element;
-  }
-
-  function initAdminPage() {
-  const apiUrl = ${JSON.stringify(apiUrl)};
-  const downloadUrl = ${JSON.stringify(downloadUrl)};
-  const fileInputId = ${JSON.stringify(BRC_EDU_UPLOAD_FIELD_NAME)};
-  const state = {
-    rows: [],
-    etag: "",
-    lastModified: "",
-    dirty: false,
-    busy: false,
-    rowErrors: {},
-  };
-
-  const els = {
-    status: requireElement("admin-status"),
-    metaUpdated: requireElement("meta-updated"),
-    metaCount: requireElement("meta-count"),
-    unsaved: requireElement("unsaved-badge"),
-    tbody: requireElement("resource-rows"),
-    saveBtn: requireElement("save-btn"),
-    refreshBtn: requireElement("refresh-btn"),
-    addBtn: requireElement("add-btn"),
-    cancelBtn: requireElement("cancel-btn"),
-    downloadBtn: requireElement("download-btn"),
-    uploadExcelBtn: requireElement("upload-excel-btn"),
-  };
-
-  function setStatus(message, kind) {
-    els.status.textContent = message || "";
-    els.status.className = "notice" + (kind ? " " + kind : "");
-    els.status.style.display = message ? "block" : "none";
-  }
-
-  function setBusy(busy) {
-    state.busy = busy;
-    for (const button of document.querySelectorAll("button")) {
-      if (button.id === "save-btn" || button.dataset.busyDisable === "true") {
-        button.disabled = busy;
-      }
-    }
-  }
-
-  function markDirty(dirty) {
-    state.dirty = dirty;
-    els.unsaved.classList.toggle("visible", dirty);
-  }
-
-  function defaultRow() {
-    return {
-      videoTitle: "",
-      videoUrl: "",
-      helpRoutingCategory: "",
-      description: "",
-      active: "Yes",
-    };
-  }
-
-  function validateClientRow(row, index) {
-    const errors = [];
-    if (!row.videoTitle.trim()) errors.push("Video Title is required.");
-    if (!row.videoUrl.trim()) errors.push("Video URL is required.");
-    else {
-      try {
-        const parsed = new URL(row.videoUrl.trim());
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          errors.push("Video URL must use http or https.");
-        }
-      } catch {
-        errors.push("Video URL must be valid.");
-      }
-    }
-    if (!row.helpRoutingCategory.trim()) errors.push("Help-Routing Category is required.");
-    if (!row.active.trim()) errors.push("Active is required.");
-    state.rowErrors[index] = errors;
-    return errors;
-  }
-
-  function renderRows() {
-    els.tbody.innerHTML = "";
-    state.rows.forEach((row, index) => {
-      const tr = document.createElement("tr");
-      const errors = state.rowErrors[index] || [];
-      const invalidClass = errors.length ? " invalid" : "";
-      tr.innerHTML = \`
-        <td><label class="sr-only" for="title-\${index}">Video Title</label><input id="title-\${index}" data-field="videoTitle" data-index="\${index}" value="" /></td>
-        <td><label class="sr-only" for="url-\${index}">Video URL</label><input id="url-\${index}" data-field="videoUrl" data-index="\${index}" value="" /></td>
-        <td><label class="sr-only" for="category-\${index}">Help-Routing Category</label><input id="category-\${index}" data-field="helpRoutingCategory" data-index="\${index}" value="" /></td>
-        <td><label class="sr-only" for="description-\${index}">Description</label><input id="description-\${index}" data-field="description" data-index="\${index}" value="" /></td>
-        <td><label class="sr-only" for="active-\${index}">Active</label><select id="active-\${index}" data-field="active" data-index="\${index}"><option>Yes</option><option>No</option></select></td>
-        <td><button type="button" class="btn btn-danger" data-delete="\${index}" aria-label="Delete row \${index + 1}">Delete</button></td>
-      \`;
-      els.tbody.appendChild(tr);
-      tr.querySelector('[data-field="videoTitle"]').value = row.videoTitle;
-      tr.querySelector('[data-field="videoUrl"]').value = row.videoUrl;
-      tr.querySelector('[data-field="helpRoutingCategory"]').value = row.helpRoutingCategory;
-      tr.querySelector('[data-field="description"]').value = row.description;
-      tr.querySelector('[data-field="active"]').value = row.active || "Yes";
-      for (const input of tr.querySelectorAll("input, select")) {
-        if (errors.length) input.classList.add("invalid");
-        else input.classList.remove("invalid");
-      }
-      if (errors.length) {
-        const errorEl = document.createElement("div");
-        errorEl.className = "field-error";
-        errorEl.textContent = errors.join(" ");
-        tr.querySelector("td").appendChild(errorEl);
-      }
-    });
-  }
-
-  function updateMeta() {
-    els.metaCount.textContent = String(state.rows.length);
-    els.metaUpdated.textContent = state.lastModified
-      ? new Date(state.lastModified).toLocaleString()
-      : "Not loaded";
-  }
-
-  function applyPayload(payload) {
-    state.rows = Array.isArray(payload.rows) ? payload.rows : [];
-    state.etag = payload.etag || "";
-    state.lastModified = payload.lastModified || "";
-    state.rowErrors = {};
-    markDirty(false);
-    renderRows();
-    updateMeta();
-  }
-
-  async function loadWorkbook() {
-    setBusy(true);
-    setStatus("Loading workbook from Azure...", "warning");
-    try {
-      const response = await fetch(apiUrl, { headers: { Accept: "application/json" } });
-      if (response.status === 404) {
-        applyPayload({ rows: [], etag: "", lastModified: "", rowCount: 0 });
-        setStatus("No latest workbook found. Add resources and save to publish.", "warning");
-        return;
-      }
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || "Could not load workbook.");
-      }
-      const payload = await response.json();
-      applyPayload(payload);
-      if (Array.isArray(payload.warnings) && payload.warnings.length) {
-        setStatus(
-          "Workbook loaded from Azure. " + payload.warnings.join(" "),
-          "warning",
-        );
-      } else {
-        setStatus("Workbook loaded from Azure.", "success");
-      }
-    } catch (error) {
-      setStatus(error.message || "Could not load workbook.", "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveWorkbook() {
-    let hasErrors = false;
-    state.rowErrors = {};
-    state.rows.forEach((row, index) => {
-      const errors = validateClientRow(row, index);
-      if (errors.length) hasErrors = true;
-    });
-    renderRows();
-    if (hasErrors) {
-      setStatus("Fix validation errors before saving.", "error");
-      return;
-    }
-
-    setBusy(true);
-    setStatus("Saving workbook to Azure...", "warning");
-    try {
-      const response = await fetch(apiUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ rows: state.rows, ifMatch: state.etag || undefined }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (response.status === 409) {
-        setStatus(body.error || "Workbook changed in Azure. Refresh before saving.", "error");
-        return;
-      }
-      if (!response.ok) {
-        const detail = Array.isArray(body.errors) ? " " + body.errors.join(" ") : "";
-        throw new Error((body.error || "Save failed.") + detail);
-      }
-      applyPayload(body);
-      if (Array.isArray(body.warnings) && body.warnings.length) {
-        setStatus(
-          "Workbook saved and published to Azure. " + body.warnings.join(" "),
-          "warning",
-        );
-      } else {
-        setStatus("Workbook saved and published to Azure.", "success");
-      }
-    } catch (error) {
-      setStatus(error.message || "Save failed.", "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onInputChange(event) {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
-    const index = Number(target.dataset.index);
-    const field = target.dataset.field;
-    if (!Number.isInteger(index) || !field || !state.rows[index]) return;
-    state.rows[index][field] = target.value;
-    markDirty(true);
-    validateClientRow(state.rows[index], index);
-  }
-
-  function onTableClick(event) {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    if (target.dataset.delete != null) {
-      const index = Number(target.dataset.delete);
-      if (!Number.isInteger(index)) return;
-      if (!window.confirm("Delete this resource row?")) return;
-      state.rows.splice(index, 1);
-      markDirty(true);
-      renderRows();
-      updateMeta();
-    }
-  }
-
-  els.refreshBtn.addEventListener("click", () => {
-    if (state.dirty && !window.confirm("Discard unsaved changes and refresh from Azure?")) return;
-    loadWorkbook();
-  });
-
-  els.cancelBtn.addEventListener("click", () => {
-    if (state.dirty && !window.confirm("Discard unsaved changes and reload from Azure?")) return;
-    loadWorkbook();
-  });
-
-  els.addBtn.addEventListener("click", () => {
-    state.rows.push(defaultRow());
-    markDirty(true);
-    renderRows();
-    updateMeta();
-  });
-
-  els.saveBtn.addEventListener("click", saveWorkbook);
-  els.downloadBtn.addEventListener("click", () => {
-    window.location.href = downloadUrl;
-  });
-
-  els.uploadExcelBtn.addEventListener("click", () => {
-    const fileInput = document.getElementById(fileInputId);
-    if (fileInput instanceof HTMLInputElement) {
-      fileInput.click();
-    }
-  });
-
-  els.tbody.addEventListener("input", onInputChange);
-  els.tbody.addEventListener("change", onInputChange);
-  els.tbody.addEventListener("click", onTableClick);
-
-  loadWorkbook();
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initAdminPage);
-  } else {
-    initAdminPage();
-  }
-})();
-</script>`;
-}
-
-export function renderBrcEduUploadPage(secretOrAuth?: string | BrcEduAdminPageAuth): string {
-  const auth = resolvePageAuth(secretOrAuth);
-  const content = `
-      <div class="card instructions">
-        <h2>How to manage Red webinar resources</h2>
-        <ol class="lead">
-          <li>Refresh from Azure before editing.</li>
-          <li>Add or update resource rows in the table below.</li>
-          <li>Use public URLs for each video resource. Each Video URL must be unique; titles may repeat when URLs differ.</li>
-          <li>Set Active to control visibility in Red.</li>
-          <li>Save &amp; Publish when finished.</li>
-          <li>Previous versions are archived automatically.</li>
-        </ol>
-      </div>
-
-      <div class="card">
-        <div class="meta-bar">
-          <span id="unsaved-badge" class="unsaved-badge" aria-live="polite">Unsaved changes</span>
-          <span><strong>Last updated:</strong> <span id="meta-updated">Not loaded</span></span>
-          <span><strong>Rows:</strong> <span id="meta-count">0</span></span>
-        </div>
-        <div id="admin-status" class="notice" style="display:none" role="status" aria-live="polite"></div>
-        <div class="toolbar">
-          <button type="button" class="btn" id="refresh-btn" data-busy-disable="true">Refresh from Azure</button>
-          <button type="button" class="btn" id="download-btn" data-busy-disable="true">Download current Excel</button>
-          <button type="button" class="btn" id="upload-excel-btn" data-busy-disable="true">Upload Excel</button>
-          <button type="button" class="btn" id="add-btn" data-busy-disable="true">Add resource</button>
-          <button type="button" class="btn btn-primary" id="save-btn" data-busy-disable="true">Save &amp; Publish</button>
-          <button type="button" class="btn" id="cancel-btn" data-busy-disable="true">Cancel changes / reload</button>
-        </div>
-        <div class="table-wrap">
-          <table aria-label="Webinar resources">
-            <thead>
-              <tr>
-                <th scope="col">Video Title</th>
-                <th scope="col">Video URL</th>
-                <th scope="col">Help-Routing Category</th>
-                <th scope="col">Description</th>
-                <th scope="col">Active</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="resource-rows"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Upload Excel file</h2>
-        <p class="lead">
-          You can still upload an approved <strong>.xlsx</strong> or <strong>.csv</strong> file directly. Red stores the file in Azure Blob Storage for downstream processing.
-        </p>
-        <form method="POST" action="${escapeHtml(uploadActionUrl(auth))}" enctype="multipart/form-data">
-          <label for="${BRC_EDU_UPLOAD_FIELD_NAME}">Resource file</label>
-          <input
-            id="${BRC_EDU_UPLOAD_FIELD_NAME}"
-            name="${BRC_EDU_UPLOAD_FIELD_NAME}"
-            type="file"
-            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          />
-          <p class="hint">Accepted file types: <strong>.xlsx</strong> or <strong>.csv</strong>. Maximum file size: <strong>5 MB</strong>.</p>
-          <button class="btn btn-primary" type="submit">Upload Excel</button>
-        </form>
-      </div>`;
-
-  return pageShell("BRC Edu webinar resources", content + adminPageScript(auth));
-}
-
-export function renderBrcEduUploadSuccessPage(
-  latestBlob: string,
-  archiveBlob: string,
+export function renderBrcEduUploadPage(
   secretOrAuth?: string | BrcEduAdminPageAuth,
+  view: BrcEduAdminView = "overview",
 ): string {
   const auth = resolvePageAuth(secretOrAuth);
-  const content = `
-      <div class="card">
-        <div class="notice success">
-          Upload successful. The file was stored in Azure Blob Storage.
-        </div>
-        <p><strong>Latest:</strong> ${escapeHtml(latestBlob)}</p>
-        <p><strong>Archive:</strong> ${escapeHtml(archiveBlob)}</p>
-        <p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>
-      </div>`;
+  const nav = renderAdminNav(auth, view);
 
-  return pageShell("BRC Edu upload successful", content);
+  let body = "";
+  if (view === "youtube") {
+    body = `
+      <div class="card instructions">
+        <h2>YouTube videos</h2>
+        <p class="lead">
+          Channel videos and webinar-playlist videos are synchronised separately.
+          Exclusions persist across future synchronisations and stay visible here so staff can restore them.
+        </p>
+      </div>
+      ${renderYouTubeAdminSectionHtml(auth)}`;
+  } else if (view === "freshdesk") {
+    body = `
+      <div class="card instructions">
+        <h2>Freshdesk articles</h2>
+        <p class="lead">
+          Articles are synchronised from Freshdesk.
+          Exclusions persist across syncs. Excluded articles remain visible to administrators but are never returned to Red customers.
+        </p>
+      </div>
+      ${renderFreshdeskAdminSectionHtml(auth)}`;
+  } else {
+    body = renderOverviewSectionHtml(auth);
+  }
+
+  return pageShell("Red content administration", `${nav}${body}`);
 }
 
 export function renderBrcEduUploadErrorPage(
@@ -737,18 +665,16 @@ export function renderBrcEduUploadErrorPage(
   secretOrAuth?: string | BrcEduAdminPageAuth,
 ): string {
   const auth = resolvePageAuth(secretOrAuth);
-  const retryLink =
-    auth.mode === "session" || auth.mode === "secret"
-      ? `<p><a href="${escapeHtml(uploadActionUrl(auth))}">Return to webinar admin</a></p>`
-      : "";
+  const retryLink = `<p><a href="${escapeHtml(adminPageUrl(auth))}">Return to content admin</a></p>`;
 
   const content = `
+      ${renderAdminNav(auth, "overview")}
       <div class="card">
         <div class="notice error">${escapeHtml(message)}</div>
         ${retryLink}
       </div>`;
 
-  return pageShell("BRC Edu upload failed", content);
+  return pageShell("Red content admin error", content);
 }
 
 export function renderBrcEduUploadPlainError(message: string): string {
@@ -765,5 +691,3 @@ export function renderBrcEduStaffDeniedPage(
 
   return pageShell("Access denied", content);
 }
-
-export { WORKBOOK_API_PATH, WORKBOOK_DOWNLOAD_PATH };

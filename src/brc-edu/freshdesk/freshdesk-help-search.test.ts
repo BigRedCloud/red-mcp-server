@@ -263,6 +263,7 @@ test("loadFreshdeskArticlesForHelpSearch falls back safely when index load fails
   const loaded = await loadFreshdeskArticlesForHelpSearch({
     now: 1_700_000_000_000,
     container: mockContainer,
+    loadEffective: async () => null,
     loadIndex: async () => {
       throw new Error(`Freshdesk articles index storage operation failed: ${CONNECTION_STRING}`);
     },
@@ -273,6 +274,7 @@ test("loadFreshdeskArticlesForHelpSearch falls back safely when index load fails
   const cached = await loadFreshdeskArticlesForHelpSearch({
     now: 1_700_000_000_001,
     container: mockContainer,
+    loadEffective: async () => null,
     loadIndex: async () => {
       throw new Error("Should not be called while cache is warm.");
     },
@@ -287,6 +289,7 @@ test("loadFreshdeskArticlesForHelpSearch falls back safely when index JSON is ma
   const loaded = await loadFreshdeskArticlesForHelpSearch({
     now: 2_000_000_000_000,
     container: {} as ContainerClient,
+    loadEffective: async () => null,
     loadIndex: async () => {
       throw new Error("Freshdesk articles index JSON is malformed.");
     },
@@ -356,10 +359,56 @@ test("loadFreshdeskArticlesForHelpSearch loads articles from a valid index", asy
   const loaded = await loadFreshdeskArticlesForHelpSearch({
     now: 3_000_000_000_000,
     container: {} as ContainerClient,
+    loadEffective: async () => null,
     loadIndex: async () => index,
   });
 
   assert.deepEqual(loaded, articles);
+});
+
+test("loadFreshdeskArticlesForHelpSearch omits excluded articles from the effective catalogue", async () => {
+  resetFreshdeskHelpIndexCacheForTests();
+
+  const articles = freshdeskArticles();
+  const loaded = await loadFreshdeskArticlesForHelpSearch({
+    now: 4_000_000_000_000,
+    container: {} as ContainerClient,
+    loadEffective: async () => ({
+      generatedAt: "2026-07-14T12:00:00.000Z",
+      itemCount: 2,
+      visibleCount: 1,
+      excludedCount: 1,
+      items: [
+        {
+          ...articles[0]!,
+          articleId: String(articles[0]!.freshdeskArticleId),
+          topic: "sales",
+          topicLabel: "Sales",
+          excluded: false,
+          lastSyncedAt: "2026-07-14T12:00:00.000Z",
+        },
+        {
+          ...articles[0]!,
+          freshdeskArticleId: 999,
+          id: "freshdesk-999",
+          title: "Excluded article",
+          articleId: "999",
+          topic: "sales",
+          topicLabel: "Sales",
+          excluded: true,
+          exclusionReason: "Staff only",
+          lastSyncedAt: "2026-07-14T12:00:00.000Z",
+        },
+      ],
+    }),
+  });
+
+  assert.equal(loaded?.length, 1);
+  assert.equal(loaded?.[0]?.title, articles[0]!.title);
+  assert.equal(
+    loaded?.some((article) => article.freshdeskArticleId === 999),
+    false,
+  );
 });
 
 test("buildFindHelpResourcesResponse with Freshdesk results keeps support fallback when nothing matches", () => {

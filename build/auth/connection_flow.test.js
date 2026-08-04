@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 process.env.RED_CONNECT_CONNECTION_STORE = "memory";
+import { seedClaimableConnection } from "./connection_test_helpers.js";
 function uniqueId(prefix) {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -10,32 +11,80 @@ async function loadConnectionStoreModule() {
 test("completed connection code can be claimed and bound to a session", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, } = await loadConnectionStoreModule();
     const store = getConnectionStore();
-    const code = uniqueId("code");
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
     const connectionId = uniqueId("connection");
     const sessionId = uniqueId("session");
     const clientKey = uniqueId("client");
-    await store.createPendingConnection({
-        code,
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
         connectionId,
-        expiresAt: Date.now() + 60_000,
+        companies: [
+            {
+                companyName: "Company A",
+                apiKey: "test-api-key-company-a",
+            },
+        ],
     });
-    await store.completePendingConnection(code);
-    await store.saveConnectedCompanies(connectionId, [
-        {
-            companyName: "Company A",
-            apiKey: "test-api-key-company-a",
-            expiresAt: Date.now() + 60_000,
-            credentialValidatedAt: Date.now(),
-        },
-    ]);
-    const result = await claimConnectionCodeForSession(` ${code} `, ` ${sessionId} `, {
-        clientKey,
-    });
+    const result = await claimConnectionCodeForSession(` ${confirmationCode} `, ` ${sessionId} `, { clientKey });
     assert.equal(result.connectionId, connectionId);
     assert.deepEqual(result.companyNames, ["Company A"]);
     assert.match(result.connectionRef, /^redconn_[0-9a-f]{48}$/);
     assert.equal(await store.getConnectionIdForSession(sessionId), connectionId);
     assert.equal(await store.getRecentClientClaim(clientKey, 60_000), connectionId);
+});
+test("claiming a confirmation code a second time fails safely", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [
+            {
+                companyName: "Company A",
+                apiKey: "test-api-key-company-a",
+            },
+        ],
+    });
+    await claimConnectionCodeForSession(confirmationCode, uniqueId("session-1"));
+    await assert.rejects(() => claimConnectionCodeForSession(confirmationCode, uniqueId("session-2")), (error) => {
+        assert.ok(error instanceof ClaimConnectionError);
+        assert.equal(error.reason, "not_found");
+        assert.match(error.message, /missing|incorrect|already been used/i);
+        return true;
+    });
+});
+test("connectToken cannot be claimed as a confirmation code", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("connect");
+    const confirmationCode = uniqueId("confirm");
+    const connectionId = uniqueId("connection");
+    await seedClaimableConnection(store, {
+        connectToken,
+        confirmationCode,
+        connectionId,
+        companies: [
+            {
+                companyName: "Company A",
+                apiKey: "test-api-key-a",
+            },
+        ],
+    });
+    await assert.rejects(() => claimConnectionCodeForSession(connectToken, uniqueId("session")), (error) => {
+        assert.ok(error instanceof ClaimConnectionError);
+        assert.equal(error.reason, "not_found");
+        assert.match(error.message, /secure connection link token|confirmation code/i);
+        return true;
+    });
+    // Confirmation code still works afterward.
+    const result = await claimConnectionCodeForSession(confirmationCode, uniqueId("session-ok"));
+    assert.equal(result.connectionId, connectionId);
 });
 test("claiming an unknown connection code fails safely", async () => {
     const { claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
@@ -46,19 +95,34 @@ test("claiming an unknown connection code fails safely", async () => {
         return true;
     });
 });
-test("claiming an incomplete connection code fails safely", async () => {
+test("claiming before confirmation code is issued fails safely", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
     const store = getConnectionStore();
-    const code = uniqueId("incomplete-code");
+    const connectToken = uniqueId("incomplete-code");
     await store.createPendingConnection({
-        code,
+        connectToken,
         connectionId: uniqueId("connection"),
         expiresAt: Date.now() + 60_000,
     });
-    await assert.rejects(() => claimConnectionCodeForSession(code, uniqueId("session")), (error) => {
+    await store.completePendingConnection(connectToken);
+    await assert.rejects(() => claimConnectionCodeForSession(connectToken, uniqueId("session")), (error) => {
         assert.ok(error instanceof ClaimConnectionError);
-        assert.equal(error.reason, "not_completed");
-        assert.match(error.message, /not been completed/i);
+        assert.equal(error.reason, "not_found");
+        return true;
+    });
+});
+test("claiming an incomplete connection code fails safely", async () => {
+    const { getConnectionStore, claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
+    const store = getConnectionStore();
+    const connectToken = uniqueId("incomplete-code");
+    await store.createPendingConnection({
+        connectToken,
+        connectionId: uniqueId("connection"),
+        expiresAt: Date.now() + 60_000,
+    });
+    await assert.rejects(() => claimConnectionCodeForSession(connectToken, uniqueId("session")), (error) => {
+        assert.ok(error instanceof ClaimConnectionError);
+        assert.equal(error.reason, "not_found");
         return true;
     });
 });
@@ -67,7 +131,7 @@ test("claiming an expired connection code fails safely", async () => {
     const store = getConnectionStore();
     const code = uniqueId("expired-code");
     await store.createPendingConnection({
-        code,
+        connectToken: code,
         connectionId: uniqueId("connection"),
         expiresAt: Date.now() - 1,
     });
@@ -80,14 +144,16 @@ test("claiming an expired connection code fails safely", async () => {
 test("claiming a completed connection with no companies fails safely", async () => {
     const { getConnectionStore, claimConnectionCodeForSession, ClaimConnectionError, } = await loadConnectionStoreModule();
     const store = getConnectionStore();
-    const code = uniqueId("empty-company-code");
+    const connectToken = uniqueId("empty-company-connect");
+    const confirmationCode = uniqueId("empty-company-confirm");
     await store.createPendingConnection({
-        code,
+        connectToken,
         connectionId: uniqueId("connection"),
         expiresAt: Date.now() + 60_000,
     });
-    await store.completePendingConnection(code);
-    await assert.rejects(() => claimConnectionCodeForSession(code, uniqueId("session")), (error) => {
+    await store.completePendingConnection(connectToken);
+    await store.issueConfirmationCode(connectToken, confirmationCode);
+    await assert.rejects(() => claimConnectionCodeForSession(confirmationCode, uniqueId("session")), (error) => {
         assert.ok(error instanceof ClaimConnectionError);
         assert.equal(error.reason, "no_companies");
         assert.match(error.message, /No companies/i);

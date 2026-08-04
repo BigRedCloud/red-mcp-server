@@ -5,6 +5,7 @@ import type {
   CompanyCredentialInput,
   ConnectionStore,
   ConnectionStoreDiagnostics,
+  ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
   PendingConnectionRecord,
@@ -26,6 +27,8 @@ type SessionBinding = {
 type CompanyEntry = StoredCompanyCredential;
 
 const pendingConnections = new Map<string, PendingEntry>();
+/** confirmationCode → connectToken */
+const confirmationCodeIndex = new Map<string, string>();
 const sessionBindings = new Map<string, SessionBinding>();
 const companiesByConnection = new Map<string, Map<string, CompanyEntry>>();
 const clientLastClaims = new Map<
@@ -38,6 +41,30 @@ const connectionRefs = new Map<
 >();
 const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
 const telemetryByConnection = new Map<string, ConnectionTelemetryRecord>();
+const successPagesById = new Map<string, ConnectionSuccessPageRecord>();
+
+function resolveConnectTokenArg(args: {
+  connectToken?: string;
+  code?: string;
+}): string {
+  const token = (args.connectToken ?? args.code ?? "").trim();
+  if (!token) {
+    throw new Error("connectToken is required to create a pending connection.");
+  }
+  return token;
+}
+
+function clonePending(pending: PendingEntry): PendingConnectionRecord {
+  return {
+    connectToken: pending.connectToken,
+    code: pending.connectToken,
+    connectionId: pending.connectionId,
+    createdAt: pending.createdAt,
+    expiresAt: pending.expiresAt,
+    used: pending.used,
+    confirmationCode: pending.confirmationCode,
+  };
+}
 
 function companyMapForConnection(connectionId: string): Map<string, CompanyEntry> {
   let map = companiesByConnection.get(connectionId);
@@ -49,13 +76,24 @@ function companyMapForConnection(connectionId: string): Map<string, CompanyEntry
 }
 
 function cleanupExpiredPendingConnections(): void {
-  for (const [code, pending] of pendingConnections.entries()) {
+  for (const [connectToken, pending] of pendingConnections.entries()) {
     if (pending.used) {
       continue;
     }
 
     if (isPendingConnectionExpired(pending.expiresAt)) {
-      pendingConnections.delete(code);
+      if (pending.confirmationCode) {
+        confirmationCodeIndex.delete(pending.confirmationCode);
+      }
+      pendingConnections.delete(connectToken);
+    }
+  }
+}
+
+function cleanupExpiredSuccessPages(now = Date.now()): void {
+  for (const [successId, page] of successPagesById.entries()) {
+    if (page.expiresAt <= now) {
+      successPagesById.delete(successId);
     }
   }
 }
@@ -66,14 +104,18 @@ export class MemoryConnectionStore implements ConnectionStore {
   }
 
   async createPendingConnection(args: {
-    code: string;
+    connectToken?: string;
+    code?: string;
     connectionId: string;
     expiresAt: number;
   }): Promise<void> {
     cleanupExpiredPendingConnections();
 
-    pendingConnections.set(args.code, {
-      code: args.code,
+    const connectToken = resolveConnectTokenArg(args);
+
+    pendingConnections.set(connectToken, {
+      connectToken,
+      code: connectToken,
       connectionId: args.connectionId,
       createdAt: Date.now(),
       expiresAt: args.expiresAt,
@@ -81,57 +123,148 @@ export class MemoryConnectionStore implements ConnectionStore {
     });
   }
 
-  async getPendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+  async getPendingConnection(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
     cleanupExpiredPendingConnections();
 
-    const pending = pendingConnections.get(code);
+    const pending = pendingConnections.get(connectToken.trim());
     if (
       !pending ||
       pending.used ||
       isPendingConnectionExpired(pending.expiresAt)
     ) {
-      if (pending) pendingConnections.delete(code);
+      if (pending && !pending.used) {
+        pendingConnections.delete(connectToken.trim());
+      }
       return null;
     }
 
-    return { ...pending };
+    return clonePending(pending);
   }
 
-  async getConnectionByCode(code: string): Promise<PendingConnectionRecord | null> {
+  async getConnectionByConnectToken(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
     cleanupExpiredPendingConnections();
 
-    const pending = pendingConnections.get(code);
+    const pending = pendingConnections.get(connectToken.trim());
     if (!pending || isPendingConnectionExpired(pending.expiresAt)) {
-      if (pending) pendingConnections.delete(code);
+      if (pending) {
+        if (pending.confirmationCode) {
+          confirmationCodeIndex.delete(pending.confirmationCode);
+        }
+        pendingConnections.delete(connectToken.trim());
+      }
       return null;
     }
 
-    return { ...pending };
+    return clonePending(pending);
   }
 
-  async completePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
+  async getConnectionByConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
     cleanupExpiredPendingConnections();
 
-    const pending = pendingConnections.get(code);
+    const trimmed = confirmationCode.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const connectToken = confirmationCodeIndex.get(trimmed);
+    if (!connectToken) {
+      return null;
+    }
+
+    const pending = pendingConnections.get(connectToken);
+    if (
+      !pending ||
+      pending.confirmationCode !== trimmed ||
+      isPendingConnectionExpired(pending.expiresAt)
+    ) {
+      confirmationCodeIndex.delete(trimmed);
+      if (pending && isPendingConnectionExpired(pending.expiresAt)) {
+        pendingConnections.delete(connectToken);
+      }
+      return null;
+    }
+
+    return clonePending(pending);
+  }
+
+  async getConnectionByCode(
+    code: string
+  ): Promise<PendingConnectionRecord | null> {
+    return this.getConnectionByConfirmationCode(code);
+  }
+
+  async completePendingConnection(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null> {
+    cleanupExpiredPendingConnections();
+
+    const pending = pendingConnections.get(connectToken.trim());
     if (
       !pending ||
       pending.used ||
       isPendingConnectionExpired(pending.expiresAt)
     ) {
-      if (pending) pendingConnections.delete(code);
+      if (pending && !pending.used) {
+        pendingConnections.delete(connectToken.trim());
+      }
       return null;
     }
 
     pending.used = true;
-    return { ...pending };
+    return clonePending(pending);
   }
 
-  async consumePendingConnection(code: string): Promise<PendingConnectionRecord | null> {
-    const pending = await this.getPendingConnection(code);
+  async issueConfirmationCode(
+    connectToken: string,
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
+    cleanupExpiredPendingConnections();
+
+    const token = connectToken.trim();
+    const confirm = confirmationCode.trim();
+    if (!token || !confirm || confirm === token) {
+      return null;
+    }
+
+    const pending = pendingConnections.get(token);
+    if (
+      !pending ||
+      !pending.used ||
+      isPendingConnectionExpired(pending.expiresAt)
+    ) {
+      return null;
+    }
+
+    if (pending.confirmationCode) {
+      confirmationCodeIndex.delete(pending.confirmationCode);
+    }
+
+    pending.confirmationCode = confirm;
+    confirmationCodeIndex.set(confirm, token);
+    return clonePending(pending);
+  }
+
+  async consumeConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null> {
+    const pending = await this.getConnectionByConfirmationCode(confirmationCode);
     if (!pending) return null;
 
-    pendingConnections.delete(code);
+    confirmationCodeIndex.delete(pending.confirmationCode!);
+    pendingConnections.delete(pending.connectToken);
     return pending;
+  }
+
+  async consumePendingConnection(
+    code: string
+  ): Promise<PendingConnectionRecord | null> {
+    return this.consumeConfirmationCode(code);
   }
 
   async bindSessionToConnection(
@@ -308,6 +441,36 @@ export class MemoryConnectionStore implements ConnectionStore {
   ): Promise<ConnectionTelemetryRecord | null> {
     const record = telemetryByConnection.get(connectionId);
     return record ? { ...record } : null;
+  }
+
+  async saveConnectionSuccessPage(
+    record: ConnectionSuccessPageRecord
+  ): Promise<void> {
+    cleanupExpiredSuccessPages();
+    successPagesById.set(record.successId, {
+      ...record,
+      connectedNames: [...record.connectedNames],
+      failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+    });
+  }
+
+  async getConnectionSuccessPage(
+    successId: string
+  ): Promise<ConnectionSuccessPageRecord | null> {
+    cleanupExpiredSuccessPages();
+    const record = successPagesById.get(successId.trim());
+    if (!record || record.expiresAt <= Date.now()) {
+      if (record) {
+        successPagesById.delete(successId.trim());
+      }
+      return null;
+    }
+
+    return {
+      ...record,
+      connectedNames: [...record.connectedNames],
+      failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
+    };
   }
 
   async getDiagnostics(args: {

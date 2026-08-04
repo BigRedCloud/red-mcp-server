@@ -4,6 +4,7 @@ import { ensureCredentialsForCurrentSession, normaliseCompanyName, resolveSessio
 import { extractConnectionRefFromToolArgs, prefixConnectionRef, } from "./connection_ref.js";
 import { runWithRedTelemetryContext } from "../telemetry/identity.js";
 import { activatePreparedTelemetry, prepareMcpTelemetryContext, } from "../telemetry/context.js";
+import { getStoredSessionPlatform, storeSessionPlatform, } from "../telemetry/platform.js";
 export const MCP_SESSION_HEADER_NAMES = [
     "mcp-session-id",
     "x-mcp-session-id",
@@ -191,6 +192,8 @@ export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, 
     const store = keyStore ?? resolveSessionKeyStore(sessionId);
     const clientKey = buildHttpClientKeyFromExtra(extra);
     const headers = (extra?.requestInfo?.headers ?? {});
+    // Restore platform before telemetry context so blank UAs keep the initialize result.
+    const storedPlatform = getStoredSessionPlatform(sessionId);
     const prepared = await prepareMcpTelemetryContext({
         sessionId,
         keyStore: store,
@@ -199,7 +202,11 @@ export async function runHttpToolSessionFromExtra(transportSessionId, keyStore, 
         headers,
         toolName: options?.toolName,
         companyName: options?.companyName,
+        storedPlatform,
     });
+    if (prepared.platformDetection.platform !== "unknown") {
+        storeSessionPlatform(sessionId, prepared.platformDetection.platform);
+    }
     const scope = await prepareHttpToolSessionScope(sessionId, store, clientKey, connectionRef);
     if (!scope.connectionId && prepared.connectionId) {
         scope.connectionId = prepared.connectionId;

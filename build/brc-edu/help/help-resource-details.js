@@ -1,5 +1,7 @@
 import { loadCustomerDocsForHelpSearch } from "../customer-docs/customer-docs-index-store.js";
 import { createConfiguredFreshdeskIndexContainer, loadFreshdeskArticlesIndex, } from "../freshdesk/freshdesk-index-store.js";
+import { freshdeskArticleIdsMatch, normalizeFreshdeskArticleId, } from "../freshdesk/freshdesk-catalog-types.js";
+import { loadFreshdeskEffectiveCatalog, loadFreshdeskOverrides, } from "../freshdesk/freshdesk-catalog-store.js";
 import { getSyncedFreshdeskArticlePublicUrl, FRESHDESK_LINK_RESPONSE_GUIDANCE, } from "../freshdesk/freshdesk-article-url.js";
 import { buildFreshdeskScreenshotUrls, buildOrderedArticleImageCaption, FRESHDESK_SCREENSHOT_LINK_LABEL, toCustomerFacingScreenshotUrl, } from "../freshdesk/freshdesk-public-image-url.js";
 import { buildFreshdeskInstructionBlocks, enrichScreenshotUrlCaptions, resolveFreshdeskContentBlocksForMatching, } from "../freshdesk/instruction-blocks.js";
@@ -15,6 +17,7 @@ import { fromFreshdeskResource, fromRecordedWebinarResource, SUPPORT_FOOTER_GUID
 import { buildCustomerFacingSourcesMarkdown, buildHelpAnswerSources, buildSourcesMarkdownTextBlock, } from "./help-answer-sources.js";
 import { SUPPORT_FALLBACK_RESPONSE_GUIDANCE, buildSupportMarkdownTextBlock, resolveSupportFallback, } from "./help-support-fallback.js";
 import { buildRedActionMarkdownTextBlock, resolveHelpRedActionCapability, } from "./help-red-action-capability.js";
+import { resolveHelpSearchQuery } from "./help-mode.js";
 import { buildHelpAnswerSectionsMarkdown, AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE, HELP_ANSWER_LAYOUT_GUIDANCE, TUTORIAL_NO_DATA_CHANGE_GUIDANCE, } from "./help-answer-layout.js";
 import { normalizeFreshdeskSyncedImages } from "../freshdesk/freshdesk-image-metadata.js";
 export const HELP_RESOURCE_DETAILS_MAX_IMAGES = 5;
@@ -61,13 +64,66 @@ export const FRESHDESK_LEGACY_SCREENSHOT_GUIDANCE = [
     "Do not claim screenshots were supplied when imageCount is 0 or when no Markdown links are returned.",
     FRESHDESK_SCREENSHOT_MARKDOWN_GUIDANCE,
 ].join(" ");
-async function findFreshdeskArticleById(freshdeskArticleId, container) {
+/**
+ * Resolve a Freshdesk article for customer help details.
+ * Visibility comes from the effective catalogue (or raw + overrides fallback).
+ * Full rich fields always come from the raw articles index so screenshots,
+ * contentBlocks, and syncedImages are never stripped by a compact search index.
+ */
+export async function findFreshdeskArticleById(freshdeskArticleId, container) {
     if (!container) {
         return null;
     }
+    const requestedId = normalizeFreshdeskArticleId(freshdeskArticleId);
+    if (!requestedId) {
+        return null;
+    }
     try {
+        let effective = null;
+        try {
+            effective = await loadFreshdeskEffectiveCatalog(container);
+        }
+        catch {
+            effective = null;
+        }
+        if (effective && effective.items.length > 0) {
+            const effectiveItem = effective.items.find((item) => freshdeskArticleIdsMatch(item.articleId, requestedId) ||
+                freshdeskArticleIdsMatch(item.freshdeskArticleId, requestedId));
+            if (!effectiveItem || effectiveItem.excluded || !effectiveItem.enabled) {
+                return null;
+            }
+            const index = await loadFreshdeskArticlesIndex(container);
+            const rawArticle = index?.articles.find((article) => freshdeskArticleIdsMatch(article.freshdeskArticleId, requestedId));
+            if (rawArticle) {
+                return rawArticle.enabled ? rawArticle : null;
+            }
+            // Effective entry is visible but raw index is unavailable — return the
+            // catalogue item with admin-only fields removed.
+            const { articleId: _articleId, topic: _topic, topicLabel: _topicLabel, excluded: _excluded, excludedAt: _excludedAt, excludedBy: _excludedBy, exclusionReason: _exclusionReason, lastSyncedAt: _lastSyncedAt, description: _description, url: _url, categoryName: _categoryName, ...synced } = effectiveItem;
+            return synced;
+        }
         const index = await loadFreshdeskArticlesIndex(container);
-        return (index?.articles.find((article) => String(article.freshdeskArticleId) === freshdeskArticleId) ?? null);
+        if (!index) {
+            return null;
+        }
+        const rawArticle = index.articles.find((article) => freshdeskArticleIdsMatch(article.freshdeskArticleId, requestedId));
+        if (!rawArticle || !rawArticle.enabled) {
+            return null;
+        }
+        let overrideExcluded = false;
+        try {
+            const overridesLoad = await loadFreshdeskOverrides(container);
+            const override = overridesLoad.document.overrides[requestedId] ??
+                overridesLoad.document.overrides[normalizeFreshdeskArticleId(rawArticle.freshdeskArticleId)];
+            overrideExcluded = Boolean(override?.excluded);
+        }
+        catch {
+            overrideExcluded = false;
+        }
+        if (overrideExcluded) {
+            return null;
+        }
+        return rawArticle;
     }
     catch {
         return null;
@@ -235,6 +291,9 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
     if (!parsed) {
         return { ok: false, error: "Help resource ID is invalid." };
     }
+    const questionForWorkflow = options.question
+        ? resolveHelpSearchQuery(options.question).searchQuery || options.question
+        : options.question;
     const freshdeskIndexContainer = options.freshdeskIndexContainer === undefined
         ? createConfiguredFreshdeskIndexContainer()
         : options.freshdeskIndexContainer;
@@ -243,7 +302,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
         : options.freshdeskImageContainer;
     const includeImages = options.includeImages ?? true;
     const maxImages = Math.min(options.maxImages ?? HELP_RESOURCE_DETAILS_MAX_IMAGES, FRESHDESK_IMAGE_LOAD_MAX_IMAGES_HARD);
-    const question = options.question?.trim() || null;
+    const question = questionForWorkflow?.trim() || null;
     const imagePresentation = resolveHelpImagePresentation(options.imagePresentation);
     try {
         if (parsed.source === "freshdesk") {
@@ -404,7 +463,7 @@ export async function getHelpResourceDetails(resourceId, options = {}) {
                 images: [],
             };
         }
-        if (parsed.source === "recorded_webinar") {
+        if (parsed.source === "recorded_webinar" || parsed.source === "youtube_video") {
             const resource = await findRecordedWebinarById(resourceId);
             if (!resource) {
                 return { ok: false, error: "Help resource was not found." };

@@ -34,6 +34,12 @@ export class RedTelemetrySpanProcessor {
             if ("enduser.id" in attrs) {
                 delete attrs["enduser.id"];
             }
+            if ("user_AuthenticatedId" in attrs) {
+                delete attrs["user_AuthenticatedId"];
+            }
+            if ("enduser.auth.id" in attrs) {
+                delete attrs["enduser.auth.id"];
+            }
         }
         catch {
             // Telemetry enrichment must never throw into the request path.
