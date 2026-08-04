@@ -25,7 +25,7 @@ OpenTelemetry `enduser.pseudo.id`. **Authenticated user id is never set.**
 Never sent to telemetry:
 
 - API keys, passwords, email addresses, or authenticated user identity
-- `connectionRef`, claim/confirmation codes, authorisation headers, or raw MCP session IDs
+- `connectionRef`, claim/confirmation codes, `routeToken` values, authorisation headers, or raw MCP session IDs
 - Company credentials or customer, supplier, invoice, or other accounting payloads
 
 Telemetry failures never block connection or MCP requests. Missing client IDs
