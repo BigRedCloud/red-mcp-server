@@ -25,7 +25,9 @@ import {
   buildCashReceiptPayload,
   mergeCashReceiptUpdateFromCurrent,
   buildCustomerLikePayload,
+  buildMissingCustomerLikeInformationResponse,
   buildProductPayload,
+  collectMissingCustomerLikeFields,
   enforceSalesProductLineAnalysisOrThrow,
   enforceSalesProductLineProductIdOrThrow,
   normalizeBatchItems,
@@ -117,6 +119,16 @@ export function registerRawCreateTool(
     
       if (openingBalanceIgnored) {
         finalPayload = removeOpeningBalanceFields(finalPayload);
+      }
+
+      if (path === "/v1/customers" || path === "/v1/suppliers") {
+        const ownerTypeId = path === "/v1/customers" ? 1 : 3;
+        const missingFields = collectMissingCustomerLikeFields(finalPayload);
+        if (missingFields.length > 0) {
+          return jsonResponse(
+            buildMissingCustomerLikeInformationResponse(missingFields, ownerTypeId),
+          );
+        }
       }
     
       if (path === "/v1/products") finalPayload = buildProductPayload(finalPayload);

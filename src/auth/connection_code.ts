@@ -4,77 +4,92 @@ import {
   createPendingConnection as createPendingConnectionRecord,
   ensureConnectionStoreInitialized,
   getConnectionStore,
+  issueConfirmationCodeForConnectToken,
 } from "./connection_store.js";
 
 /** @deprecated Use createPendingConnection(sessionId) from connection_store.js */
 export async function createConnectionCode(connectionId: string): Promise<string> {
   await ensureConnectionStoreInitialized();
 
-  const code = crypto.randomBytes(16).toString("hex");
+  const connectToken = crypto.randomBytes(16).toString("hex");
   await getConnectionStore().createPendingConnection({
-    code,
+    connectToken,
     connectionId,
     expiresAt: PENDING_CONNECTION_NEVER_EXPIRES_AT,
   });
 
-  return code;
+  return connectToken;
 }
 
 export async function getPendingConnection(
-  code: string
-): Promise<{ code: string; connectionId: string } | null> {
+  connectToken: string
+): Promise<{ code: string; connectToken: string; connectionId: string } | null> {
   await ensureConnectionStoreInitialized();
 
-  const pending = await getConnectionStore().getPendingConnection(code);
+  const pending = await getConnectionStore().getPendingConnection(connectToken);
   if (!pending) return null;
 
   return {
-    code: pending.code,
+    code: pending.connectToken,
+    connectToken: pending.connectToken,
     connectionId: pending.connectionId,
   };
 }
 
 export async function completeConnectionCode(
-  code: string
-): Promise<{ code: string; connectionId: string } | null> {
+  connectToken: string
+): Promise<{ code: string; connectToken: string; connectionId: string } | null> {
   await ensureConnectionStoreInitialized();
 
-  const pending = await getConnectionStore().completePendingConnection(code);
+  const pending = await getConnectionStore().completePendingConnection(connectToken);
   if (!pending) return null;
 
   return {
-    code: pending.code,
+    code: pending.connectToken,
+    connectToken: pending.connectToken,
     connectionId: pending.connectionId,
   };
 }
 
 export async function getConnectionByCode(
-  code: string
-): Promise<{ code: string; connectionId: string; used: boolean } | null> {
+  confirmationCode: string
+): Promise<{
+  code: string;
+  connectToken: string;
+  confirmationCode?: string;
+  connectionId: string;
+  used: boolean;
+} | null> {
   await ensureConnectionStoreInitialized();
 
-  const pending = await getConnectionStore().getConnectionByCode(code);
+  const pending =
+    await getConnectionStore().getConnectionByConfirmationCode(confirmationCode);
   if (!pending) return null;
 
   return {
-    code: pending.code,
+    code: pending.connectToken,
+    connectToken: pending.connectToken,
+    confirmationCode: pending.confirmationCode,
     connectionId: pending.connectionId,
     used: pending.used,
   };
 }
 
 export async function consumeConnectionCode(
-  code: string
-): Promise<{ code: string; connectionId: string } | null> {
+  confirmationCode: string
+): Promise<{ code: string; connectToken: string; connectionId: string } | null> {
   await ensureConnectionStoreInitialized();
 
-  const pending = await getConnectionStore().consumePendingConnection(code);
+  const pending =
+    await getConnectionStore().consumeConfirmationCode(confirmationCode);
   if (!pending) return null;
 
   return {
-    code: pending.code,
+    code: pending.connectToken,
+    connectToken: pending.connectToken,
     connectionId: pending.connectionId,
   };
 }
 
 export { createPendingConnectionRecord as createPendingConnection };
+export { issueConfirmationCodeForConnectToken };

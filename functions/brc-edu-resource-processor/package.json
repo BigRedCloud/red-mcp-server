@@ -1,0 +1,23 @@
+{
+  "name": "brc-edu-resource-processor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Azure Functions for BRC Edu YouTube catalogue synchronisation (timer and webhook).",
+  "type": "module",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test build/**/*.test.js",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

@@ -11,11 +11,26 @@ export type StoredCompanyCredential = {
 };
 
 export type PendingConnectionRecord = {
+  /**
+   * Secure-page token used in `/connect?code=…` and the connect form.
+   * Never accepted by `brc_confirm_company_connection`.
+   */
+  connectToken: string;
+  /**
+   * @deprecated Alias of `connectToken` for older call sites.
+   * Equal to `connectToken`; not a confirmation code.
+   */
   code: string;
   connectionId: string;
   createdAt: number;
   expiresAt: number;
+  /** True after the connect form has been submitted (one-time link). */
   used: boolean;
+  /**
+   * Chat confirmation code — issued only after at least one company connects.
+   * Distinct from `connectToken`. Absent on incomplete / legacy records.
+   */
+  confirmationCode?: string;
 };
 
 export type CompanyCredentialInput = {
@@ -54,21 +69,72 @@ export type ConnectionTelemetryRecord = {
   updatedAt: number;
 };
 
+/** Short-lived success-page lookup — confirmation code is never used as the URL id. */
+export type ConnectionSuccessPageRecord = {
+  successId: string;
+  confirmationCode: string;
+  connectedNames: string[];
+  failedCompanies: FailedCompanyConnection[];
+  createdAt: number;
+  expiresAt: number;
+};
+
 export interface ConnectionStore {
   getStoreType(): string;
 
   createPendingConnection(args: {
-    code: string;
+    /** Secure-page token (URL / form). Prefer this over deprecated `code`. */
+    connectToken?: string;
+    /** @deprecated Alias for `connectToken` — not a confirmation code. */
+    code?: string;
     connectionId: string;
     expiresAt: number;
   }): Promise<void>;
 
-  getPendingConnection(code: string): Promise<PendingConnectionRecord | null>;
+  /** Unused connect-page token only. */
+  getPendingConnection(connectToken: string): Promise<PendingConnectionRecord | null>;
 
+  /** Connect-page token lookup (used or unused). Never matches confirmation codes. */
+  getConnectionByConnectToken(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null>;
+
+  /**
+   * Confirmation-code lookup for claim.
+   * Must not resolve a bare connectToken.
+   */
+  getConnectionByConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null>;
+
+  /**
+   * @deprecated Use getConnectionByConfirmationCode.
+   * Looks up by confirmation code only (never connectToken).
+   */
   getConnectionByCode(code: string): Promise<PendingConnectionRecord | null>;
 
-  completePendingConnection(code: string): Promise<PendingConnectionRecord | null>;
+  completePendingConnection(
+    connectToken: string
+  ): Promise<PendingConnectionRecord | null>;
 
+  /**
+   * Attach a newly generated confirmation code after companies connect.
+   * Fails if connectToken is missing/incomplete or confirmationCode equals connectToken.
+   */
+  issueConfirmationCode(
+    connectToken: string,
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null>;
+
+  /** One-time consume after successful claim (by confirmation code). */
+  consumeConfirmationCode(
+    confirmationCode: string
+  ): Promise<PendingConnectionRecord | null>;
+
+  /**
+   * @deprecated Use consumeConfirmationCode.
+   * Consumes by confirmation code only.
+   */
   consumePendingConnection(code: string): Promise<PendingConnectionRecord | null>;
 
   bindSessionToConnection(
@@ -140,6 +206,14 @@ export interface ConnectionStore {
   getConnectionTelemetry(
     connectionId: string
   ): Promise<ConnectionTelemetryRecord | null>;
+
+  saveConnectionSuccessPage(
+    record: ConnectionSuccessPageRecord
+  ): Promise<void>;
+
+  getConnectionSuccessPage(
+    successId: string
+  ): Promise<ConnectionSuccessPageRecord | null>;
 
   getDiagnostics(args: {
     connectionId?: string;

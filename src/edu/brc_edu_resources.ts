@@ -11,6 +11,7 @@ import {
 import { downloadSupportCsvFromGraph, getBrcEduGraphConfig, type FetchLike } from "./brc_edu_graph.js";
 import { getBrcEduEnrichedCsvPath } from "./brc_edu_paths.js";
 import { loadSyncedEduResources } from "./brc_edu_synced_store.js";
+import { loadVisibleYouTubeResourcesForHelpSearch } from "../brc-edu/youtube/youtube-help-loader.js";
 
 import {
   freshdeskHelpResultDedupeKey,
@@ -205,6 +206,13 @@ export async function loadEnrichedEduResources(
   baseDir: string = process.cwd(),
   options?: LoadEnrichedEduResourcesOptions,
 ): Promise<EnrichedEduResource[]> {
+  const fromYouTube = await loadVisibleYouTubeResourcesForHelpSearch(undefined, {
+    now: options?.now,
+  });
+  if (fromYouTube && fromYouTube.length > 0) {
+    return fromYouTube;
+  }
+
   const synced = loadSyncedEduResourcesIfAvailable(baseDir);
   if (synced) {
     return synced;

@@ -10,7 +10,7 @@ export const DO_NOT_PASTE_API_KEY_IN_CHAT =
   "Do not ask the user to paste an API key into chat.";
 
 export const CONNECTION_REF_PERSISTENCE_GUIDANCE = [
-  "If brc_confirm_company_connection returned a connectionRef, pass that exact value on every later tool call in this chat.",
+  "If brc_confirm_company_connection returned a connectionRef, pass that exact value on every later tool call in this chat — including brc_route_request before create/update/delete workflows.",
   "When a tool call succeeds with connectionRef, keep using the same connectionRef — do not call brc_start_company_connection again.",
   "Do not treat empty lists, zero results, or partial data as an expired connection.",
   "If one company has no sales or purchases, report no data for that company — not a connection expiry.",
@@ -60,6 +60,8 @@ export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
   "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, when the session expires, or what timezone the expiry is in.",
   "Present the result to the user with the customerMessage text, company names, and expiryMessage when connected.",
   "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from the response — do not say you do not know the current time or that you lack a live clock when timeRemainingText is present. Do not ask the user to check their device clock. Do not say local time on its own.",
+  "Customer duration answers should explain how long the connection lasts, that a fresh secure link is needed after expiry, and that the one-time connection link itself cannot be reused.",
+  "Do not mention authentication classifications, empty-result logic, connectionRef, rehydration, HTTP status codes, session bindings, or other internal diagnostics in customer answers.",
   "Do not show connectionRef, activeConnectionRef, redconn_ values, session IDs, or diagnostic metadata to normal users.",
   "Do not show raw ISO expiresAt or credentialType to normal users unless they specifically ask or dev mode is enabled.",
   "Connection credentials are never returned.",
@@ -85,7 +87,7 @@ export const START_CONNECTION_RESPONSE_LINES = [
   "",
   "If you need to reconnect, try again after a failure, or fix an expired or stale connection, ask Red to start a new company connection to generate a fresh link.",
   "",
-  "After connecting your companies, return to this chat and copy/paste the confirmation code shown on the success page. Your connection will not be active until you do.",
+  "Once you've connected on that page, come back here and paste the confirmation message shown on the success screen so I can link those companies to this chat.",
 ] as const;
 
 export function formatStartConnectionResponse(url: string): string {

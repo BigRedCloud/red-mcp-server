@@ -48,6 +48,16 @@ import {
   scoreProceduralTitleMatch,
   scoreProceduralVideoMatch,
 } from "./help-query-expansion.js";
+import {
+  HELP_MODE_INSTRUCTION_SUMMARY,
+  isRedHelpCompanyConnectionQuery,
+  resolveHelpSearchQuery,
+} from "./help-mode.js";
+import {
+  buildEmptyUpcomingWebinarCustomerMarkdown,
+  EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE,
+  isUpcomingWebinarScheduleQuery,
+} from "../upcoming-webinars/upcoming-webinar-customer-fallback.js";
 
 export const DEFAULT_HELP_SEARCH_MAX_RESULTS = 5;
 export const SUPPORT_CONTACT_FOOTER_URL = SUPPORT_CONTACT_URL;
@@ -216,6 +226,17 @@ function sourceBoost(
     return baseScore + 5;
   }
 
+  if (source === "youtube_video") {
+    if (/\b(video|recording|watch|tutorial|how\s*to)\b/i.test(question)) {
+      return baseScore + 12;
+    }
+    // Prefer recorded webinars over ordinary channel videos for webinar queries.
+    if (/\bwebinar\b/i.test(question)) {
+      return Math.max(0, baseScore - 5);
+    }
+    return baseScore + 5;
+  }
+
   if (source === "upcoming_webinar") {
     if (isTrainingOrLiveHelpQuery(question)) {
       return baseScore + 18;
@@ -238,13 +259,34 @@ function fromUpcomingWebinarResource(
   return resource;
 }
 
+function resolveVideoHelpSource(
+  resource: EnrichedEduResource,
+): "recorded_webinar" | "youtube_video" {
+  return resource.youtubeCategory === "youtube_video"
+    ? "youtube_video"
+    : "recorded_webinar";
+}
+
+function buildVideoHelpResourceId(
+  resource: EnrichedEduResource,
+  source: "recorded_webinar" | "youtube_video",
+): string {
+  if (resource.videoId) {
+    return `${source}:${resource.videoId}`;
+  }
+
+  return `${source}:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`;
+}
+
 function fromRecordedWebinarResource(
   resource: EnrichedEduResource,
   syncedAt: string,
 ): NormalizedHelpResource {
+  const source = resolveVideoHelpSource(resource);
+
   return {
-    resourceId: `recorded_webinar:${createHash("sha256").update(resource.url).digest("hex").slice(0, 16)}`,
-    source: "recorded_webinar",
+    resourceId: buildVideoHelpResourceId(resource, source),
+    source,
     title: resource.title,
     summary: resource.description || resource.title,
     bodyText: resource.description,
@@ -463,15 +505,24 @@ export function searchUnifiedHelpResources(
       }
     }
 
-    if (includeSource("recorded_webinar")) {
+    if (includeSource("recorded_webinar") || includeSource("youtube_video")) {
       for (const resource of sources.recordedWebinars ?? []) {
         if (!resource.isActive) {
           continue;
         }
 
         const normalized = fromRecordedWebinarResource(resource, syncedAt);
+        if (
+          (normalized.source === "recorded_webinar" &&
+            !includeSource("recorded_webinar")) ||
+          (normalized.source === "youtube_video" &&
+            !includeSource("youtube_video"))
+        ) {
+          continue;
+        }
+
         let score = sourceBoost(
-          "recorded_webinar",
+          normalized.source,
           query,
           scoreTextMatch(query, questionTokens, [
             normalized.title,
@@ -499,7 +550,7 @@ export function searchUnifiedHelpResources(
         }
 
         consider(
-          `recorded_webinar:${normalized.url}`,
+          `${normalized.source}:${normalized.url}`,
           score,
           toHelpSearchResult(normalized, score),
         );
@@ -554,11 +605,41 @@ export function buildUnifiedFindHelpResourcesResponse(
     sourceFilter?: HelpResourceSourceFilter;
   },
 ) {
-  const resources = searchUnifiedHelpResources(question, sources, options);
-  const intent = detectHelpProceduralIntent(question);
+  const helpModeResolution = resolveHelpSearchQuery(question);
+  const searchQuestion = helpModeResolution.searchQuery || question.trim();
+  const originalQuestion = question;
+  const allowCompanyConnectionTool =
+    helpModeResolution.isHelpMode &&
+    isRedHelpCompanyConnectionQuery(searchQuestion);
+
+  let resources = searchUnifiedHelpResources(searchQuestion, sources, options);
+  const upcomingScheduleQuery =
+    options?.sourceFilter === "upcoming_webinar" ||
+    isUpcomingWebinarScheduleQuery(searchQuestion);
+
+  if (upcomingScheduleQuery) {
+    const upcomingOnly = resources.filter(
+      (resource) => resource.source === "upcoming_webinar",
+    );
+    if (upcomingOnly.length > 0) {
+      // Upcoming-schedule questions must not treat recorded videos as live sessions.
+      resources = upcomingOnly;
+    } else {
+      // Generic schedule questions often have no text overlap with listing titles —
+      // surface every enabled upcoming webinar from the catalogue instead.
+      const catalogue = (sources.upcomingWebinars ?? []).filter(
+        (resource) => resource.enabled !== false,
+      );
+      resources = catalogue.map((resource) =>
+        toHelpSearchResult(fromUpcomingWebinarResource(resource), 100),
+      );
+    }
+  }
+
+  const intent = detectHelpProceduralIntent(searchQuestion);
   const usedResources = selectUsedHelpResources(resources, {
     intentIsProcedural: intent !== null,
-    question,
+    question: searchQuestion,
   });
   const usedResourceIds = usedResources.map((resource) => resource.resourceId);
   const answerSources = buildHelpAnswerSources(
@@ -566,13 +647,19 @@ export function buildUnifiedFindHelpResourcesResponse(
   );
   const customerFacingSourcesMarkdown =
     buildCustomerFacingSourcesMarkdown(answerSources);
+  const emptyUpcomingWebinarResult =
+    upcomingScheduleQuery &&
+    !usedResources.some((resource) => resource.source === "upcoming_webinar");
+  const customerFacingEmptyUpcomingWebinarMarkdown = emptyUpcomingWebinarResult
+    ? buildEmptyUpcomingWebinarCustomerMarkdown()
+    : undefined;
   const supportFallback = resolveSupportFallback({
     matchCount: usedResources.length > 0 ? usedResources.length : resources.length,
     strongestScore:
       usedResources[0]?.relevanceScore ?? resources[0]?.relevanceScore ?? null,
     hasRelevantSourceOrScreenshot: answerSources.length > 0,
   });
-  const redAction = resolveHelpRedActionCapability(question);
+  const redAction = resolveHelpRedActionCapability(searchQuestion);
   const hasFreshdeskMatch = usedResources.some(
     (resource) => resource.source === "freshdesk",
   );
@@ -583,7 +670,12 @@ export function buildUnifiedFindHelpResourcesResponse(
   });
 
   return {
-    question,
+    question: searchQuestion,
+    originalQuestion,
+    helpMode: helpModeResolution.isHelpMode,
+    cleanedQuery: helpModeResolution.cleanedQuery,
+    blockTransactionalTools: helpModeResolution.isHelpMode,
+    allowCompanyConnectionTool,
     category: options?.category ?? null,
     matchCount: resources.length,
     resources,
@@ -594,6 +686,9 @@ export function buildUnifiedFindHelpResourcesResponse(
       : {}),
     ...(customerFacingAnswerSectionsMarkdown
       ? { customerFacingAnswerSectionsMarkdown }
+      : {}),
+    ...(customerFacingEmptyUpcomingWebinarMarkdown
+      ? { customerFacingEmptyUpcomingWebinarMarkdown }
       : {}),
     supportFallbackRecommended: supportFallback.supportFallbackRecommended,
     supportFallbackReason: supportFallback.supportFallbackReason,
@@ -611,10 +706,21 @@ export function buildUnifiedFindHelpResourcesResponse(
       : {}),
     responseGuidance: {
       format: [
+        helpModeResolution.isHelpMode
+          ? HELP_MODE_INSTRUCTION_SUMMARY
+          : "Answer the customer's how-to question from returned help resources.",
+        helpModeResolution.isHelpMode
+          ? "Help mode is active: provide manual guidance first. Do not ask for customer details to perform the action. Do not call create/update/delete/email/batch tools unless the user later explicitly asks Red to perform the action. Use brc_start_company_connection only when the cleaned query is specifically about connecting companies."
+          : "When the customer asked Red to perform an action (not help mode), use the appropriate operational tools after any required confirmation.",
         "Provide a concise synthesized direct answer first.",
         "Add clear steps where applicable, based only on usedResourceIds / Sources — not every search hit.",
+        emptyUpcomingWebinarResult
+          ? EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE
+          : "When upcoming_webinar resources are returned, list only those sessions and use only their returned registrationUrl or publicUrl values — never invent webinar details.",
+        "Do not describe recorded_webinar or youtube_video resources as upcoming webinars.",
         "End with customerFacingAnswerSectionsMarkdown (or Sources with Articles/Videos, then optional Do this through Red, then Still need help? support) in that exact order.",
         "Never emit Do this through Red before Sources.",
+        "Manual guidance and Sources must appear before any optional Do this through Red offer.",
         "Keep screenshot Markdown links beside their related steps — never move them into Sources.",
         "Always end with the Still need help? support section.",
         "Use only publicUrl or registrationUrl values returned in sources for hyperlinks.",
@@ -634,6 +740,9 @@ export function buildUnifiedFindHelpResourcesResponse(
         "upcoming_webinar",
         "freshdesk",
       ],
+      helpMode: helpModeResolution.isHelpMode,
+      blockTransactionalTools: helpModeResolution.isHelpMode,
+      allowCompanyConnectionTool,
       supportFooter: SUPPORT_FOOTER_GUIDANCE,
       supportFooterWhen: SUPPORT_FALLBACK_RESPONSE_GUIDANCE,
       sources: [
@@ -647,6 +756,9 @@ export function buildUnifiedFindHelpResourcesResponse(
       ].join(" "),
       layout: HELP_ANSWER_LAYOUT_GUIDANCE,
       autoScreenshots: AUTO_SCREENSHOT_RETRIEVAL_GUIDANCE,
+      ...(emptyUpcomingWebinarResult
+        ? { emptyUpcomingWebinar: EMPTY_UPCOMING_WEBINAR_RESPONSE_GUIDANCE }
+        : {}),
     },
     // Backward-compatible alias — prefer supportUrl / supportFallbackRecommended.
     supportFallbackUrl: supportFallback.supportUrl,
@@ -667,6 +779,17 @@ export function unifiedFindHelpResourcesMcpContent(
       text: JSON.stringify(payload, null, 2),
     },
   ];
+
+  if (payload.customerFacingEmptyUpcomingWebinarMarkdown) {
+    content.push({
+      type: "text",
+      text: [
+        "Use the following as the direct customer answer for this empty upcoming-webinar result. Do not claim no webinars are scheduled. Still end with the Still need help? support section:",
+        "",
+        payload.customerFacingEmptyUpcomingWebinarMarkdown,
+      ].join("\n"),
+    });
+  }
 
   const sourcesText = buildSourcesMarkdownTextBlock(
     payload.customerFacingSourcesMarkdown,

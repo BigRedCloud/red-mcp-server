@@ -32,24 +32,23 @@ async function seedCompletedConnection(args: {
   connectionId: string;
   code: string;
   companies: Array<{ name: string; apiKey: string }>;
-}) {
+}): Promise<{ confirmationCode: string }> {
   const { getConnectionStore } = await loadModules();
+  const { seedClaimableConnection } = await import("./connection_test_helpers.js");
   const store = getConnectionStore();
-  await store.createPendingConnection({
-    code: args.code,
+  const confirmationCode = uniqueId("confirm");
+  await seedClaimableConnection(store, {
+    connectToken: args.code,
+    confirmationCode,
     connectionId: args.connectionId,
-    expiresAt: Number.MAX_SAFE_INTEGER,
-  });
-  await store.completePendingConnection(args.code);
-  await store.saveConnectedCompanies(
-    args.connectionId,
-    args.companies.map((company) => ({
+    companies: args.companies.map((company) => ({
       companyName: company.name,
       apiKey: company.apiKey,
       expiresAt: Date.now() + 4 * 60 * 60 * 1000,
-      credentialValidatedAt: Date.now(),
-    }))
-  );
+    })),
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  });
+  return { confirmationCode };
 }
 
 test("confirm returns a ref that works on the next read call", async () => {
@@ -64,14 +63,14 @@ test("confirm returns a ref that works on the next read call", async () => {
 
   const connectionId = uniqueId("conn");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-c-confirm-next" }],
   });
 
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-session")
   );
 
@@ -110,14 +109,14 @@ test("missing-ref failure followed by valid-ref retry succeeds", async () => {
 
   const connectionId = uniqueId("conn-retry");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-c-retry" }],
   });
 
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-retry")
   );
 
@@ -185,14 +184,14 @@ test("missing-ref failure does not delete the connection", async () => {
 
   const connectionId = uniqueId("conn-preserve");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-preserve" }],
   });
 
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-preserve")
   );
 
@@ -222,14 +221,14 @@ test("ref remains valid after MCP session rotation", async () => {
 
   const connectionId = uniqueId("conn-rotate");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-rotate" }],
   });
 
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-rotate")
   );
 
@@ -261,14 +260,14 @@ test("ref remains valid after telemetry update", async () => {
 
   const connectionId = uniqueId("conn-tel");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-tel" }],
   });
 
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-tel")
   );
 
@@ -345,13 +344,14 @@ test("list company contexts reloads through connectionRef", async () => {
 
   const connectionId = uniqueId("conn-contexts");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-contexts" }],
   });
+
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-contexts")
   );
 
@@ -380,13 +380,14 @@ test("list sales invoices reloads through connectionRef", async () => {
 
   const connectionId = uniqueId("conn-invoices");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "key-invoices" }],
   });
+
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-invoices")
   );
 
@@ -420,19 +421,19 @@ test("separate connections cannot inherit Company B", async () => {
   const codeA = uniqueId("code").replace(/-/g, "").slice(0, 32);
   const codeB = uniqueId("code").replace(/-/g, "").slice(0, 32);
 
-  await seedCompletedConnection({
+  const seededA = await seedCompletedConnection({
     connectionId: connectionA,
     code: codeA,
     companies: [{ name: "Company A", apiKey: "key-a-isol" }],
   });
-  await seedCompletedConnection({
+  const seededB = await seedCompletedConnection({
     connectionId: connectionB,
     code: codeB,
     companies: [{ name: "Company B", apiKey: "key-b-isol" }],
   });
 
-  const claimA = await claimConnectionCodeForSession(codeA, uniqueId("sess-a"));
-  const claimB = await claimConnectionCodeForSession(codeB, uniqueId("sess-b"));
+  const claimA = await claimConnectionCodeForSession(seededA.confirmationCode, uniqueId("sess-a"));
+  const claimB = await claimConnectionCodeForSession(seededB.confirmationCode, uniqueId("sess-b"));
 
   const scopeA = await prepareHttpToolSessionScope(
     uniqueId("use-a"),
@@ -552,13 +553,14 @@ test("diagnostics contain no secrets", async () => {
 
   const connectionId = uniqueId("conn-diag");
   const code = uniqueId("code").replace(/-/g, "").slice(0, 32);
-  await seedCompletedConnection({
+  const { confirmationCode } = await seedCompletedConnection({
     connectionId,
     code,
     companies: [{ name: "Company C", apiKey: "super-secret-api-key-value" }],
   });
+
   const claimed = await claimConnectionCodeForSession(
-    code,
+    confirmationCode,
     uniqueId("confirm-diag")
   );
 

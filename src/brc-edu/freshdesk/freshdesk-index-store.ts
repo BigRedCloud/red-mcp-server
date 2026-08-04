@@ -8,7 +8,7 @@ import {
 import {
   getBrcEduUploadContainer,
   getBrcEduUploadStorageConnectionString,
-} from "../../edu/brc_edu_storage_config.js";
+} from "../../edu/brc_edu_upload_store.js";
 
 import type {
   FreshdeskArticleSyncFailure,

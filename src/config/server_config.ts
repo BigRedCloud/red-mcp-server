@@ -90,29 +90,93 @@ export function getApiKeyExpirationMs(): number {
  * 3. BRC_PUBLIC_BASE_URL — production / general hosted URL
  * 4. WEBSITE_HOSTNAME when present
  * 5. localhost for local dev
+ *
+ * There is no separate getConnectPublicBaseUrl — /connect links use getPublicBaseUrl().
  */
-export function getPublicBaseUrl(): string {
-  const connectOverride = process.env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
+export type ConnectPublicBaseUrlSource =
+  | "BRC_CONNECT_PUBLIC_BASE_URL"
+  | "WEBSITE_HOSTNAME_NON_PRODUCTION_SLOT"
+  | "BRC_PUBLIC_BASE_URL"
+  | "WEBSITE_HOSTNAME"
+  | "localhost";
+
+function resolvePublicBaseUrl(
+  env: NodeJS.ProcessEnv = process.env
+): { baseUrl: string; source: ConnectPublicBaseUrlSource } {
+  const connectOverride = env.BRC_CONNECT_PUBLIC_BASE_URL?.trim();
   if (connectOverride) {
-    return connectOverride.replace(/\/$/, "");
+    return {
+      baseUrl: connectOverride.replace(/\/$/, ""),
+      source: "BRC_CONNECT_PUBLIC_BASE_URL",
+    };
   }
 
-  const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase();
-  if (isNonProductionHostedSlot() && websiteHostname) {
-    return `https://${websiteHostname}`;
+  const websiteHostname = env.WEBSITE_HOSTNAME?.trim().toLowerCase();
+  if (isNonProductionHostedSlot(env) && websiteHostname) {
+    return {
+      baseUrl: `https://${websiteHostname}`,
+      source: "WEBSITE_HOSTNAME_NON_PRODUCTION_SLOT",
+    };
   }
 
-  const fromEnv = process.env.BRC_PUBLIC_BASE_URL?.trim();
+  const fromEnv = env.BRC_PUBLIC_BASE_URL?.trim();
   if (fromEnv) {
-    return fromEnv.replace(/\/$/, "");
+    return {
+      baseUrl: fromEnv.replace(/\/$/, ""),
+      source: "BRC_PUBLIC_BASE_URL",
+    };
   }
 
   if (websiteHostname) {
-    return `https://${websiteHostname}`;
+    return {
+      baseUrl: `https://${websiteHostname}`,
+      source: "WEBSITE_HOSTNAME",
+    };
   }
 
-  const port = process.env.PORT ?? "3000";
-  return `http://localhost:${port}`;
+  const port = env.PORT ?? "3000";
+  return {
+    baseUrl: `http://localhost:${port}`,
+    source: "localhost",
+  };
+}
+
+export function getPublicBaseUrl(): string {
+  return resolvePublicBaseUrl().baseUrl;
+}
+
+/**
+ * Safe connect-URL diagnostics for operators — hostname and which setting won only.
+ * Never includes full URLs with tokens, API keys, connection strings, or Cosmos ids.
+ */
+export function getConnectPublicBaseUrlDiagnostics(
+  env: NodeJS.ProcessEnv = process.env
+): {
+  resolvedHost: string;
+  source: ConnectPublicBaseUrlSource;
+  connectOverridePresent: boolean;
+  publicBaseUrlPresent: boolean;
+  websiteHostnamePresent: boolean;
+  deploymentEnvPresent: boolean;
+  nonProductionSlot: boolean;
+} {
+  const { baseUrl, source } = resolvePublicBaseUrl(env);
+  let resolvedHost = "";
+  try {
+    resolvedHost = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    resolvedHost = "";
+  }
+
+  return {
+    resolvedHost,
+    source,
+    connectOverridePresent: Boolean(env.BRC_CONNECT_PUBLIC_BASE_URL?.trim()),
+    publicBaseUrlPresent: Boolean(env.BRC_PUBLIC_BASE_URL?.trim()),
+    websiteHostnamePresent: Boolean(env.WEBSITE_HOSTNAME?.trim()),
+    deploymentEnvPresent: Boolean(env.BRC_DEPLOYMENT_ENV?.trim()),
+    nonProductionSlot: isNonProductionHostedSlot(env),
+  };
 }
 
 /**
@@ -143,6 +207,8 @@ export function getConnectUrlHostMismatch(): {
   resolvedConnectHostPresent: boolean;
   hostsMatch: boolean;
   usingSlotHostname: boolean;
+  resolvedHost: string;
+  source: ConnectPublicBaseUrlSource;
 } {
   const configured = process.env.BRC_PUBLIC_BASE_URL?.trim();
   let configuredHost = "";
@@ -154,13 +220,8 @@ export function getConnectUrlHostMismatch(): {
     }
   }
 
-  const resolved = getPublicBaseUrl();
-  let resolvedHost = "";
-  try {
-    resolvedHost = new URL(resolved).hostname.toLowerCase();
-  } catch {
-    resolvedHost = "";
-  }
+  const diagnostics = getConnectPublicBaseUrlDiagnostics();
+  const resolvedHost = diagnostics.resolvedHost;
 
   const websiteHostname = process.env.WEBSITE_HOSTNAME?.trim().toLowerCase() ?? "";
   const usingSlotHostname =
@@ -173,6 +234,8 @@ export function getConnectUrlHostMismatch(): {
       configuredHost && resolvedHost && configuredHost === resolvedHost
     ),
     usingSlotHostname,
+    resolvedHost,
+    source: diagnostics.source,
   };
 }
 
@@ -202,8 +265,11 @@ const SESSION_TOOL_NAMES = new Set([
   "brc_clear_all_company_api_keys",
   "brc_getting_started",
   "brc_get_deployment_policy",
+  "brc_route_request",
+  "brc_red_help",
   "brc_find_help_resources",
   "brc_get_help_resource_details",
+  "brc_open_edu_admin",
 ]);
 
 const DEV_TOOL_NAMES = new Set<string>([

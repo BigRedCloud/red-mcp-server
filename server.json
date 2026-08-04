@@ -1,0 +1,17 @@
+{
+    "$schema":  "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name":  "io.github.BigRedCloud/red-mcp-server",
+    "title":  "Red by Big Red Cloud",
+    "description":  "Secure MCP access to Big Red Cloud accounting data, workflows, help and training.",
+    "repository":  {
+                       "url":  "https://github.com/BigRedCloud/red-mcp-server",
+                       "source":  "github"
+                   },
+    "version": "1.5.0",
+    "remotes":  [
+                    {
+                        "type":  "streamable-http",
+                        "url":  "https://red.bigredcloud.com/mcp"
+                    }
+                ]
+}

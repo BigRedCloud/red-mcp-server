@@ -1,6 +1,6 @@
 {
   "name": "brc-company-mcp-server",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
   "type": "module",
   "files": [
@@ -11,7 +11,7 @@
     "brc-company-mcp-server": "build/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build --prefix functions/brc-edu-resource-processor",
     "postinstall": "npm install --prefix functions/brc-edu-resource-processor && npm run build",
     "start": "node build/remote.js",
     "start:local": "node build/index.js",
@@ -39,7 +39,6 @@
     "cors": "^2.8.6",
     "csv-parse": "^7.0.1",
     "dotenv": "latest",
-    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "multer": "^2.2.0",
     "readline-sync": "^1.4.10",

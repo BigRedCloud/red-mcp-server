@@ -76,6 +76,11 @@ test("start connection response tells the user not to reuse an older link", () =
   assert.match(text, /Do not open or reuse an older connection link/i);
   assert.match(text, /start a new company connection to generate a fresh link/i);
   assert.equal(text.includes("https://example.test/connect?code=abc"), true);
+  assert.match(
+    text,
+    /Once you've connected on that page, come back here and paste the confirmation message shown on the success screen so I can link those companies to this chat\./
+  );
+  assert.equal(/will not be active until you do/i.test(text), false);
 });
 
 test("claim guidance requires a fresh secure Red connection link", () => {
@@ -103,6 +108,10 @@ test("success page tells the user to return to this chat and copy/paste the code
 test("success page still includes the confirmation code without exposing keys", () => {
   const html = renderSuccessPage(["YOUR-COMPANY"], "abc123");
   assert.match(html, /Confirm connection code abc123/);
+  assert.match(html, /id="copy-chat-message"/);
+  assert.match(html, />\s*Copy message for chat\s*</);
+  assert.equal(/Copy confirmation code/.test(html), false);
+  assert.equal((html.match(/<button[^>]*id="copy-[^"]+"[^>]*>/g) ?? []).length, 1);
 });
 
 test("shared do-not-reuse and do-not-paste constants are explicit", () => {

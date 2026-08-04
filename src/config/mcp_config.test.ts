@@ -56,3 +56,32 @@ test("MCP server instructions auto-retrieve screenshots for BRC tutorials", () =
   assert.match(instructions, /https:\/\/bigredcloud\.com\/contact\//);
   assert.equal(/helpInteractionMode/i.test(instructions), false);
 });
+
+test("MCP server instructions define red-help mode and block auto transactional actions", () => {
+  const instructions = getBrcMcpServerInstructions(50, false);
+
+  assert.ok(instructions.startsWith("MANDATORY ROUTING:"));
+  assert.match(instructions, /valid routeToken returned by the router/i);
+  assert.match(
+    instructions,
+    /routeToken does not replace preview-before-posting/i,
+  );
+  assert.match(instructions, /REQUEST ROUTING \(mandatory\)/i);
+  assert.match(instructions, /brc_route_request/i);
+  assert.match(instructions, /Two behaviours \(mandatory\)/i);
+  assert.match(instructions, /how do I/i);
+  assert.match(
+    instructions,
+    /Do not let add\/create\/post\/update force action mode/i,
+  );
+  assert.match(
+    instructions,
+    /Help mode does not persist into the next/i,
+  );
+  assert.match(instructions, /RED-HELP SHORTCUT/i);
+  assert.match(instructions, /red-help how do I add a customer/i);
+  assert.match(
+    instructions,
+    /classifiers alone cannot force tool selection/i,
+  );
+});
