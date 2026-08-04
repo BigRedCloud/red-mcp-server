@@ -9,8 +9,8 @@ Instead of calling the Big Red Cloud REST API directly, users work in plain lang
 With Red, a connected user can:
 
 - **Review** Big Red Cloud data with read-only lookups (customers, suppliers, products, invoices, quotes, nominal reports, and more).
-- **Review before posting** — see a plain-English preview of new records before anything is written to Big Red Cloud.
-- **Create, update, or delete** records only after explicit confirmation.
+- **Review before posting** — see a plain-English preview of new or changed records before anything is written to Big Red Cloud.
+- **Create, update, delete, batch, or email** records only after explicit confirmation (and only when those capabilities are enabled for the deployment).
 - **Ask Big Red Cloud how-to and training questions** — Red answers using official support articles, customer documentation, screenshots, and webinar resources. These help tools do not require a connected company.
 
 ---
@@ -31,14 +31,15 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 - Pre-confirm validation of company connection credentials on the connection page (single-company form or multi-company CSV upload)
 - Partial connection results — invalid keys are rejected before confirm and reported in `failedCompanies`
 - Hosted HTTP `connectionRef` / `activeConnectionRef` so MCP clients can silently reuse a confirmed connection across supported session changes; kept in tool JSON, not shown to end users
+- Request routing for transactional work — action tools expect a short-lived `routeToken` from the router before create/update/delete/batch/email workflows proceed
 - Privacy-safe anonymous operational telemetry (platform, environment, tool name, connected-company count) — see [docs/TELEMETRY.md](docs/TELEMETRY.md)
 - Company readiness check (`brc_company_readiness_check`) for connected companies
 - Read-only Big Red Cloud lookups
 - Customer, supplier, product, sales rep, VAT, and analysis category tools
 - Sales quotes, invoices, credit notes, purchases, payments, and cash tools
-- Preview-before-posting confirmation flow for create, update, delete, batch, and email actions
+- Preview-before-posting confirmation flow for create, update, delete, and batch actions (email tools use an explicit send confirmation)
 - VAT and transaction safety checks
-- Sales invoice safeguards, including multi-line generated-reference validation, Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and CR analysis category confirmation
+- Sales invoice safeguards, including multi-line generated-reference validation, Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and related preflight checks
 - Session audit log of writes made through the MCP session
 - Official Big Red Cloud help answers from Freshdesk articles, customer documentation, screenshots, and webinars — no company connection required
 - Local stdio and hosted HTTP transports
@@ -54,13 +55,14 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 - **Session-scoped connections.** A connected company stays available for about the configured session duration and is held in session memory (or an optional shared connection store in hosted deployments). Where supported, connection handling is resilient across MCP session rotation so clients can reuse `connectionRef` / `activeConnectionRef` without asking the user to reconnect.
 - **Pre-confirm validation.** Company connection credentials submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired credentials are not saved; they appear in `failedCompanies` at confirmation time.
 - **Credential invalidation.** Only confirmed authentication failures clear a stored company credential. Endpoint, validation, permission, timeout, and server failures are not treated as an expired API key.
-- **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless dev mode is enabled or the user explicitly asks for technical details.
+- **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless the user explicitly asks for technical details.
 - **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, connection status) is derived from that value — not hardcoded.
-- **Explicit confirmation for writes.** Create, update, delete, batch, and email actions require an explicit confirmation flag after a preview before posting has been shown.
+- **Request routing for writes.** Create, update, delete, batch, and email tools require a valid short-lived `routeToken` issued by the request router for the matching workflow. A route token is not permission to post — preview and confirmation still apply.
+- **Explicit confirmation for writes.** Create, update, delete, and batch actions require an explicit confirmation flag after a preview before posting has been shown. Email tools require an explicit send confirmation after an email preview.
 - **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
 - **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only calls are not logged.
-- **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment, in which case the matching tools return a permission message instead of calling Big Red Cloud.
+- **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment. Disabled skill groups are **not registered** with the MCP client for that process, so those tools are hidden rather than callable.
 
 ### Sales invoice safety checks
 
@@ -88,9 +90,10 @@ Two entry points share one tool registry:
 Key shared modules:
 
 - `src/server.ts` — MCP server factory and stdio singleton
-- `src/register_all_tools.ts` — central tool registration; wraps the server so disabled skills register a permission-message blocker instead of the real tool, and so write tools get preview-before-posting/confirmation handling
+- `src/register_all_tools.ts` — central tool registration; skips tools whose skill group is disabled, and wraps write tools with routing and preview-before-posting/confirmation handling
 - `src/config/server_config.ts` — deployment skill gating driven by the `BRC_ALLOW_*` flags
-- `src/config/mcp_config.ts` — MCP server instructions, connection-safety rules, and connectionRef presentation rules
+- `src/config/mcp_config.ts` — MCP server instructions, connection-safety rules, help-answer rules, and connectionRef presentation rules
+- `src/routing/` — request classification and short-lived `routeToken` issuance/validation for transactional tools
 - `src/shared.ts` — Big Red Cloud HTTP client, session-scoped connections, audit log, and helpers
 - `src/read_connection_metadata.ts` — connection status metadata echoed on tool responses (including `activeConnectionRef` for hosted clients)
 - `src/auth/connection_presentation.ts` — user-facing TTL wording and assistant presentation hints
@@ -98,10 +101,10 @@ Key shared modules:
 - `src/guards/` — transaction, reference, VAT category, product line, and write-confirmation safety checks
 - `src/auth/` — secure connection flow, connection store (memory or Cosmos), connection page, and credential persistence
 - `src/telemetry/` — anonymous client/session identity and platform detection for hosted operational telemetry
-- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, YouTube catalogue sync, screenshots, and unified help search
-- `src/edu/` — shared help-resource loading, enrichment, and storage configuration
-- `src/tools/edu/` — read-only help tools: `brc_find_help_resources` and `brc_get_help_resource_details`
-- `functions/brc-edu-resource-processor/` — Azure Functions for hourly YouTube reconciliation and optional YouTube webhook forwarding
+- `src/brc-edu/` — Freshdesk articles, customer documentation, webinar indexes, screenshots, and unified help search
+- `src/edu/` — shared help-resource loading, enrichment, workbook parsing, and storage configuration
+- `src/tools/edu/` — read-only help tools
+- `src/tools/routing/` — request-routing tool registration
 
 Domain logic lives under `src/tools/`, with generic create/update/delete/list/batch helpers in `src/tools/general/`.
 
@@ -217,7 +220,7 @@ Hosted HTTP (local development):
 | Integration tests | `npm run test:integration` | Integration tests |
 | Production audit | `npm run audit:prod` | `npm audit` for production dependencies |
 
-Tests cover the safety guards described above, including sales invoice checks, transaction date validation, the secure connection flow (CSV validation, partial confirm, credential invalidation), connectionRef presentation rules, TTL wording, and response wording.
+Tests cover the safety guards described above, including sales invoice checks, transaction date validation, the secure connection flow (CSV validation, partial confirm, credential invalidation), connectionRef presentation rules, request routing, TTL wording, and response wording.
 
 ---
 
@@ -249,7 +252,7 @@ BRC_RATE_LIMIT_REQUESTS_PER_MINUTE=300
 BRC_API_KEY_BLACKLIST_SHA256=
 
 # Hosted connection persistence (optional)
-# memory = in-process (local/Cursor); cosmos = shared store for multi-instance HTTP
+# memory = in-process; cosmos = shared store for multi-instance HTTP
 RED_CONNECT_CONNECTION_STORE=memory
 RED_CONNECT_COSMOS_CONNECTION_STRING=
 RED_CONNECT_COSMOS_DATABASE=red-connect
@@ -260,7 +263,7 @@ RED_CONNECT_ENCRYPTION_KEY=
 RED_CONNECT_HTTP_MODE=true
 ```
 
-Deployment skill flags control which categories of tools are active. When a flag is off, the matching tools return a permission message instead of calling Big Red Cloud:
+Deployment skill flags control which categories of tools are registered. When a flag is off, tools in that skill group are skipped at registration and do not appear to MCP clients:
 
 ```env
 BRC_ALLOW_READ_SKILLS=true
@@ -272,7 +275,7 @@ BRC_ALLOW_BATCH_SKILLS=true
 BRC_ALLOW_DEV_MODE=false
 ```
 
-You can review the active policy at runtime with the `brc_get_deployment_policy` tool.
+You can review the active customer-facing capability summary at runtime with the `brc_get_deployment_policy` tool (plain-language availability of read, create/change, delete, email, and batch — not a full tool catalogue).
 
 ---
 
@@ -316,19 +319,17 @@ Details for operators and developers: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 ## Tool coverage
 
-Red exposes a focused set of MCP tools, grouped by domain. Exact tool names and their endpoint mappings live in the source code under `src/tools/`.
-
-For a detailed developer guide to the source layout and MCP tool coverage, see [docs/TOOLS.md](docs/TOOLS.md).
+Red exposes a focused set of MCP tools, grouped by domain. Exact tool names and their endpoint mappings live in the source code under `src/tools/` and are summarised for developers in [docs/TOOLS.md](docs/TOOLS.md).
 
 - **Company setup and readiness** — company setup configuration, financial year, options, readiness checks, transaction date validation, and getting-started guidance.
 - **Customers and suppliers** — list/get/create/update/delete plus opening balances and account transactions.
 - **Products and sales reps** — list/get/create/update/delete and product types.
 - **Sales documents** — quotes, sales invoices, sales credit notes, and sales entries, including generated-reference variants and generating an invoice from a quote.
-- **Purchases and payments** — purchases, payments, cash payments, and cash receipts.
+- **Purchases and payments** — purchases, payments, cash payments, cash receipts, and bank accounts.
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
 - **Audit and session** — session connection management and the session audit log.
-- **Help and training** — Freshdesk articles, customer documentation, recorded webinars, Big Red Cloud YouTube videos, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
+- **Help and training** — Freshdesk articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
 
@@ -349,33 +350,13 @@ For a specific VAT-sensitive workflow (sales invoice, purchase, cash receipt, st
 
 ## Help and training resources
 
-Red includes two read-only MCP tools for Big Red Cloud help and training questions:
+Red includes read-only MCP tools for Big Red Cloud help and training questions. They do not require a connected company.
 
-- `brc_find_help_resources` — searches official articles, customer documentation, recorded webinars, Big Red Cloud YouTube videos, and upcoming webinars.
-- `brc_get_help_resource_details` — returns the full details for a selected resource, including step-by-step guidance and relevant screenshot links where available.
+Typical capabilities:
 
-These tools do not require a connected Big Red Cloud company.
-
-### YouTube catalogue synchronisation (operators)
-
-Hosted Red deployments can synchronise the Big Red Cloud YouTube channel automatically:
-
-- Videos on webinar playlist `PL2rEGgtssfJ9w74MU2yi88FIUB345pp2D` are classified as **recorded webinars**.
-- Other channel uploads are classified as **Big Red Cloud videos**.
-- Staff can exclude or restore videos on the protected BRC Edu admin page; exclusions are keyed by YouTube `videoId` and survive every future sync.
-- Excluded videos remain visible (greyed out) to staff but are never returned to customers in help search.
-- Authoritative JSON lives in Azure Blob Storage under `brc-edu/youtube/` (`youtube-videos.json`, `video-overrides.json`, `effective-video-catalog.json`).
-- An Azure Function timer (default hourly, `BRC_YOUTUBE_SYNC_SCHEDULE`) and optional YouTube PubSubHubbub webhook keep the catalogue fresh; staff can also click **Sync YouTube now**.
-
-Required Azure settings are listed in `.env.example` (YouTube API key, channel id, blob paths, sync secret, webhook secret). Prefer App Service / Function App application settings or Key Vault — never commit real secrets.
-
-**Local test sketch**
-
-1. Configure storage + YouTube env vars in `.env` (example values only in `.env.example`).
-2. Run `npm run build` and start Red with `npm run start`.
-3. Sign in to the BRC Edu admin page, click **Sync YouTube now**, then confirm videos appear.
-4. Exclude a video and confirm help search omits it while the admin list still shows it greyed out.
-5. Deploy to staging first; confirm timer settings on the Function App before production.
+- search official articles, customer documentation, recorded webinars, and upcoming webinars;
+- load full details for a selected resource, including step-by-step guidance and relevant screenshot links where available;
+- answer reserved help-style questions (including `red-help` / `/red-help` style commands) through the help pipeline.
 
 Help answers may include:
 
@@ -392,9 +373,9 @@ Help-resource indexes are supplied by the deployment operator. The public reposi
 ## Known limitations
 
 - Some features depend on how the company is configured in Big Red Cloud.
-- Email sending and bank write operations may require additional tenant configuration and may be disabled by deployment flags.
+- Email sending and some bank write operations may require additional tenant configuration and may be disabled by deployment flags.
 - Generated-reference behaviour can depend on Big Red Cloud tenant settings, and some generated-document endpoints may apply the tenant's current transaction date.
-- Tool availability may vary by deployment policy.
+- Tool availability may vary by deployment policy (disabled skill groups are not registered).
 - Anonymous telemetry counts approximate clients (for example browser/device cookies), not verified individual people.
 - Platform detection may be `unknown` when a client does not provide enough identifying information.
 - Officially supported customer platforms are ChatGPT, Claude, and Mistral/Vibe; other MCP clients are not claimed as supported platforms.
