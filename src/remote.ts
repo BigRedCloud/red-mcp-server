@@ -25,10 +25,11 @@ import {
   unregisterHttpSessionKeyStore,
 } from "./shared.js";
 import {
-  buildHttpClientKeyFromRequest,
   buildMcpSessionDiagnostic,
+  logHttpClientKeyResolved,
   logMcpSessionDiagnostic,
   prepareHttpToolSessionScope,
+  resolveHttpClientKeyFromRequest,
   resolveMcpSessionIdFromRequest,
   runWithHttpToolSession,
 } from "./auth/mcp_http_session.js";
@@ -248,7 +249,8 @@ async function handleMcpRequest(
   body?: unknown
 ): Promise<void> {
   const normalizedSessionId = sessionId.trim();
-  const clientKey = buildHttpClientKeyFromRequest(req);
+  const clientKeyResolution = resolveHttpClientKeyFromRequest(req);
+  const clientKey = clientKeyResolution.clientKey;
   registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
 
   const requestBody = body ?? req.body;
@@ -259,6 +261,12 @@ async function handleMcpRequest(
 
   // Restore stored platform before telemetry context is created (rehydration).
   const storedPlatform = restoreSessionPlatform(session, normalizedSessionId);
+  logHttpClientKeyResolved({
+    clientKey,
+    source: clientKeyResolution.source,
+    sessionId: normalizedSessionId,
+    platform: storedPlatform ?? undefined,
+  });
 
   // Ordered: resolve connection → restore companies → load telemetry → count → context
   const prepared = await prepareMcpTelemetryContext({
@@ -280,7 +288,7 @@ async function handleMcpRequest(
   const scope = await prepareHttpToolSessionScope(
     normalizedSessionId,
     session.keyStore,
-    clientKey,
+    clientKeyResolution,
     connectionRef
   );
 

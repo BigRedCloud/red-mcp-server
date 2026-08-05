@@ -229,7 +229,10 @@ test("rotated MCP session id inherits connection via stable client key", async (
 });
 
 test("buildHttpClientKeyFromHeaders fingerprints authorization without exposing it", async () => {
-  const { buildHttpClientKeyFromHeaders } = await import("./mcp_http_session.js");
+  const {
+    buildHttpClientKeyFromHeaders,
+    resolveHttpClientKeyFromHeaders,
+  } = await import("./mcp_http_session.js");
 
   const first = buildHttpClientKeyFromHeaders(
     {
@@ -252,10 +255,85 @@ test("buildHttpClientKeyFromHeaders fingerprints authorization without exposing 
     },
     "203.0.113.10"
   );
+  // Same identity must survive IP rotation (Claude/Azure staging failure mode).
+  const rotatedIp = buildHttpClientKeyFromHeaders(
+    {
+      authorization: "Bearer secret-token-value",
+      "x-forwarded-for": "198.51.100.77",
+    },
+    "198.51.100.77"
+  );
 
   assert.equal(first, second);
+  assert.equal(first, rotatedIp);
   assert.notEqual(first, different);
   assert.equal(first.includes("secret-token-value"), false);
+
+  const stable = resolveHttpClientKeyFromHeaders(
+    { authorization: "Bearer secret-token-value" },
+    "203.0.113.10"
+  );
+  assert.equal(stable.source, "stable-identity");
+  assert.equal(stable.inheritEligible, true);
+
+  const ipOnly = resolveHttpClientKeyFromHeaders(
+    { "x-forwarded-for": "203.0.113.10" },
+    "203.0.113.10"
+  );
+  assert.equal(ipOnly.source, "ip-only");
+  assert.equal(ipOnly.inheritEligible, false);
+  assert.notEqual(stable.clientKey, ipOnly.clientKey);
+});
+
+test("ip-only client keys do not inherit durable claims across sessions", async () => {
+  const {
+    getConnectionStore,
+    claimConnectionCodeForSession,
+    prepareHttpToolSessionScope,
+    resolveHttpClientKeyFromHeaders,
+    clearSessionClientKeysForTests,
+  } = await loadModules();
+
+  clearSessionClientKeysForTests();
+
+  const store = getConnectionStore();
+  const connectToken = uniqueId("connect");
+  const confirmationCode = uniqueId("confirm");
+  const connectionId = uniqueId("connection");
+  const confirmSession = uniqueId("session-confirm");
+  const routeSession = uniqueId("session-route");
+
+  await seedClaimableConnection(store, {
+    connectToken,
+    confirmationCode,
+    connectionId,
+    companies: [{ companyName: "IP Only Co", apiKey: "test-api-key-ip" }],
+  });
+
+  const confirmKey = resolveHttpClientKeyFromHeaders(
+    { "x-forwarded-for": "203.0.113.10" },
+    "203.0.113.10"
+  );
+  assert.equal(confirmKey.inheritEligible, false);
+
+  // Confirm may see an IP-only key; it must NOT be recorded for inheritance.
+  await claimConnectionCodeForSession(confirmationCode, confirmSession, {
+    clientKey: confirmKey.inheritEligible
+      ? confirmKey.clientKey
+      : undefined,
+  });
+
+  const rotatedIp = resolveHttpClientKeyFromHeaders(
+    { "x-forwarded-for": "198.51.100.20" },
+    "198.51.100.20"
+  );
+  const scope = await prepareHttpToolSessionScope(
+    routeSession,
+    new Map(),
+    rotatedIp
+  );
+  assert.equal(scope.connectionId, "");
+  assert.equal(scope.resolution.clientClaimInherited, false);
 });
 
 test("resolveMcpSessionIdFromHeaders supports mcp-session-id and x-mcp-session-id", async () => {

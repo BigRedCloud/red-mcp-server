@@ -6,6 +6,12 @@
  *
  * Tokens are HMAC-signed (stateless verification) with an in-memory consume set for
  * one-time use after a confirmed write. They contain no credentials.
+ *
+ * When issued while a company connection is active, the token also carries an HMAC
+ * connectionBinding (never a raw connection id). That binding allows MCP session
+ * rotation / rehydration when the transactional call resolves the same connection
+ * (including via connectionRef), without requiring the issuing session record to
+ * still exist in memory or Cosmos.
  */
 
 import {
@@ -17,9 +23,19 @@ import {
 import { z } from "zod";
 
 import { getToolSkillGroup } from "../config/server_config.js";
-import { getCurrentMcpSessionId } from "../auth/connection_store.js";
+import {
+  getBoundConnectionIdForSession,
+  getCurrentMcpSessionId,
+  getMcpSessionContext,
+  resolveConnectionIdForActiveSessionWithMeta,
+} from "../auth/connection_store.js";
 import { isWriteActionConfirmed } from "../guards/write_confirmation.js";
-import { jsonResponse } from "../shared.js";
+import {
+  getActiveConnectionRef,
+  jsonResponse,
+  resolveActiveMcpSessionId,
+  resolveHttpClientKey,
+} from "../shared.js";
 
 export const ROUTE_TOKEN_TTL_MS = 5 * 60 * 1000;
 export const ROUTE_TOKEN_SIGNING_SECRET_ENV = "BRC_ROUTE_TOKEN_SIGNING_SECRET";
@@ -29,6 +45,8 @@ export const ROUTE_REQUIRED_ERROR = "route_required";
 export const ROUTE_REQUIRED_MESSAGE =
   "Call brc_route_request first with the user's complete original request, then use the returned routeToken for the permitted workflow.";
 
+export type RouteTokenSigningSecretSource = "configured" | "ephemeral";
+
 export type RouteTokenPayload = {
   jti: string;
   mode: "action";
@@ -36,6 +54,12 @@ export type RouteTokenPayload = {
   allowedTools: string[];
   messageHash: string;
   sessionId: string;
+  /**
+   * HMAC of the active connection id when the token was issued while connected.
+   * Never a raw connection id or connectionRef. Absent when issued with no connection
+   * (strict session binding only).
+   */
+  connectionBinding?: string;
   iat: number;
   exp: number;
 };
@@ -55,8 +79,12 @@ export type RouteTokenValidationFail = {
     | "wrong_mode"
     | "wrong_session"
     | "wrong_tool"
+    | "wrong_workflow"
+    | "wrong_message"
     | "consumed"
     | "altered";
+  /** Present when the signed payload was parsed before a later check failed. */
+  payload?: RouteTokenPayload;
 };
 
 export type RouteTokenValidationResult =
@@ -64,7 +92,11 @@ export type RouteTokenValidationResult =
   | RouteTokenValidationFail;
 
 const consumedTokens = new Map<string, number>();
-let ephemeralSigningSecret: string | null = null;
+let pinnedSigningSecret: {
+  value: string;
+  source: RouteTokenSigningSecretSource;
+} | null = null;
+let loggedEphemeralHttpWarning = false;
 
 export const routeTokenSchema = z
   .string()
@@ -74,7 +106,7 @@ export const routeTokenSchema = z
   );
 
 export const ROUTE_TOKEN_TOOL_SUFFIX =
-  " Requires routeToken from brc_route_request for the matching action workflow. Call brc_route_request first with the user's complete original message. A routeToken is not permission to post — preview-before-posting and confirmWrite still apply.";
+  " Requires routeToken from brc_route_request for the matching action workflow. Call brc_route_request first with the user's complete original action request. Retain the returned routeToken through lookup, preview, and confirmation, and pass the same token on the final permitted transactional tool call. Never invent a placeholder token. A routeToken is not permission to post — preview-before-posting and confirmWrite/confirmDelete still apply.";
 
 function toBase64Url(value: Buffer | string): string {
   const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
@@ -105,30 +137,153 @@ function safeEqualText(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-function getSigningSecret(): string {
+/** SHA-256 hex of a session id for safe diagnostic logs (never log raw ids). */
+export function hashSessionIdForDiagnostics(
+  sessionId: string | null | undefined,
+): string {
+  const value = (sessionId ?? "").trim() || "anonymous";
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+/**
+ * Resolve and pin the HMAC signing secret for this process.
+ *
+ * The first successful resolve is pinned so a late-loaded env var cannot flip
+ * from ephemeral → configured mid-flight (which would invalidate issued tokens).
+ * Multi-instance HTTP deployments must set BRC_ROUTE_TOKEN_SIGNING_SECRET to the
+ * same value on every instance — ephemeral secrets differ per process.
+ */
+export function getRouteTokenSigningSecretInfo(): {
+  value: string;
+  source: RouteTokenSigningSecretSource;
+} {
+  if (pinnedSigningSecret) {
+    return pinnedSigningSecret;
+  }
+
   const fromEnv = process.env[ROUTE_TOKEN_SIGNING_SECRET_ENV]?.trim();
   if (fromEnv) {
-    return fromEnv;
+    pinnedSigningSecret = { value: fromEnv, source: "configured" };
+  } else {
+    pinnedSigningSecret = {
+      value: randomBytes(32).toString("hex"),
+      source: "ephemeral",
+    };
+    maybeWarnEphemeralSecretInHttpMode();
   }
-  if (!ephemeralSigningSecret) {
-    ephemeralSigningSecret = randomBytes(32).toString("hex");
+  return pinnedSigningSecret;
+}
+
+function maybeWarnEphemeralSecretInHttpMode(): void {
+  if (loggedEphemeralHttpWarning) {
+    return;
   }
-  return ephemeralSigningSecret;
+  if (!process.env.RED_CONNECT_HTTP_MODE) {
+    return;
+  }
+  loggedEphemeralHttpWarning = true;
+  console.error(
+    JSON.stringify({
+      event: "route_token_ephemeral_signing_secret",
+      message:
+        "BRC_ROUTE_TOKEN_SIGNING_SECRET is missing or blank; using an ephemeral process secret. Tokens will not verify across application instances or process restarts.",
+      signingSecretSource: "ephemeral",
+    }),
+  );
+}
+
+function getSigningSecret(): string {
+  return getRouteTokenSigningSecretInfo().value;
+}
+
+export function getRouteTokenSigningSecretSource(): RouteTokenSigningSecretSource {
+  return getRouteTokenSigningSecretInfo().source;
 }
 
 /** Test helper — reset ephemeral secret and consumed set. */
 export function resetRouteTokenStateForTests(options?: {
-  signingSecret?: string;
+  signingSecret?: string | null;
 }): void {
   consumedTokens.clear();
-  ephemeralSigningSecret = null;
-  if (options?.signingSecret) {
-    process.env[ROUTE_TOKEN_SIGNING_SECRET_ENV] = options.signingSecret;
+  pinnedSigningSecret = null;
+  loggedEphemeralHttpWarning = false;
+  if (options && "signingSecret" in options) {
+    if (options.signingSecret) {
+      process.env[ROUTE_TOKEN_SIGNING_SECRET_ENV] = options.signingSecret;
+    } else {
+      delete process.env[ROUTE_TOKEN_SIGNING_SECRET_ENV];
+    }
   }
 }
 
 export function hashRouteMessage(message: string): string {
   return createHash("sha256").update(message, "utf8").digest("hex");
+}
+
+/** Alias used by routeRequest pending-action persistence. */
+export const hashMessageForRouteToken = hashRouteMessage;
+
+/**
+ * Stable HMAC binding for a connection id. Uses the route-token signing secret so
+ * the value cannot be forged without the secret and matches across app instances
+ * that share BRC_ROUTE_TOKEN_SIGNING_SECRET. Never embed or log the raw id.
+ */
+export function hashConnectionIdForBinding(connectionId: string): string {
+  return createHmac("sha256", getSigningSecret())
+    .update(`route-connection-binding:${connectionId.trim()}`, "utf8")
+    .digest("hex");
+}
+
+export function connectionBindingsMatch(
+  tokenBinding: string | null | undefined,
+  connectionId: string | null | undefined,
+): boolean {
+  const binding = tokenBinding?.trim();
+  const id = connectionId?.trim();
+  if (!binding || !id) {
+    return false;
+  }
+  return safeEqualText(binding, hashConnectionIdForBinding(id));
+}
+
+/**
+ * Resolve the active company connection for route-token issue/validation.
+ * Prefers an explicit id, then a non-empty MCP session context connection id
+ * (set after connectionRef / session binding / client-claim resolution), then
+ * the same verified resolution path transactional tools use.
+ */
+export async function resolveConnectionIdForRouteToken(options?: {
+  connectionId?: string | null;
+  sessionId?: string | null;
+}): Promise<string | null> {
+  const explicit = options?.connectionId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const fromContext = getMcpSessionContext()?.connectionId?.trim();
+  if (fromContext) {
+    return fromContext;
+  }
+
+  const sessionId = resolveRouteSessionId(options?.sessionId);
+  if (!sessionId || sessionId === "anonymous") {
+    return null;
+  }
+
+  const bound = await getBoundConnectionIdForSession(sessionId);
+  if (bound?.trim()) {
+    return bound.trim();
+  }
+
+  // Same path as transactional tools: inherit a recent verified client claim.
+  const resolution = await resolveConnectionIdForActiveSessionWithMeta({
+    sessionId,
+    clientKey: resolveHttpClientKey(),
+    connectionRef: getActiveConnectionRef(),
+  });
+
+  return resolution.connectionId?.trim() || null;
 }
 
 /**
@@ -166,19 +321,47 @@ export function isRouteTokenConsumed(jti: string): boolean {
   return consumedTokens.has(jti);
 }
 
+/**
+ * True when the opaque routeToken's jti has already been consumed after a
+ * confirmed write. Malformed tokens are treated as unusable (consumed).
+ */
+export function isIssuedRouteTokenConsumed(routeToken: string): boolean {
+  const parsed = parseAndVerifySignature(routeToken);
+  if ("ok" in parsed) {
+    return true;
+  }
+  return isRouteTokenConsumed(parsed.payload.jti);
+}
+
+function resolveRouteSessionId(explicit?: string | null): string {
+  const resolved =
+    (
+      explicit ??
+      resolveActiveMcpSessionId() ??
+      getCurrentMcpSessionId() ??
+      "anonymous"
+    ).trim() || "anonymous";
+  return resolved;
+}
+
 export function issueActionRouteToken(args: {
   workflow: string;
   allowedTools: readonly string[];
   message: string;
   sessionId?: string | null;
+  /** Active company connection id when known — hashed into connectionBinding. */
+  connectionId?: string | null;
   now?: number;
   ttlMs?: number;
 }): { routeToken: string; payload: RouteTokenPayload } {
   const now = args.now ?? Date.now();
   const ttlMs = args.ttlMs ?? ROUTE_TOKEN_TTL_MS;
-  const sessionId =
-    (args.sessionId ?? getCurrentMcpSessionId() ?? "anonymous").trim() ||
-    "anonymous";
+  const sessionId = resolveRouteSessionId(args.sessionId);
+  // Only bind when a real connection id is known — never the local-stdio fallback.
+  const connectionId =
+    args.connectionId?.trim() ||
+    getMcpSessionContext()?.connectionId?.trim() ||
+    "";
 
   const payload: RouteTokenPayload = {
     jti: randomBytes(16).toString("hex"),
@@ -190,6 +373,10 @@ export function issueActionRouteToken(args: {
     iat: now,
     exp: now + ttlMs,
   };
+
+  if (connectionId) {
+    payload.connectionBinding = hashConnectionIdForBinding(connectionId);
+  }
 
   const encodedPayload = toBase64Url(JSON.stringify(payload));
   const signature = toBase64Url(
@@ -261,13 +448,60 @@ function parseAndVerifySignature(
   return { payload: parsed as RouteTokenPayload };
 }
 
+export type ValidateRouteTokenOptions = {
+  toolName: string;
+  sessionId?: string | null;
+  /**
+   * Already-resolved active connection id for this request (from session context
+   * or connectionRef). Compared via HMAC to payload.connectionBinding when the
+   * MCP session id has rotated.
+   */
+  connectionId?: string | null;
+  now?: number;
+  /** When provided, must match the workflow embedded in the token. */
+  workflow?: string;
+  /**
+   * When provided, must hash to the token's messageHash. Transactional wrappers
+   * do not pass this — the hash is integrity-protected by the HMAC signature.
+   */
+  message?: string;
+};
+
+/**
+ * Session / connection continuity check.
+ *
+ * - Same session → allow.
+ * - Different session + matching connectionBinding ↔ current connectionId → allow
+ *   (Claude/Vibe session rotation with the same company connection).
+ * - Different session without a token connectionBinding → strict wrong_session
+ *   (token was issued before any connection existed).
+ * - Different session with binding but no/ mismatched current connection → reject.
+ *
+ * Presence of an arbitrary connectionRef alone is never enough.
+ */
+export function sessionOrConnectionAllowsToken(
+  payload: RouteTokenPayload,
+  options: {
+    sessionId?: string | null;
+    connectionId?: string | null;
+  },
+): boolean {
+  const currentSession = resolveRouteSessionId(options.sessionId);
+  if (!payload.sessionId || payload.sessionId === currentSession) {
+    return true;
+  }
+
+  const tokenBinding = payload.connectionBinding?.trim();
+  if (!tokenBinding) {
+    return false;
+  }
+
+  return connectionBindingsMatch(tokenBinding, options.connectionId);
+}
+
 export function validateRouteToken(
   token: unknown,
-  options: {
-    toolName: string;
-    sessionId?: string | null;
-    now?: number;
-  },
+  options: ValidateRouteTokenOptions,
 ): RouteTokenValidationResult {
   if (typeof token !== "string" || !token.trim()) {
     return { ok: false, reason: "missing" };
@@ -282,29 +516,147 @@ export function validateRouteToken(
   const now = options.now ?? Date.now();
 
   if (payload.mode !== "action") {
-    return { ok: false, reason: "wrong_mode" };
+    return { ok: false, reason: "wrong_mode", payload };
   }
 
   if (payload.exp <= now) {
-    return { ok: false, reason: "expired" };
+    return { ok: false, reason: "expired", payload };
   }
 
   if (isRouteTokenConsumed(payload.jti)) {
-    return { ok: false, reason: "consumed" };
+    return { ok: false, reason: "consumed", payload };
   }
 
-  const currentSession =
-    (options.sessionId ?? getCurrentMcpSessionId() ?? "anonymous").trim() ||
-    "anonymous";
-  if (payload.sessionId && payload.sessionId !== currentSession) {
-    return { ok: false, reason: "wrong_session" };
+  if (
+    !sessionOrConnectionAllowsToken(payload, {
+      sessionId: options.sessionId,
+      connectionId: options.connectionId,
+    })
+  ) {
+    return { ok: false, reason: "wrong_session", payload };
+  }
+
+  if (options.workflow && payload.workflow !== options.workflow) {
+    return { ok: false, reason: "wrong_workflow", payload };
+  }
+
+  if (
+    options.message !== undefined &&
+    payload.messageHash !== hashRouteMessage(options.message)
+  ) {
+    return { ok: false, reason: "wrong_message", payload };
   }
 
   if (!payload.allowedTools.includes(options.toolName)) {
-    return { ok: false, reason: "wrong_tool" };
+    return { ok: false, reason: "wrong_tool", payload };
   }
 
   return { ok: true, payload };
+}
+
+/**
+ * Validate a route token for a transactional tool. Resolves the active connection
+ * first (session context / connectionRef already applied by the HTTP wrapper),
+ * then compares session id or connectionBinding.
+ */
+export async function validateRouteTokenForTool(
+  token: unknown,
+  options: ValidateRouteTokenOptions,
+): Promise<RouteTokenValidationResult> {
+  const connectionId =
+    options.connectionId?.trim() ||
+    (await resolveConnectionIdForRouteToken({
+      sessionId: options.sessionId,
+    }));
+
+  const result = validateRouteToken(token, {
+    ...options,
+    connectionId,
+  });
+
+  if (!result.ok) {
+    logRouteTokenValidationFailure(result, {
+      ...options,
+      connectionId,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Safe diagnostic telemetry when an action routeToken is issued.
+ * Never logs session ids, client keys, connection ids, connectionRefs, or tokens.
+ */
+export function logRouteTokenIssued(args: {
+  workflow: string;
+  connectionIdPresent: boolean;
+  sessionBindingFound: boolean;
+  clientClaimInherited: boolean;
+  connectionRefResolved: boolean;
+  connectionBindingAdded: boolean;
+  platform: string;
+}): void {
+  console.info(
+    JSON.stringify({
+      event: "route_token_issued",
+      workflow: args.workflow,
+      connectionIdPresent: args.connectionIdPresent,
+      sessionBindingFound: args.sessionBindingFound,
+      clientClaimInherited: args.clientClaimInherited,
+      connectionRefResolved: args.connectionRefResolved,
+      connectionBindingAdded: args.connectionBindingAdded,
+      platform: args.platform,
+    }),
+  );
+}
+
+/**
+ * Safe diagnostic telemetry for route-token validation failures.
+ * Never logs the token, signature, customer data, connectionRef, connection ids,
+ * or credentials.
+ */
+export function logRouteTokenValidationFailure(
+  failure: RouteTokenValidationFail,
+  options: {
+    toolName: string;
+    sessionId?: string | null;
+    connectionId?: string | null;
+  },
+): void {
+  const currentSession = resolveRouteSessionId(options.sessionId);
+  const tokenSession = failure.payload?.sessionId;
+  const now = Date.now();
+  const expired =
+    typeof failure.payload?.exp === "number"
+      ? failure.payload.exp <= now
+      : failure.reason === "expired";
+  const connectionBindingPresent = Boolean(
+    failure.payload?.connectionBinding?.trim(),
+  );
+  const currentConnectionPresent = Boolean(options.connectionId?.trim());
+
+  console.info(
+    JSON.stringify({
+      event: "route_token_validation_failed",
+      rejectionReason: failure.reason,
+      expectedSessionHash: hashSessionIdForDiagnostics(tokenSession),
+      actualSessionHash: hashSessionIdForDiagnostics(currentSession),
+      workflow: failure.payload?.workflow ?? null,
+      toolName: options.toolName,
+      tokenExpired: expired,
+      signingSecretSource: getRouteTokenSigningSecretSource(),
+      connectionBindingPresent,
+      currentConnectionPresent,
+      connectionBindingMatched:
+        connectionBindingPresent && currentConnectionPresent
+          ? connectionBindingsMatch(
+              failure.payload?.connectionBinding,
+              options.connectionId,
+            )
+          : false,
+    }),
+  );
 }
 
 export function buildRouteRequiredResponse(): ReturnType<typeof jsonResponse> {
@@ -324,6 +676,9 @@ export function appendRouteTokenDescription(description: string): string {
 /**
  * Guard wrapper: reject transactional tools without a valid action routeToken
  * before any lookup or write. Consumes the token after a confirmed write.
+ *
+ * Expects the HTTP session wrapper to have already resolved connectionRef /
+ * session binding into MCP session context so getCurrentConnectionId() is set.
  */
 export function wrapRouteTokenHandler<T extends Record<string, unknown>>(
   toolName: string,
@@ -334,9 +689,17 @@ export function wrapRouteTokenHandler<T extends Record<string, unknown>>(
   }
 
   return async (args: T) => {
-    const validation = validateRouteToken(args.routeToken, {
+    const sessionId =
+      resolveActiveMcpSessionId() ?? getCurrentMcpSessionId() ?? null;
+    // Connection must already be resolved by wrapHttpSessionAwareToolHandler
+    // (outer wrapper) before this guard runs. Use context only — not the
+    // local-stdio fallback — so unconnected sessions stay session-bound.
+    const connectionId =
+      getMcpSessionContext()?.connectionId?.trim() || null;
+    const validation = await validateRouteTokenForTool(args.routeToken, {
       toolName,
-      sessionId: getCurrentMcpSessionId(),
+      sessionId,
+      connectionId,
     });
 
     if (!validation.ok) {
@@ -345,12 +708,58 @@ export function wrapRouteTokenHandler<T extends Record<string, unknown>>(
 
     const result = await handler(args);
 
+    const {
+      buildTargetRecordKey,
+      clearPendingActionForCurrentScope,
+      markPendingActionPreviewed,
+    } = await import("./pending-action.js");
+
     if (isWriteActionConfirmed(args as Record<string, unknown>)) {
       markRouteTokenConsumed(validation.payload.jti, validation.payload.exp);
+      await clearPendingActionForCurrentScope({
+        connectionId,
+        sessionId,
+      });
+    } else if (resultIndicatesConfirmationRequired(result)) {
+      await markPendingActionPreviewed({
+        connectionId,
+        toolName,
+        targetRecordKey: buildTargetRecordKey(args as Record<string, unknown>),
+      });
     }
 
     return result;
   };
+}
+
+function resultIndicatesConfirmationRequired(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as Record<string, unknown>;
+  if (record.status === "confirmation_required") {
+    return true;
+  }
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const text = (part as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    if (
+      text.includes('"status":"confirmation_required"') ||
+      text.includes('"status": "confirmation_required"')
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Test helper: forge an unsigned/altered token string from a payload. */

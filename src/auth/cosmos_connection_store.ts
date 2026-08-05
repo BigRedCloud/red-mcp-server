@@ -14,6 +14,7 @@ import type {
   ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
+  PendingActionRecord,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -54,6 +55,13 @@ function connectionRefPartitionKey(ref: string): string {
 
 function successPagePartitionKey(successId: string): string {
   return `success:${successId}`;
+}
+
+function pendingActionPartitionKey(
+  connectionId: string,
+  scopeKeyHash: string
+): string {
+  return `pendingAction:${connectionId}:${scopeKeyHash}`;
 }
 
 function companyDocumentId(normalisedName: string): string {
@@ -163,6 +171,23 @@ type ConnectionSuccessPageDocument = CosmosRecord & {
   failedCompanies: FailedCompanyConnection[];
   createdAt: number;
   expiresAt: number;
+  ttl: number;
+};
+
+type PendingActionDocument = CosmosRecord & {
+  type: "pendingAction";
+  connectionId: string;
+  scopeKeyHash: string;
+  workflowId: string;
+  allowedTools: string[];
+  routeToken: string;
+  originalMessage: string;
+  messageHash: string;
+  expiresAt: number;
+  status: "routed" | "previewed";
+  targetRecordKey?: string;
+  previewedAt?: number;
+  updatedAt: number;
   ttl: number;
 };
 
@@ -480,15 +505,11 @@ export class CosmosConnectionStore implements ConnectionStore {
     const now = Date.now();
     let createdAt = now;
 
-    try {
-      const { resource } = await this.getContainer()
-        .item("binding", sessionPartitionKey(normalizedSessionId))
-        .read<SessionBindingRecord>();
-      if (resource?.createdAt) {
-        createdAt = resource.createdAt;
-      }
-    } catch {
-      // new binding
+    // Query instead of point-read so a missing binding does not emit Cosmos 404
+    // dependency telemetry (expected for first bind on a new session).
+    const existing = await this.readSessionBinding(normalizedSessionId);
+    if (existing?.createdAt) {
+      createdAt = existing.createdAt;
     }
 
     const doc: SessionBindingRecord = {
@@ -506,15 +527,32 @@ export class CosmosConnectionStore implements ConnectionStore {
   }
 
   async getConnectionIdForSession(sessionId: string): Promise<string | null> {
-    try {
-      const { resource } = await this.getContainer()
-        .item("binding", sessionPartitionKey(sessionId.trim()))
-        .read<SessionBindingRecord>();
+    const resource = await this.readSessionBinding(sessionId.trim());
+    return resource?.connectionId ?? null;
+  }
 
-      return resource?.connectionId ?? null;
-    } catch {
-      return null;
-    }
+  /**
+   * Partition-scoped query for a session binding. Returns null when absent —
+   * avoids point-read 404s that Azure Monitor records as failed dependencies.
+   */
+  private async readSessionBinding(
+    sessionId: string
+  ): Promise<SessionBindingRecord | null> {
+    const { resources } = await this.getContainer().items
+      .query<SessionBindingRecord>(
+        {
+          query:
+            "SELECT * FROM c WHERE c.id = @id AND c.type = @type",
+          parameters: [
+            { name: "@id", value: "binding" },
+            { name: "@type", value: "sessionBinding" },
+          ],
+        },
+        { partitionKey: sessionPartitionKey(sessionId) }
+      )
+      .fetchAll();
+
+    return resources[0] ?? null;
   }
 
   async recordClientClaim(args: {
@@ -539,27 +577,35 @@ export class CosmosConnectionStore implements ConnectionStore {
     clientKey: string,
     maxAgeMs: number
   ): Promise<string | null> {
-    try {
-      const { resource } = await this.getContainer()
-        .item("lastClaim", clientPartitionKey(clientKey))
-        .read<ClientLastClaimDocument>();
+    // Query instead of point-read so a missing lastClaim is not a Cosmos 404.
+    const { resources } = await this.getContainer().items
+      .query<ClientLastClaimDocument>(
+        {
+          query:
+            "SELECT * FROM c WHERE c.id = @id AND c.type = @type",
+          parameters: [
+            { name: "@id", value: "lastClaim" },
+            { name: "@type", value: "clientLastClaim" },
+          ],
+        },
+        { partitionKey: clientPartitionKey(clientKey) }
+      )
+      .fetchAll();
 
-      if (!resource || resource.type !== "clientLastClaim") {
-        return null;
-      }
-
-      if (Date.now() - resource.claimedAt > maxAgeMs) {
-        await this.getContainer()
-          .item("lastClaim", clientPartitionKey(clientKey))
-          .delete()
-          .catch(() => {});
-        return null;
-      }
-
-      return resource.connectionId;
-    } catch {
+    const resource = resources[0];
+    if (!resource || resource.type !== "clientLastClaim") {
       return null;
     }
+
+    if (Date.now() - resource.claimedAt > maxAgeMs) {
+      await this.getContainer()
+        .item("lastClaim", clientPartitionKey(clientKey))
+        .delete()
+        .catch(() => {});
+      return null;
+    }
+
+    return resource.connectionId;
   }
 
   async createConnectionRef(args: {
@@ -961,6 +1007,112 @@ export class CosmosConnectionStore implements ConnectionStore {
       };
     } catch {
       return null;
+    }
+  }
+
+  async savePendingAction(record: PendingActionRecord): Promise<void> {
+    const ttlSeconds = Math.max(
+      60,
+      Math.ceil((record.expiresAt - Date.now()) / 1000)
+    );
+    const doc: PendingActionDocument = {
+      pk: pendingActionPartitionKey(record.connectionId, record.scopeKeyHash),
+      id: "pendingAction",
+      type: "pendingAction",
+      connectionId: record.connectionId,
+      scopeKeyHash: record.scopeKeyHash,
+      workflowId: record.workflowId,
+      allowedTools: [...record.allowedTools],
+      routeToken: record.routeToken,
+      originalMessage: record.originalMessage,
+      messageHash: record.messageHash,
+      expiresAt: record.expiresAt,
+      status: record.status,
+      targetRecordKey: record.targetRecordKey,
+      previewedAt: record.previewedAt,
+      updatedAt: record.updatedAt,
+      ttl: ttlSeconds,
+    };
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<PendingActionRecord | null> {
+    const trimmedConnection = connectionId.trim();
+    const trimmedScope = scopeKeyHash.trim();
+    if (!trimmedConnection || !trimmedScope) {
+      return null;
+    }
+
+    try {
+      const { resource } = await this.getContainer()
+        .item(
+          "pendingAction",
+          pendingActionPartitionKey(trimmedConnection, trimmedScope)
+        )
+        .read<PendingActionDocument>();
+
+      if (!resource || resource.type !== "pendingAction") {
+        return null;
+      }
+      if (resource.expiresAt <= Date.now()) {
+        try {
+          await this.getContainer()
+            .item(
+              "pendingAction",
+              pendingActionPartitionKey(trimmedConnection, trimmedScope)
+            )
+            .delete();
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+
+      return {
+        connectionId: resource.connectionId,
+        scopeKeyHash: resource.scopeKeyHash,
+        workflowId: resource.workflowId,
+        allowedTools: [...resource.allowedTools],
+        routeToken: resource.routeToken,
+        originalMessage: resource.originalMessage,
+        messageHash: resource.messageHash,
+        expiresAt: resource.expiresAt,
+        status: resource.status,
+        targetRecordKey: resource.targetRecordKey,
+        previewedAt: resource.previewedAt,
+        updatedAt: resource.updatedAt,
+      };
+    } catch (error) {
+      if (isCosmosNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async clearPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<void> {
+    const trimmedConnection = connectionId.trim();
+    const trimmedScope = scopeKeyHash.trim();
+    if (!trimmedConnection || !trimmedScope) {
+      return;
+    }
+    try {
+      await this.getContainer()
+        .item(
+          "pendingAction",
+          pendingActionPartitionKey(trimmedConnection, trimmedScope)
+        )
+        .delete();
+    } catch (error) {
+      if (!isCosmosNotFoundError(error)) {
+        throw error;
+      }
     }
   }
 

@@ -3,12 +3,14 @@ import type { Request } from "express";
 
 import {
   ensureConnectionStoreInitialized,
+  getMcpSessionContext,
   resolveConnectionIdForActiveSessionWithMeta,
   runWithMcpSessionContext,
 } from "./connection_store.js";
 import {
   ensureCredentialsForCurrentSession,
   normaliseCompanyName,
+  resolveHttpClientKey,
   resolveSessionKeyStore,
   runWithActiveConnectionRef,
   runWithHttpClientKey,
@@ -45,6 +47,249 @@ export const MCP_CLIENT_IDENTITY_HEADER_NAMES = [
   "x-vibe-user-id",
   "x-vibe-session-id",
 ] as const;
+
+export type HttpClientKeySource = "stable-identity" | "ip-only";
+
+export type HttpClientKeyResolution = {
+  /** Short opaque key used for durable claim storage (never log raw). */
+  clientKey: string;
+  source: HttpClientKeySource;
+  /**
+   * True only when the key is derived from stable identity headers.
+   * IP-only keys are too volatile for Claude MCP session rotation and must
+   * not be used to inherit connections across sessions.
+   */
+  inheritEligible: boolean;
+};
+
+function fingerprintSecretMaterial(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+/** Safe diagnostic hash of a client key (never log the key itself). */
+export function hashClientKeyForDiagnostics(
+  clientKey: string | null | undefined,
+): string | null {
+  const value = clientKey?.trim();
+  if (!value) {
+    return null;
+  }
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+/** Safe diagnostic hash of the current app instance (Azure WEBSITE_INSTANCE_ID). */
+export function hashInstanceIdForDiagnostics(): string | null {
+  const raw =
+    process.env.WEBSITE_INSTANCE_ID?.trim() ||
+    process.env.COMPUTERNAME?.trim() ||
+    process.env.HOSTNAME?.trim() ||
+    "";
+  if (!raw) {
+    return null;
+  }
+  return createHash("sha256").update(raw, "utf8").digest("hex").slice(0, 16);
+}
+
+export function hashSessionIdForClientKeyDiagnostics(
+  sessionId: string | null | undefined,
+): string | null {
+  const value = sessionId?.trim();
+  if (!value) {
+    return null;
+  }
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+export function resolveClientIpFromHeaders(
+  headers: Record<string, string | string[] | undefined>
+): string {
+  const forwardedFor = normalizeHeaderValue(headers["x-forwarded-for"]);
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  return (
+    normalizeHeaderValue(headers["x-real-ip"]) ??
+    normalizeHeaderValue(headers["cf-connecting-ip"]) ??
+    "unknown"
+  );
+}
+
+/**
+ * Builds a scoped client key from non-secret request metadata.
+ *
+ * Prefer stable identity headers (Authorization, x-user-id, …) WITHOUT the
+ * request IP — Claude/Azure often rotate source IPs between tool calls, which
+ * previously caused confirm and route_request to hash different keys and miss
+ * the durable Cosmos claim (clientKeyPresent=true, clientClaimInherited=false).
+ *
+ * When no stable identity header is present, fall back to an IP-only key that
+ * is NOT eligible for cross-session claim inheritance.
+ */
+export function resolveHttpClientKeyFromHeaders(
+  headers: Record<string, string | string[] | undefined>,
+  clientIp?: string
+): HttpClientKeyResolution {
+  const identityParts: string[] = [];
+
+  for (const name of MCP_CLIENT_IDENTITY_HEADER_NAMES) {
+    const value = normalizeHeaderValue(headers[name]);
+    if (!value) {
+      continue;
+    }
+    identityParts.push(`${name}:${fingerprintSecretMaterial(value)}`);
+  }
+
+  if (identityParts.length > 0) {
+    identityParts.sort();
+    const clientKey = createHash("sha256")
+      .update(`stable|${identityParts.join("|")}`, "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    return {
+      clientKey,
+      source: "stable-identity",
+      inheritEligible: true,
+    };
+  }
+
+  const ip = clientIp?.trim() || resolveClientIpFromHeaders(headers);
+  const clientKey = createHash("sha256")
+    .update(`ip-only|${ip}`, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  return {
+    clientKey,
+    source: "ip-only",
+    inheritEligible: false,
+  };
+}
+
+/**
+ * @deprecated Prefer resolveHttpClientKeyFromHeaders for inheritEligible.
+ * Returns the clientKey string only (stable-identity or ip-only).
+ */
+export function buildHttpClientKeyFromHeaders(
+  headers: Record<string, string | string[] | undefined>,
+  clientIp?: string
+): string {
+  return resolveHttpClientKeyFromHeaders(headers, clientIp).clientKey;
+}
+
+export function buildHttpClientKeyFromRequest(req: Request): string {
+  return resolveHttpClientKeyFromHeaders(
+    req.headers as Record<string, string | string[] | undefined>,
+    getClientIpFromRequest(req)
+  ).clientKey;
+}
+
+export function resolveHttpClientKeyFromRequest(
+  req: Request
+): HttpClientKeyResolution {
+  return resolveHttpClientKeyFromHeaders(
+    req.headers as Record<string, string | string[] | undefined>,
+    getClientIpFromRequest(req)
+  );
+}
+
+export function getClientIpFromRequest(req: Request): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+export function resolveMcpSessionIdFromRequest(req: Request): string | undefined {
+  return resolveMcpSessionIdFromHeaders(
+    req.headers as Record<string, string | string[] | undefined>
+  );
+}
+
+export function resolveMcpSessionIdFromExtra(
+  extra?: McpToolRequestExtra
+): string | undefined {
+  const fromExtra = extra?.sessionId?.trim();
+  if (fromExtra) {
+    return fromExtra;
+  }
+
+  const headers = extra?.requestInfo?.headers;
+  if (!headers) {
+    return undefined;
+  }
+
+  return resolveMcpSessionIdFromHeaders(headers);
+}
+
+export function buildHttpClientKeyFromExtra(
+  extra?: McpToolRequestExtra
+): string | undefined {
+  return resolveHttpClientKeyDetailsFromExtra(extra)?.clientKey;
+}
+
+export function resolveHttpClientKeyDetailsFromExtra(
+  extra?: McpToolRequestExtra
+): HttpClientKeyResolution | undefined {
+  const headers = extra?.requestInfo?.headers;
+  if (!headers) {
+    return undefined;
+  }
+
+  return resolveHttpClientKeyFromHeaders(headers);
+}
+
+export function logHttpClientKeyResolved(args: {
+  clientKey: string | null | undefined;
+  source: string;
+  sessionId?: string | null;
+  platform?: string | null;
+}): void {
+  console.info(
+    JSON.stringify({
+      event: "http_client_key_resolved",
+      clientKeyHash: hashClientKeyForDiagnostics(args.clientKey),
+      source: args.source,
+      sessionHash: hashSessionIdForClientKeyDiagnostics(args.sessionId),
+      platform: args.platform ?? "unknown",
+      instanceIdHash: hashInstanceIdForDiagnostics(),
+    }),
+  );
+}
+
+export function logConnectionClaimSaved(args: {
+  clientKey: string | null | undefined;
+  connectionPresent: boolean;
+  durableStoreWriteSucceeded: boolean;
+}): void {
+  console.info(
+    JSON.stringify({
+      event: "connection_claim_saved",
+      clientKeyHash: hashClientKeyForDiagnostics(args.clientKey),
+      connectionPresent: args.connectionPresent,
+      durableStoreWriteSucceeded: args.durableStoreWriteSucceeded,
+      instanceIdHash: hashInstanceIdForDiagnostics(),
+    }),
+  );
+}
+
+export function logConnectionClaimLookup(args: {
+  clientKey: string | null | undefined;
+  claimFound: boolean;
+  connectionPresent: boolean;
+}): void {
+  console.info(
+    JSON.stringify({
+      event: "connection_claim_lookup",
+      clientKeyHash: hashClientKeyForDiagnostics(args.clientKey),
+      claimFound: args.claimFound,
+      connectionPresent: args.connectionPresent,
+      instanceIdHash: hashInstanceIdForDiagnostics(),
+    }),
+  );
+}
 
 export type McpToolRequestExtra = {
   sessionId?: string;
@@ -171,99 +416,114 @@ export function listPresentHeaderNames(
   return candidates.filter((name) => Boolean(normalizeHeaderValue(headers[name])));
 }
 
-function fingerprintSecretMaterial(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
-}
+/**
+ * Per-MCP-session client keys captured from the HTTP request layer. Tool handlers
+ * often receive `extra` without requestInfo.headers (SDK/host gaps); without this
+ * registry, nested tool wrappers drop clientKey and skip claim inheritance —
+ * which is exactly why brc_route_request was issuing tokens with no connectionBinding.
+ */
+const sessionClientKeys = new Map<string, HttpClientKeyResolution>();
 
-export function resolveClientIpFromHeaders(
-  headers: Record<string, string | string[] | undefined>
-): string {
-  const forwardedFor = normalizeHeaderValue(headers["x-forwarded-for"]);
-  if (forwardedFor) {
-    return forwardedFor.split(",")[0].trim();
+export function registerSessionClientKey(
+  sessionId: string,
+  clientKeyOrResolution: string | HttpClientKeyResolution | undefined,
+  inheritEligible = true
+): void {
+  const id = sessionId.trim();
+  if (!id || !clientKeyOrResolution) {
+    return;
   }
 
-  return (
-    normalizeHeaderValue(headers["x-real-ip"]) ??
-    normalizeHeaderValue(headers["cf-connecting-ip"]) ??
-    "unknown"
-  );
+  const resolution: HttpClientKeyResolution =
+    typeof clientKeyOrResolution === "string"
+      ? {
+          clientKey: clientKeyOrResolution.trim(),
+          source: inheritEligible ? "stable-identity" : "ip-only",
+          inheritEligible,
+        }
+      : clientKeyOrResolution;
+
+  if (!resolution.clientKey.trim()) {
+    return;
+  }
+  sessionClientKeys.set(id, resolution);
+}
+
+export function getRegisteredSessionClientKey(
+  sessionId: string | undefined
+): string | undefined {
+  return getRegisteredSessionClientKeyResolution(sessionId)?.clientKey;
+}
+
+export function getRegisteredSessionClientKeyResolution(
+  sessionId: string | undefined
+): HttpClientKeyResolution | undefined {
+  const id = sessionId?.trim();
+  if (!id) {
+    return undefined;
+  }
+  return sessionClientKeys.get(id);
+}
+
+export function clearRegisteredSessionClientKey(sessionId: string): void {
+  sessionClientKeys.delete(sessionId.trim());
+}
+
+/** Test helper. */
+export function clearSessionClientKeysForTests(): void {
+  sessionClientKeys.clear();
 }
 
 /**
- * Builds a scoped client key from non-secret request metadata.
- * Includes IP plus hashed optional identity headers (for example Authorization)
- * so hosted clients that rotate MCP session ids can still inherit safely when
- * a stable per-user token is present.
+ * Resolve the verified client key for claim inheritance.
+ * Prefer request headers on this tool call, then the outer HTTP ALS key, then
+ * the key registered for this MCP session at request entry.
+ *
+ * Only inheritEligible keys are returned for claim lookup — IP-only keys are
+ * logged but not used to inherit connections across Claude session rotations.
  */
-export function buildHttpClientKeyFromHeaders(
-  headers: Record<string, string | string[] | undefined>,
-  clientIp?: string
-): string {
-  const ip = clientIp?.trim() || resolveClientIpFromHeaders(headers);
-  const identityParts: string[] = [];
-
-  for (const name of MCP_CLIENT_IDENTITY_HEADER_NAMES) {
-    const value = normalizeHeaderValue(headers[name]);
-    if (!value) {
-      continue;
-    }
-
-    identityParts.push(`${name}:${fingerprintSecretMaterial(value)}`);
-  }
-
-  const material = [ip, ...identityParts].join("|");
-  return createHash("sha256").update(material, "utf8").digest("hex").slice(0, 16);
-}
-
-export function buildHttpClientKeyFromRequest(req: Request): string {
-  return buildHttpClientKeyFromHeaders(
-    req.headers as Record<string, string | string[] | undefined>,
-    getClientIpFromRequest(req)
-  );
-}
-
-export function getClientIpFromRequest(req: Request): string {
-  const forwardedFor = req.headers["x-forwarded-for"];
-
-  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
-    return forwardedFor.split(",")[0].trim();
-  }
-
-  return req.ip || req.socket.remoteAddress || "unknown";
-}
-
-export function resolveMcpSessionIdFromRequest(req: Request): string | undefined {
-  return resolveMcpSessionIdFromHeaders(
-    req.headers as Record<string, string | string[] | undefined>
-  );
-}
-
-export function resolveMcpSessionIdFromExtra(
+export function resolveClientKeyForToolSession(
+  sessionId: string | undefined,
   extra?: McpToolRequestExtra
 ): string | undefined {
-  const fromExtra = extra?.sessionId?.trim();
+  return resolveClientKeyDetailsForToolSession(sessionId, extra)?.clientKey;
+}
+
+export function resolveClientKeyDetailsForToolSession(
+  sessionId: string | undefined,
+  extra?: McpToolRequestExtra
+): HttpClientKeyResolution | undefined {
+  const fromExtra = resolveHttpClientKeyDetailsFromExtra(extra);
   if (fromExtra) {
     return fromExtra;
   }
 
-  const headers = extra?.requestInfo?.headers;
-  if (!headers) {
-    return undefined;
+  const fromAls = resolveHttpClientKey()?.trim();
+  if (fromAls) {
+    const registered = getRegisteredSessionClientKeyResolution(sessionId);
+    if (registered) {
+      return registered;
+    }
+    // ALS alone does not prove inherit eligibility (could be a volatile IP-only
+    // key). Prefer connectionRef or a registry entry captured at HTTP entry.
+    return {
+      clientKey: fromAls,
+      source: "ip-only",
+      inheritEligible: false,
+    };
   }
 
-  return resolveMcpSessionIdFromHeaders(headers);
+  return getRegisteredSessionClientKeyResolution(sessionId);
 }
 
-export function buildHttpClientKeyFromExtra(
-  extra?: McpToolRequestExtra
+/** Client key to pass into claim inheritance — undefined when IP-only / ineligible. */
+export function clientKeyForClaimInheritance(
+  resolution: HttpClientKeyResolution | undefined
 ): string | undefined {
-  const headers = extra?.requestInfo?.headers;
-  if (!headers) {
+  if (!resolution?.inheritEligible) {
     return undefined;
   }
-
-  return buildHttpClientKeyFromHeaders(headers);
+  return resolution.clientKey.trim() || undefined;
 }
 
 function prefixId(value: string | undefined): string | undefined {
@@ -299,22 +559,49 @@ export type HttpToolSessionScope = {
 export async function prepareHttpToolSessionScope(
   sessionId: string,
   keyStore: Map<string, import("../shared.js").CompanyApiContext>,
-  clientKey?: string,
+  clientKeyOrResolution?: string | HttpClientKeyResolution,
   connectionRef?: string
 ): Promise<HttpToolSessionScope> {
   await ensureConnectionStoreInitialized();
 
+  const resolutionDetails: HttpClientKeyResolution | undefined =
+    typeof clientKeyOrResolution === "string"
+      ? clientKeyOrResolution.trim()
+        ? {
+            clientKey: clientKeyOrResolution.trim(),
+            // Plain strings from older call sites / tests are treated as
+            // inherit-eligible stable keys (explicit test fixtures).
+            source: "stable-identity",
+            inheritEligible: true,
+          }
+        : undefined
+      : clientKeyOrResolution;
+
+  if (resolutionDetails) {
+    registerSessionClientKey(sessionId, resolutionDetails);
+  }
+
+  const inheritKey = clientKeyForClaimInheritance(resolutionDetails);
+
   const resolution = await resolveConnectionIdForActiveSessionWithMeta({
     sessionId,
-    clientKey,
+    clientKey: inheritKey,
     connectionRef,
   });
+
+  if (resolutionDetails) {
+    logConnectionClaimLookup({
+      clientKey: resolutionDetails.clientKey,
+      claimFound: resolution.clientClaimInherited,
+      connectionPresent: Boolean(resolution.connectionId),
+    });
+  }
 
   return {
     sessionId,
     keyStore,
     connectionId: resolution.connectionId ?? "",
-    clientKey,
+    clientKey: resolutionDetails?.clientKey,
     resolution,
   };
 }
@@ -372,6 +659,7 @@ export async function runHttpToolSessionFromExtra<T>(
     return fn();
   }
 
+  const outerContext = getMcpSessionContext();
   const sessionId =
     transportSessionId?.trim() || resolveMcpSessionIdFromExtra(extra);
   const connectionRef = options?.connectionRef;
@@ -386,7 +674,18 @@ export async function runHttpToolSessionFromExtra<T>(
   }
 
   const store = keyStore ?? resolveSessionKeyStore(sessionId);
-  const clientKey = buildHttpClientKeyFromExtra(extra);
+  // Critical: tool `extra` often omits requestInfo.headers. Fall back to the
+  // HTTP-request ALS client key and the per-session registry so route_request
+  // inherits the same verified client claim as transactional tools.
+  const clientKeyDetails = resolveClientKeyDetailsForToolSession(
+    sessionId,
+    extra
+  );
+  if (clientKeyDetails) {
+    registerSessionClientKey(sessionId, clientKeyDetails);
+  }
+  const clientKey = clientKeyDetails?.clientKey;
+
   const headers = (extra?.requestInfo?.headers ?? {}) as Record<
     string,
     string | string[] | undefined
@@ -413,12 +712,22 @@ export async function runHttpToolSessionFromExtra<T>(
   const scope = await prepareHttpToolSessionScope(
     sessionId,
     store,
-    clientKey,
+    clientKeyDetails,
     connectionRef
   );
 
   if (!scope.connectionId && prepared.connectionId) {
     scope.connectionId = prepared.connectionId;
+  }
+
+  // Nested tool wrappers must not wipe a connection the outer HTTP request
+  // already resolved for this same session (claim inheritance / binding).
+  if (
+    !scope.connectionId?.trim() &&
+    outerContext?.connectionId?.trim() &&
+    outerContext.sessionId === sessionId
+  ) {
+    scope.connectionId = outerContext.connectionId.trim();
   }
 
   return runWithActiveConnectionRef(connectionRef, () =>
@@ -489,7 +798,11 @@ export function buildMcpSessionDiagnostic(args: {
     connectionRefInvalid: args.resolution?.connectionRefInvalid ?? false,
     connectionRefPresent: Boolean(args.connectionRef?.trim()),
     connectionRefPrefix: prefixConnectionRef(args.connectionRef),
-    clientKeyPresent: Boolean(buildHttpClientKeyFromExtra(args.extra)),
+    clientKeyPresent: Boolean(
+      buildHttpClientKeyFromExtra(args.extra) ||
+        resolveHttpClientKey() ||
+        getRegisteredSessionClientKey(resolvedSessionId)
+    ),
     clientIdentityHeaderNamesPresent: listPresentHeaderNames(
       headers,
       MCP_CLIENT_IDENTITY_HEADER_NAMES

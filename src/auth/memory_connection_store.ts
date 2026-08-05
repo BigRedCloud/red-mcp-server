@@ -8,6 +8,7 @@ import type {
   ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
+  PendingActionRecord,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -42,6 +43,15 @@ const connectionRefs = new Map<
 const failedValidationsByConnection = new Map<string, FailedCompanyConnection[]>();
 const telemetryByConnection = new Map<string, ConnectionTelemetryRecord>();
 const successPagesById = new Map<string, ConnectionSuccessPageRecord>();
+/** `${connectionId}|${scopeKeyHash}` → pending action */
+const pendingActionsByScope = new Map<string, PendingActionRecord>();
+
+function pendingActionMapKey(
+  connectionId: string,
+  scopeKeyHash: string
+): string {
+  return `${connectionId.trim()}|${scopeKeyHash.trim()}`;
+}
 
 function resolveConnectTokenArg(args: {
   connectToken?: string;
@@ -471,6 +481,44 @@ export class MemoryConnectionStore implements ConnectionStore {
       connectedNames: [...record.connectedNames],
       failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
     };
+  }
+
+  async savePendingAction(record: PendingActionRecord): Promise<void> {
+    pendingActionsByScope.set(
+      pendingActionMapKey(record.connectionId, record.scopeKeyHash),
+      {
+        ...record,
+        allowedTools: [...record.allowedTools],
+      }
+    );
+  }
+
+  async getPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<PendingActionRecord | null> {
+    const key = pendingActionMapKey(connectionId, scopeKeyHash);
+    const record = pendingActionsByScope.get(key);
+    if (!record) {
+      return null;
+    }
+    if (record.expiresAt <= Date.now()) {
+      pendingActionsByScope.delete(key);
+      return null;
+    }
+    return {
+      ...record,
+      allowedTools: [...record.allowedTools],
+    };
+  }
+
+  async clearPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<void> {
+    pendingActionsByScope.delete(
+      pendingActionMapKey(connectionId, scopeKeyHash)
+    );
   }
 
   async getDiagnostics(args: {

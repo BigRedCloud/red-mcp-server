@@ -10,7 +10,7 @@ export const DO_NOT_PASTE_API_KEY_IN_CHAT =
   "Do not ask the user to paste an API key into chat.";
 
 export const CONNECTION_REF_PERSISTENCE_GUIDANCE = [
-  "If brc_confirm_company_connection returned a connectionRef, pass that exact value on every later tool call in this chat.",
+  "If brc_confirm_company_connection returned a connectionRef, pass that exact value on every later tool call in this chat — including brc_route_request before create/update/delete workflows.",
   "When a tool call succeeds with connectionRef, keep using the same connectionRef — do not call brc_start_company_connection again.",
   "Do not treat empty lists, zero results, or partial data as an expired connection.",
   "If one company has no sales or purchases, report no data for that company — not a connection expiry.",
