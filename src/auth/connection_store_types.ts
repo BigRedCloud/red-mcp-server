@@ -79,6 +79,26 @@ export type ConnectionSuccessPageRecord = {
   expiresAt: number;
 };
 
+/**
+ * Durable pending transactional action for confirmation continuation.
+ * routeToken is opaque and must never be logged.
+ */
+export type PendingActionRecord = {
+  connectionId: string;
+  /** Hash of client/session scope — never a raw key or session id. */
+  scopeKeyHash: string;
+  workflowId: string;
+  allowedTools: string[];
+  routeToken: string;
+  originalMessage: string;
+  messageHash: string;
+  expiresAt: number;
+  status: "routed" | "previewed";
+  targetRecordKey?: string;
+  previewedAt?: number;
+  updatedAt: number;
+};
+
 export interface ConnectionStore {
   getStoreType(): string;
 
@@ -214,6 +234,18 @@ export interface ConnectionStore {
   getConnectionSuccessPage(
     successId: string
   ): Promise<ConnectionSuccessPageRecord | null>;
+
+  savePendingAction(record: PendingActionRecord): Promise<void>;
+
+  getPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<PendingActionRecord | null>;
+
+  clearPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<void>;
 
   getDiagnostics(args: {
     connectionId?: string;

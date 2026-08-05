@@ -106,7 +106,7 @@ export const routeTokenSchema = z
   );
 
 export const ROUTE_TOKEN_TOOL_SUFFIX =
-  " Requires routeToken from brc_route_request for the matching action workflow. Call brc_route_request first with the user's complete original message. A routeToken is not permission to post — preview-before-posting and confirmWrite still apply.";
+  " Requires routeToken from brc_route_request for the matching action workflow. Call brc_route_request first with the user's complete original action request. Retain the returned routeToken through lookup, preview, and confirmation, and pass the same token on the final permitted transactional tool call. Never invent a placeholder token. A routeToken is not permission to post — preview-before-posting and confirmWrite/confirmDelete still apply.";
 
 function toBase64Url(value: Buffer | string): string {
   const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
@@ -220,6 +220,9 @@ export function hashRouteMessage(message: string): string {
   return createHash("sha256").update(message, "utf8").digest("hex");
 }
 
+/** Alias used by routeRequest pending-action persistence. */
+export const hashMessageForRouteToken = hashRouteMessage;
+
 /**
  * Stable HMAC binding for a connection id. Uses the route-token signing secret so
  * the value cannot be forged without the secret and matches across app instances
@@ -316,6 +319,18 @@ export function markRouteTokenConsumed(
 export function isRouteTokenConsumed(jti: string): boolean {
   pruneConsumed(Date.now());
   return consumedTokens.has(jti);
+}
+
+/**
+ * True when the opaque routeToken's jti has already been consumed after a
+ * confirmed write. Malformed tokens are treated as unusable (consumed).
+ */
+export function isIssuedRouteTokenConsumed(routeToken: string): boolean {
+  const parsed = parseAndVerifySignature(routeToken);
+  if ("ok" in parsed) {
+    return true;
+  }
+  return isRouteTokenConsumed(parsed.payload.jti);
 }
 
 function resolveRouteSessionId(explicit?: string | null): string {
@@ -693,12 +708,58 @@ export function wrapRouteTokenHandler<T extends Record<string, unknown>>(
 
     const result = await handler(args);
 
+    const {
+      buildTargetRecordKey,
+      clearPendingActionForCurrentScope,
+      markPendingActionPreviewed,
+    } = await import("./pending-action.js");
+
     if (isWriteActionConfirmed(args as Record<string, unknown>)) {
       markRouteTokenConsumed(validation.payload.jti, validation.payload.exp);
+      await clearPendingActionForCurrentScope({
+        connectionId,
+        sessionId,
+      });
+    } else if (resultIndicatesConfirmationRequired(result)) {
+      await markPendingActionPreviewed({
+        connectionId,
+        toolName,
+        targetRecordKey: buildTargetRecordKey(args as Record<string, unknown>),
+      });
     }
 
     return result;
   };
+}
+
+function resultIndicatesConfirmationRequired(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as Record<string, unknown>;
+  if (record.status === "confirmation_required") {
+    return true;
+  }
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const text = (part as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    if (
+      text.includes('"status":"confirmation_required"') ||
+      text.includes('"status": "confirmation_required"')
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Test helper: forge an unsigned/altered token string from a payload. */

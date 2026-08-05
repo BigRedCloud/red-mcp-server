@@ -23,7 +23,7 @@ function staffPrincipal(options) {
         },
         {
             typ: "preferred_username",
-            val: options.email ?? "staff_member@bigredbook.com",
+            val: options.email ?? "staff_member@example.com",
         },
         {
             typ: "oid",
@@ -149,18 +149,18 @@ test("approved staff can access the admin page via Easy Auth principal", () => {
     const principal = staffPrincipal({
         tenantId: "tenant-a",
         groupId: "group-edu-admins",
-        email: "staff_member@bigredbook.com",
+        email: "staff_member@example.com",
     });
     const result = authorizeBrcEduAdminRequest({
         headers: {
             [EASY_AUTH_CLIENT_PRINCIPAL_HEADER]: encodePrincipal(principal),
-            [EASY_AUTH_CLIENT_PRINCIPAL_NAME_HEADER]: "staff_member@bigredbook.com",
+            [EASY_AUTH_CLIENT_PRINCIPAL_NAME_HEADER]: "staff_member@example.com",
         },
     });
     assert.equal(result.ok, true);
     if (result.ok) {
         assert.equal(result.method, "entra");
-        assert.equal(result.identity, "staff_member@bigredbook.com");
+        assert.equal(result.identity, "staff_member@example.com");
     }
 });
 test("authenticated users outside the approved group are denied", () => {
