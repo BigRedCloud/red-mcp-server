@@ -14,6 +14,11 @@ const connectionRefs = new Map();
 const failedValidationsByConnection = new Map();
 const telemetryByConnection = new Map();
 const successPagesById = new Map();
+/** `${connectionId}|${scopeKeyHash}` → pending action */
+const pendingActionsByScope = new Map();
+function pendingActionMapKey(connectionId, scopeKeyHash) {
+    return `${connectionId.trim()}|${scopeKeyHash.trim()}`;
+}
 function resolveConnectTokenArg(args) {
     const token = (args.connectToken ?? args.code ?? "").trim();
     if (!token) {
@@ -305,6 +310,30 @@ export class MemoryConnectionStore {
             connectedNames: [...record.connectedNames],
             failedCompanies: record.failedCompanies.map((failure) => ({ ...failure })),
         };
+    }
+    async savePendingAction(record) {
+        pendingActionsByScope.set(pendingActionMapKey(record.connectionId, record.scopeKeyHash), {
+            ...record,
+            allowedTools: [...record.allowedTools],
+        });
+    }
+    async getPendingAction(connectionId, scopeKeyHash) {
+        const key = pendingActionMapKey(connectionId, scopeKeyHash);
+        const record = pendingActionsByScope.get(key);
+        if (!record) {
+            return null;
+        }
+        if (record.expiresAt <= Date.now()) {
+            pendingActionsByScope.delete(key);
+            return null;
+        }
+        return {
+            ...record,
+            allowedTools: [...record.allowedTools],
+        };
+    }
+    async clearPendingAction(connectionId, scopeKeyHash) {
+        pendingActionsByScope.delete(pendingActionMapKey(connectionId, scopeKeyHash));
     }
     async getDiagnostics(args) {
         const connectionId = args.connectionId ??

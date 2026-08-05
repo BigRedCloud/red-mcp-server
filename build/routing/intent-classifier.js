@@ -5,16 +5,17 @@
  * - action — Red should perform the accounting workflow
  * - help — manual Big Red Cloud instructions via the unified help pipeline
  *
- * Also returns connection / read / unknown for specialised routing.
+ * Also returns connection / read / unsupported_action / unknown.
  *
  * Deterministic how-to phrase detection runs before action-verb matching so
  * words like "add" / "create" never force action mode on how-to questions.
  *
- * Classification is stateless: each message is classified independently.
- * detectHelpMode / this classifier cannot force MCP clients to call a tool —
- * clients still select tools from metadata and server instructions.
+ * Workflow matching comes from action-workflow-registry (single source of truth).
+ * Incomplete action responses (mode=action with empty preferredTools) are not
+ * produced here — unmatched action verbs become unsupported_action.
  */
 import { detectRedHelpCommand, isHowToHelpPhrase, isRedHelpCompanyConnectionQuery, HELP_MODE_PREFERRED_TOOLS, } from "../brc-edu/help/help-mode.js";
+import { resolveActionWorkflow, resolveWorkflowFromMessage, } from "./action-workflow-registry.js";
 const CONNECTION_PATTERNS = [
     /^\s*(?:please\s+)?(?:connect|reconnect)\b.{0,60}\bcompan(?:y|ies)\b/i,
     /^\s*(?:please\s+)?(?:connect|reconnect)\s+(?:my|a|the)\s+compan(?:y|ies)\b/i,
@@ -28,85 +29,14 @@ const READ_PATTERNS = [
 ];
 /** Explicit perform-action wording (checked only after how-to / connection / read). */
 const ACTION_PATTERNS = [
-    /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|delete|send|raise|prepare|record)\b/i,
-    /^\s*(?:please\s+)?(?:add|create|post|update|delete|send|raise|prepare|record)\b/i,
-    /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|delete)\b/i,
-    /\b(?:post|update|delete)\s+this\b/i,
+    /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+    /^\s*(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+    /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|change|delete|remove)\b/i,
+    /\b(?:post|update|change|delete|remove)\s+this\b/i,
 ];
-const ACTION_WORKFLOWS = [
-    {
-        match: /\b(?:add|create|set\s+up|setup|new)\b.{0,40}\bcustomers?\b|\bcustomers?\b.{0,40}\b(?:add|create)\b/i,
-        workflow: {
-            name: "create_customer",
-            description: "Create a customer in the connected company. Ask for required details, then show a preview before posting.",
-            preferredTools: ["brc_create_customer"],
-            requiresPreviewConfirmation: true,
-        },
-    },
-    {
-        match: /\b(?:add|create|set\s+up|setup|new)\b.{0,40}\bsuppliers?\b|\bsuppliers?\b.{0,40}\b(?:add|create)\b/i,
-        workflow: {
-            name: "create_supplier",
-            description: "Create a supplier in the connected company. Ask for required details, then show a preview before posting.",
-            preferredTools: ["brc_create_supplier"],
-            requiresPreviewConfirmation: true,
-        },
-    },
-    {
-        match: /\b(?:create|raise|prepare|add|post)\b.{0,40}\b(?:sales\s+)?invoices?\b|\b(?:sales\s+)?invoices?\b.{0,40}\b(?:create|raise|prepare|add|post)\b/i,
-        workflow: {
-            name: "create_sales_invoice",
-            description: "Create a sales invoice. Confirm customer, lines, VAT and totals, then show a preview before posting.",
-            preferredTools: [
-                "brc_create_sales_invoice",
-                "brc_create_sales_invoice_gen_ref",
-            ],
-            requiresPreviewConfirmation: true,
-        },
-    },
-    {
-        match: /\b(?:create|raise|prepare|add|post)\b.{0,40}\bpurchases?\b|\bpurchases?\b.{0,40}\b(?:create|raise|prepare|add|post)\b/i,
-        workflow: {
-            name: "create_purchase",
-            description: "Create a purchase. Confirm supplier and lines, then show a preview before posting.",
-            preferredTools: ["brc_create_purchase"],
-            requiresPreviewConfirmation: true,
-        },
-    },
-    {
-        match: /\bdelete\b.{0,40}\binvoices?\b|\binvoices?\b.{0,40}\bdelete\b/i,
-        workflow: {
-            name: "delete_invoice",
-            description: "Delete an invoice after identifying the record and obtaining explicit confirmation.",
-            preferredTools: ["brc_delete_sales_invoice"],
-            requiresPreviewConfirmation: true,
-        },
-    },
-    {
-        match: /\bupdate\b.{0,40}\bsuppliers?\b|\bsuppliers?\b.{0,40}\bupdate\b/i,
-        workflow: {
-            name: "update_supplier",
-            description: "Update a supplier after confirming which record and fields to change, with preview before posting.",
-            preferredTools: ["brc_update_supplier"],
-            requiresPreviewConfirmation: true,
-        },
-    },
-];
-export function resolveActionWorkflow(cleanedQuery) {
-    const text = cleanedQuery.trim();
-    if (!text) {
-        return null;
-    }
-    for (const entry of ACTION_WORKFLOWS) {
-        if (entry.match.test(text)) {
-            return entry.workflow;
-        }
-    }
-    return null;
-}
+/** Re-export registry resolver for call sites that imported from this module. */
+export { resolveActionWorkflow } from "./action-workflow-registry.js";
 function isConnectionIntent(message) {
-    // How-to connect questions are classified as help first.
-    // Bare "connect my companies" lands here as connection mode.
     return CONNECTION_PATTERNS.some((pattern) => pattern.test(message.trim()));
 }
 function isReadIntent(message) {
@@ -117,11 +47,11 @@ function isActionIntent(message) {
     if (ACTION_PATTERNS.some((pattern) => pattern.test(trimmed))) {
         return true;
     }
-    // Topic + action verb without leading please/can you (e.g. "add a customer")
-    return resolveActionWorkflow(trimmed) !== null;
+    return resolveWorkflowFromMessage(trimmed) !== null;
 }
 /**
  * Classify a single user message. Stateless — does not remember prior modes.
+ * Confirmation continuation is handled in routeRequest, not here.
  */
 export function classifyRequestIntent(userMessage) {
     const originalMessage = typeof userMessage === "string" ? userMessage : "";
@@ -189,13 +119,26 @@ export function classifyRequestIntent(userMessage) {
     }
     if (isActionIntent(trimmed)) {
         const workflow = resolveActionWorkflow(trimmed);
+        if (workflow && workflow.preferredTools.length > 0) {
+            return {
+                mode: "action",
+                cleanedQuery: trimmed,
+                originalMessage: trimmed,
+                reason: "action_request",
+                blockTransactionalTools: false,
+                preferredTools: workflow.preferredTools,
+                allowCompanyConnectionTool: false,
+                workflow,
+            };
+        }
+        // Action verb / noun detected but no enabled workflow mapping.
         return {
-            mode: "action",
+            mode: "unsupported_action",
             cleanedQuery: trimmed,
             originalMessage: trimmed,
-            reason: "action_request",
-            blockTransactionalTools: false,
-            preferredTools: workflow?.preferredTools ?? [],
+            reason: "unsupported_action",
+            blockTransactionalTools: true,
+            preferredTools: [],
             allowCompanyConnectionTool: false,
         };
     }

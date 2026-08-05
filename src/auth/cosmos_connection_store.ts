@@ -14,6 +14,7 @@ import type {
   ConnectionSuccessPageRecord,
   ConnectionTelemetryRecord,
   FailedCompanyConnection,
+  PendingActionRecord,
   PendingConnectionRecord,
   StoredCompanyCredential,
 } from "./connection_store_types.js";
@@ -54,6 +55,13 @@ function connectionRefPartitionKey(ref: string): string {
 
 function successPagePartitionKey(successId: string): string {
   return `success:${successId}`;
+}
+
+function pendingActionPartitionKey(
+  connectionId: string,
+  scopeKeyHash: string
+): string {
+  return `pendingAction:${connectionId}:${scopeKeyHash}`;
 }
 
 function companyDocumentId(normalisedName: string): string {
@@ -163,6 +171,23 @@ type ConnectionSuccessPageDocument = CosmosRecord & {
   failedCompanies: FailedCompanyConnection[];
   createdAt: number;
   expiresAt: number;
+  ttl: number;
+};
+
+type PendingActionDocument = CosmosRecord & {
+  type: "pendingAction";
+  connectionId: string;
+  scopeKeyHash: string;
+  workflowId: string;
+  allowedTools: string[];
+  routeToken: string;
+  originalMessage: string;
+  messageHash: string;
+  expiresAt: number;
+  status: "routed" | "previewed";
+  targetRecordKey?: string;
+  previewedAt?: number;
+  updatedAt: number;
   ttl: number;
 };
 
@@ -982,6 +1007,112 @@ export class CosmosConnectionStore implements ConnectionStore {
       };
     } catch {
       return null;
+    }
+  }
+
+  async savePendingAction(record: PendingActionRecord): Promise<void> {
+    const ttlSeconds = Math.max(
+      60,
+      Math.ceil((record.expiresAt - Date.now()) / 1000)
+    );
+    const doc: PendingActionDocument = {
+      pk: pendingActionPartitionKey(record.connectionId, record.scopeKeyHash),
+      id: "pendingAction",
+      type: "pendingAction",
+      connectionId: record.connectionId,
+      scopeKeyHash: record.scopeKeyHash,
+      workflowId: record.workflowId,
+      allowedTools: [...record.allowedTools],
+      routeToken: record.routeToken,
+      originalMessage: record.originalMessage,
+      messageHash: record.messageHash,
+      expiresAt: record.expiresAt,
+      status: record.status,
+      targetRecordKey: record.targetRecordKey,
+      previewedAt: record.previewedAt,
+      updatedAt: record.updatedAt,
+      ttl: ttlSeconds,
+    };
+    await this.getContainer().items.upsert(doc);
+  }
+
+  async getPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<PendingActionRecord | null> {
+    const trimmedConnection = connectionId.trim();
+    const trimmedScope = scopeKeyHash.trim();
+    if (!trimmedConnection || !trimmedScope) {
+      return null;
+    }
+
+    try {
+      const { resource } = await this.getContainer()
+        .item(
+          "pendingAction",
+          pendingActionPartitionKey(trimmedConnection, trimmedScope)
+        )
+        .read<PendingActionDocument>();
+
+      if (!resource || resource.type !== "pendingAction") {
+        return null;
+      }
+      if (resource.expiresAt <= Date.now()) {
+        try {
+          await this.getContainer()
+            .item(
+              "pendingAction",
+              pendingActionPartitionKey(trimmedConnection, trimmedScope)
+            )
+            .delete();
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+
+      return {
+        connectionId: resource.connectionId,
+        scopeKeyHash: resource.scopeKeyHash,
+        workflowId: resource.workflowId,
+        allowedTools: [...resource.allowedTools],
+        routeToken: resource.routeToken,
+        originalMessage: resource.originalMessage,
+        messageHash: resource.messageHash,
+        expiresAt: resource.expiresAt,
+        status: resource.status,
+        targetRecordKey: resource.targetRecordKey,
+        previewedAt: resource.previewedAt,
+        updatedAt: resource.updatedAt,
+      };
+    } catch (error) {
+      if (isCosmosNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async clearPendingAction(
+    connectionId: string,
+    scopeKeyHash: string
+  ): Promise<void> {
+    const trimmedConnection = connectionId.trim();
+    const trimmedScope = scopeKeyHash.trim();
+    if (!trimmedConnection || !trimmedScope) {
+      return;
+    }
+    try {
+      await this.getContainer()
+        .item(
+          "pendingAction",
+          pendingActionPartitionKey(trimmedConnection, trimmedScope)
+        )
+        .delete();
+    } catch (error) {
+      if (!isCosmosNotFoundError(error)) {
+        throw error;
+      }
     }
   }
 

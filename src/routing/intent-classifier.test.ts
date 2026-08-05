@@ -77,7 +77,21 @@ test("classify: update this supplier → action", () => {
 });
 
 test("classify: delete this invoice → action", () => {
-  assert.equal(classifyRequestIntent("delete this invoice").mode, "action");
+  const result = classifyRequestIntent("delete this invoice");
+  assert.equal(result.mode, "action");
+  assert.ok(result.preferredTools.includes("brc_delete_sales_invoice"));
+});
+
+test("classify: delete a customer → action with brc_delete_customer", () => {
+  const result = classifyRequestIntent("delete a customer");
+  assert.equal(result.mode, "action");
+  assert.ok(result.preferredTools.includes("brc_delete_customer"));
+});
+
+test("classify: delete mysterious widget → unsupported_action", () => {
+  const result = classifyRequestIntent("delete this mysterious widget");
+  assert.equal(result.mode, "unsupported_action");
+  assert.deepEqual([...result.preferredTools], []);
 });
 
 test("classify: how-to phrases stay help despite create/add verbs", () => {
@@ -183,6 +197,15 @@ test("routeRequest action mode allows create workflow", async () => {
   assert.deepEqual(result.allowedTools, ["brc_create_customer"]);
   assert.equal(result.help, undefined);
   assert.match(result.guidance, /preview-before-posting/i);
+});
+
+test("routeRequest delete customer issues token", async () => {
+  const result = await routeRequest("delete a customer");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow, "delete_customer");
+  assert.ok(result.routeToken);
+  assert.ok(result.preferredTools.length > 0);
+  assert.deepEqual(result.allowedTools, ["brc_delete_customer"]);
 });
 
 test("routeRequest help mode does not persist into the next request", async () => {

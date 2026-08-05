@@ -2,6 +2,7 @@
   "name": "brc-company-mcp-server",
   "version": "1.5.0",
   "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
+  "license": "Apache-2.0",
   "type": "module",
   "files": [
     "build",

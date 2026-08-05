@@ -32,6 +32,9 @@ function connectionRefPartitionKey(ref) {
 function successPagePartitionKey(successId) {
     return `success:${successId}`;
 }
+function pendingActionPartitionKey(connectionId, scopeKeyHash) {
+    return `pendingAction:${connectionId}:${scopeKeyHash}`;
+}
 function companyDocumentId(normalisedName) {
     return `company:${normalisedName}`;
 }
@@ -657,6 +660,91 @@ export class CosmosConnectionStore {
         }
         catch {
             return null;
+        }
+    }
+    async savePendingAction(record) {
+        const ttlSeconds = Math.max(60, Math.ceil((record.expiresAt - Date.now()) / 1000));
+        const doc = {
+            pk: pendingActionPartitionKey(record.connectionId, record.scopeKeyHash),
+            id: "pendingAction",
+            type: "pendingAction",
+            connectionId: record.connectionId,
+            scopeKeyHash: record.scopeKeyHash,
+            workflowId: record.workflowId,
+            allowedTools: [...record.allowedTools],
+            routeToken: record.routeToken,
+            originalMessage: record.originalMessage,
+            messageHash: record.messageHash,
+            expiresAt: record.expiresAt,
+            status: record.status,
+            targetRecordKey: record.targetRecordKey,
+            previewedAt: record.previewedAt,
+            updatedAt: record.updatedAt,
+            ttl: ttlSeconds,
+        };
+        await this.getContainer().items.upsert(doc);
+    }
+    async getPendingAction(connectionId, scopeKeyHash) {
+        const trimmedConnection = connectionId.trim();
+        const trimmedScope = scopeKeyHash.trim();
+        if (!trimmedConnection || !trimmedScope) {
+            return null;
+        }
+        try {
+            const { resource } = await this.getContainer()
+                .item("pendingAction", pendingActionPartitionKey(trimmedConnection, trimmedScope))
+                .read();
+            if (!resource || resource.type !== "pendingAction") {
+                return null;
+            }
+            if (resource.expiresAt <= Date.now()) {
+                try {
+                    await this.getContainer()
+                        .item("pendingAction", pendingActionPartitionKey(trimmedConnection, trimmedScope))
+                        .delete();
+                }
+                catch {
+                    // ignore
+                }
+                return null;
+            }
+            return {
+                connectionId: resource.connectionId,
+                scopeKeyHash: resource.scopeKeyHash,
+                workflowId: resource.workflowId,
+                allowedTools: [...resource.allowedTools],
+                routeToken: resource.routeToken,
+                originalMessage: resource.originalMessage,
+                messageHash: resource.messageHash,
+                expiresAt: resource.expiresAt,
+                status: resource.status,
+                targetRecordKey: resource.targetRecordKey,
+                previewedAt: resource.previewedAt,
+                updatedAt: resource.updatedAt,
+            };
+        }
+        catch (error) {
+            if (isCosmosNotFoundError(error)) {
+                return null;
+            }
+            throw error;
+        }
+    }
+    async clearPendingAction(connectionId, scopeKeyHash) {
+        const trimmedConnection = connectionId.trim();
+        const trimmedScope = scopeKeyHash.trim();
+        if (!trimmedConnection || !trimmedScope) {
+            return;
+        }
+        try {
+            await this.getContainer()
+                .item("pendingAction", pendingActionPartitionKey(trimmedConnection, trimmedScope))
+                .delete();
+        }
+        catch (error) {
+            if (!isCosmosNotFoundError(error)) {
+                throw error;
+            }
         }
     }
     async getDiagnostics(args) {
