@@ -4,7 +4,7 @@ import { getMaxBatchItems, redServerConfig } from "./config/server_config.js";
 export function createBrcMcpServer() {
     return new McpServer({
         name: "Red",
-        version: "1.5.0",
+        version: "1.4.0",
     }, {
         instructions: getBrcMcpServerInstructions(getMaxBatchItems(), redServerConfig.allowDevMode),
     });

@@ -1,7 +1,5 @@
 # Red MCP Server
 
-**Release:** 1.5.0 — 5 August 2026
-
 Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants and MCP clients to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
 
 Supported customer platforms today are **ChatGPT**, **Claude**, and **Mistral** (including [Vibe](https://chat.mistral.ai/chat)). Other MCP clients may work technically, but they are not treated as officially supported platforms. Red uses platform detection only for anonymous operational telemetry (see [Privacy-safe telemetry](#privacy-safe-telemetry)).
@@ -33,7 +31,7 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 - Pre-confirm validation of company connection credentials on the connection page (single-company form or multi-company CSV upload)
 - Partial connection results — invalid keys are rejected before confirm and reported in `failedCompanies`
 - Hosted HTTP `connectionRef` / `activeConnectionRef` so MCP clients can silently reuse a confirmed connection across supported session changes; kept in tool JSON, not shown to end users
-- Request routing for transactional work — the assistant/client obtains a short-lived `routeToken` from `brc_route_request` before create/update/delete/batch/email workflows proceed. End users never type or paste a route token.
+- Request routing for transactional work — action tools expect a short-lived `routeToken` from the router before create/update/delete/batch/email workflows proceed
 - Privacy-safe anonymous operational telemetry (platform, environment, tool name, connected-company count) — see [docs/TELEMETRY.md](docs/TELEMETRY.md)
 - Company readiness check (`brc_company_readiness_check`) for connected companies
 - Read-only Big Red Cloud lookups
@@ -59,7 +57,7 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 - **Credential invalidation.** Only confirmed authentication failures clear a stored company credential. Endpoint, validation, permission, timeout, and server failures are not treated as an expired API key.
 - **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless the user explicitly asks for technical details.
 - **Configurable session duration.** How long connections last is controlled by `BRC_API_KEY_TTL_MINUTES`. User-facing wording (connection page, getting-started text, connection status) is derived from that value — not hardcoded.
-- **Request routing for writes.** Create, update, delete, batch, and email tools require a valid short-lived `routeToken` issued by the request router for the matching workflow. The assistant or MCP client obtains and passes that token — end users do not provide it. A route token is not permission to post — preview and confirmation still apply. After a preview, short confirmations such as “yes” or “delete it” continue the pending workflow with the same token.
+- **Request routing for writes.** Create, update, delete, batch, and email tools require a valid short-lived `routeToken` issued by the request router for the matching workflow. A route token is not permission to post — preview and confirmation still apply.
 - **Explicit confirmation for writes.** Create, update, delete, and batch actions require an explicit confirmation flag after a preview before posting has been shown. Email tools require an explicit send confirmation after an email preview.
 - **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
@@ -292,7 +290,7 @@ The flow is:
 1. Ask the assistant to start a company connection. It returns a secure connection page link.
 2. On that page, enter a single company **or upload a CSV** for several companies at once. Company connection credentials are entered on the secure page, not in chat.
 3. The server validates each credential against Big Red Cloud **before storing it**. Credentials that fail validation are not saved.
-4. Return to the chat and confirm using the success page. Prefer **Copy message for chat** (it copies a ready-to-paste confirmation message), or paste `Confirm connection code …` with the code shown on the page.
+4. Return to the chat and provide the **confirmation code** shown on the success page.
 5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid credentials appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
 
 Connection links are **one-time use**. Connected companies stay available for about the configured session duration (`BRC_API_KEY_TTL_MINUTES`, for example 240 minutes → about four hours), unless you disconnect or the connection expires.
@@ -370,16 +368,6 @@ Help answers may include:
 
 Help-resource indexes are supplied by the deployment operator. The public repository does not include Big Red Cloud’s internal content-management or resource-upload workflow.
 
-**Help questions versus actions.** Ask how-to or training questions when you want guidance or documentation. Ask for an action when you want Red to perform a create, update, delete, batch, or email workflow against a connected company. Help tools do not change company data.
-
----
-
-## Emailing documents
-
-When email skills are enabled, Red can send sales invoice emails, quote emails, and customer statement emails after an explicit send confirmation.
-
-Supported tool fields cover recipients, optional message body, and send confirmation. The BRC email API used by Red does **not** expose a subject-line override. The email subject is controlled by Big Red Cloud (company email templates / defaults), not by Red MCP tool arguments.
-
 ---
 
 ## Known limitations
@@ -402,10 +390,8 @@ This project is maintained by the Big Red Cloud software development team.
 
 ## Status
 
-Red **1.5.0** (5 August 2026) is in BETA.
+Red is in BETA.
 Red is an open-source MCP integration for Big Red Cloud and is under active development. Tool availability and behaviour may change between releases, and some capabilities are gated by deployment policy.
-
-See [RELEASE.md](RELEASE.md) and [CHANGELOG.md](CHANGELOG.md) for this release.
 
 ---
 
