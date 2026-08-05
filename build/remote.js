@@ -10,7 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
-import { buildHttpClientKeyFromRequest, buildMcpSessionDiagnostic, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
+import { buildMcpSessionDiagnostic, logHttpClientKeyResolved, logMcpSessionDiagnostic, prepareHttpToolSessionScope, resolveHttpClientKeyFromRequest, resolveMcpSessionIdFromRequest, runWithHttpToolSession, } from "./auth/mcp_http_session.js";
 import { buildTelemetryClientIdSetCookie, isValidTelemetryUuid, runWithRedTelemetryContext, } from "./telemetry.js";
 import { activatePreparedTelemetry, buildConnectTelemetryFlowDiagnostics, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, logConnectTelemetryFlowDiagnostics, logTelemetryClientIdPathDiagnostics, prepareMcpTelemetryContext, resolveAndPersistConnectTelemetryClientId, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { clearSessionPlatform, extractMcpInitializeClientInfo, getStoredSessionPlatform, logPlatformDetectionDiagnostics, resolveClientPlatform, storeSessionPlatform, toPlatformDetectionDiagnostics, } from "./telemetry/platform.js";
@@ -111,7 +111,8 @@ setInterval(() => {
 }, 60 * 1000).unref();
 async function handleMcpRequest(session, sessionId, req, res, body) {
     const normalizedSessionId = sessionId.trim();
-    const clientKey = buildHttpClientKeyFromRequest(req);
+    const clientKeyResolution = resolveHttpClientKeyFromRequest(req);
+    const clientKey = clientKeyResolution.clientKey;
     registerHttpSessionKeyStore(normalizedSessionId, session.keyStore);
     const requestBody = body ?? req.body;
     const connectionRef = extractConnectionRefFromMcpBody(requestBody);
@@ -120,6 +121,12 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
         : undefined;
     // Restore stored platform before telemetry context is created (rehydration).
     const storedPlatform = restoreSessionPlatform(session, normalizedSessionId);
+    logHttpClientKeyResolved({
+        clientKey,
+        source: clientKeyResolution.source,
+        sessionId: normalizedSessionId,
+        platform: storedPlatform ?? undefined,
+    });
     // Ordered: resolve connection → restore companies → load telemetry → count → context
     const prepared = await prepareMcpTelemetryContext({
         sessionId: normalizedSessionId,
@@ -131,7 +138,7 @@ async function handleMcpRequest(session, sessionId, req, res, body) {
         storedPlatform,
     });
     rememberSessionPlatform(session, normalizedSessionId, prepared.platformDetection.platform);
-    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKey, connectionRef);
+    const scope = await prepareHttpToolSessionScope(normalizedSessionId, session.keyStore, clientKeyResolution, connectionRef);
     // Prefer the prepared connection id when scope resolution lagged behind rehydration.
     if (!scope.connectionId && prepared.connectionId) {
         scope.connectionId = prepared.connectionId;

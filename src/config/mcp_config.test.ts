@@ -61,7 +61,9 @@ test("MCP server instructions define red-help mode and block auto transactional 
   const instructions = getBrcMcpServerInstructions(50, false);
 
   assert.ok(instructions.startsWith("MANDATORY ROUTING:"));
-  assert.match(instructions, /valid routeToken returned by the router/i);
+  assert.match(instructions, /Transactional tools reject requests without a valid routeToken/i);
+  assert.match(instructions, /Never invent a placeholder routeToken/i);
+  assert.match(instructions, /do not call brc_route_request with only that confirmation word/i);
   assert.match(
     instructions,
     /routeToken does not replace preview-before-posting/i,

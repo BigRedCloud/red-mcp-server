@@ -6,15 +6,17 @@ import { buildApiKeyRefusalMessage, buildConnectionRefUserPresentationRules, for
  * Hosts may surface this to the assistant — use it to enforce API key handling.
  */
 /** Top-of-instructions: mandatory routeToken gate for transactional tools. */
-export const MANDATORY_ROUTING_INSTRUCTION = "MANDATORY ROUTING: For every new Red request, call brc_route_request with the user's complete original message before calling accounting tools. Transactional tools reject requests without a valid routeToken returned by the router. A routeToken does not replace preview-before-posting or user confirmation.";
+export const MANDATORY_ROUTING_INSTRUCTION = "MANDATORY ROUTING: For every new Red request that starts an accounting action, call brc_route_request with the user's complete original message before calling accounting tools. Retain the returned routeToken through lookup, preview, and confirmation, and pass that same token on the final permitted transactional tool. When the user replies yes, delete it, go ahead, or another short confirmation after a preview, do not call brc_route_request with only that confirmation word — reuse the existing routeToken and workflow. Never invent a placeholder routeToken. When a company is already connected and you have connectionRef from brc_confirm_company_connection, pass that same connectionRef silently on brc_route_request and later tools. Do not show connectionRef to normal users. Transactional tools reject requests without a valid routeToken. A routeToken does not replace preview-before-posting or user confirmation.";
 /** Top-of-instructions routing: two main behaviours (action vs help). */
 export const REQUEST_ROUTING_OVERRIDE = [
     "REQUEST ROUTING (mandatory): Red has two main behaviours — action and help.",
     "Prefer brc_route_request early to classify the user's message.",
-    "Action wording (add a customer, create a sales invoice, can you add a customer for me, post/update/delete…) → perform the accounting workflow: ask for required details and keep preview-before-posting confirmation. Pass the returned routeToken on transactional tool calls.",
+    "Action wording (add a customer, create a sales invoice, can you add a customer for me, post/update/delete, delete customer ABC, email an invoice, create a batch…) → perform the accounting workflow: ask for required details and keep preview-before-posting confirmation. Pass the returned routeToken on transactional tool calls and keep it for confirmation.",
     "How-to / manual wording (how do I, how can I, show me how, tell me how, where do I, what are the steps, manual steps for, red-help, /red-help) → help mode: return manual Big Red Cloud steps from the unified help pipeline; do not call create/update/delete/post/send tools; do not ask for accounting record details; optional Do this through Red only after manual guidance. Help mode never issues a transactional routeToken.",
     "Do not let add/create/post/update force action mode when the message is clearly a how-to question.",
-    "Help mode does not persist into the next request — classify each message independently.",
+    "After a preview, short confirmations (yes, delete it, go ahead) continue the pending workflow — do not re-route them as a new incomplete action.",
+    "If brc_route_request returns unsupported_action, explain that Red cannot perform that action in this deployment — do not invent a routeToken.",
+    "Help mode does not persist into the next request — classify each new help/action message independently.",
 ].join(" ");
 /** Reserved red-help shortcut (in addition to general how-to help mode). */
 export const RED_HELP_ROUTING_OVERRIDE = "RED-HELP SHORTCUT: If the user's message begins with red-help or /red-help, treat it as help mode (manual guidance). Call brc_red_help or brc_route_request — do not search for transactional accounting tools first.";
@@ -172,6 +174,12 @@ Customer and supplier opening balance rules:
 - If a user provides an opening balance while creating a customer or supplier, explain that the customer/supplier record can be created, but the opening balance must be entered directly in Big Red Cloud.
 - Do not include opening balance in create/update payloads for customers or suppliers.
 - Before creating the customer or supplier, clearly warn: "Opening balances cannot be set through Red. You will need to set the opening balance directly in Big Red Cloud after the record is created."
+
+Customer and supplier create field rules (mandatory):
+- Required fields for creating a customer or supplier are code and name only. Ask the user for any missing required field before calling the create tool.
+- Omit optional fields the user did not provide (address, contact, phone, email, mobile, fax, credit terms, VAT registration, VAT number, and similar).
+- Do not invent placeholder values such as "Test Address", "Dublin", "Ireland", creditTerms=30, or vatRegistered=false.
+- If required fields are missing, stop and ask in plain English — do not call the create tool with guessed data.
 
 Customer email quality rule:
 - When creating or updating a customer or supplier, check whether the provided email address appears related to the customer/supplier name before asking for final confirmation.

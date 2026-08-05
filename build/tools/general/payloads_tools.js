@@ -278,26 +278,108 @@ export function buildProductPayload(args) {
         productTypeId: asNumber(args.productTypeId, 4),
     };
 }
-export function buildCustomerLikePayload(args, ownerTypeId) {
-    const code = asString(args.code ?? args.acCode);
+export const CUSTOMER_LIKE_REQUIRED_FIELDS = ["code", "name"];
+/**
+ * Required create fields for customers/suppliers. Optional fields (address,
+ * contact, credit terms, VAT registration, etc.) must be omitted when the user
+ * did not provide them — Red must not invent values.
+ */
+export function collectMissingCustomerLikeFields(args) {
+    const missing = [];
+    const code = asString(args.code ?? args.acCode).trim();
+    const name = asString(args.name).trim();
+    if (!code) {
+        missing.push("code");
+    }
+    if (!name) {
+        missing.push("name");
+    }
+    return missing;
+}
+export function buildMissingCustomerLikeInformationResponse(missingFields, ownerTypeId) {
+    const entity = ownerTypeId === 1 ? "customer" : "supplier";
     return {
-        ...(args.id !== undefined ? { id: asNumber(args.id) } : {}),
+        error: "missing_information",
+        entity,
+        missingFields,
+        message: [
+            `Required ${entity} details are missing: ${missingFields.join(", ")}.`,
+            `Ask the user for the missing values before calling the create tool again.`,
+            `Omit optional fields the user did not provide (for example address, credit terms, VAT registration).`,
+            `Do not invent placeholder values such as Test Address, Dublin, or default credit terms.`,
+        ].join(" "),
+    };
+}
+function optionalTrimmedString(value) {
+    const text = asString(value).trim();
+    return text ? text : undefined;
+}
+function optionalStringArray(value) {
+    const items = asStringArray(value)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    return items.length > 0 ? items : undefined;
+}
+export function buildCustomerLikePayload(args, ownerTypeId) {
+    const code = asString(args.code ?? args.acCode).trim();
+    const name = asString(args.name).trim() || code;
+    const payload = {
         ownerTypeId,
         code,
-        name: asString(args.name, code),
-        contact: asString(args.contact ?? args.contactName),
-        email: asString(args.email),
-        phone: asString(args.phone),
-        mobile: asString(args.mobile),
-        fax: asString(args.fax),
-        vatReg: asString(args.vatReg),
-        address: asStringArray(args.address ?? args.address1),
-        additionalEmails: Array.isArray(args.additionalEmails) ? args.additionalEmails : [],
+        name,
         vatAnalysisTypeId: asNumber(args.vatAnalysisTypeId, 0),
         vatType: typeof args.vatType === "number" ? args.vatType : 1,
-        businessIdentifierCode: asString(args.businessIdentifierCode),
-        internationalBankAccountNumber: asString(args.internationalBankAccountNumber),
     };
+    if (args.id !== undefined) {
+        payload.id = asNumber(args.id);
+    }
+    const contact = optionalTrimmedString(args.contact ?? args.contactName);
+    if (contact) {
+        payload.contact = contact;
+    }
+    const email = optionalTrimmedString(args.email);
+    if (email) {
+        payload.email = email;
+    }
+    const phone = optionalTrimmedString(args.phone);
+    if (phone) {
+        payload.phone = phone;
+    }
+    const mobile = optionalTrimmedString(args.mobile);
+    if (mobile) {
+        payload.mobile = mobile;
+    }
+    const fax = optionalTrimmedString(args.fax);
+    if (fax) {
+        payload.fax = fax;
+    }
+    const vatReg = optionalTrimmedString(args.vatReg);
+    if (vatReg) {
+        payload.vatReg = vatReg;
+    }
+    const address = optionalStringArray(args.address ?? args.address1);
+    if (address) {
+        payload.address = address;
+    }
+    if (Array.isArray(args.additionalEmails) && args.additionalEmails.length > 0) {
+        payload.additionalEmails = args.additionalEmails;
+    }
+    const bic = optionalTrimmedString(args.businessIdentifierCode);
+    if (bic) {
+        payload.businessIdentifierCode = bic;
+    }
+    const iban = optionalTrimmedString(args.internationalBankAccountNumber);
+    if (iban) {
+        payload.internationalBankAccountNumber = iban;
+    }
+    // Only pass through credit/VAT flags when the caller explicitly supplied them.
+    if (args.creditTerms !== undefined && args.creditTerms !== null && args.creditTerms !== "") {
+        payload.creditTerms = args.creditTerms;
+    }
+    if (typeof args.vatRegistered === "boolean") {
+        payload.vatRegistered = args.vatRegistered;
+    }
+    return payload;
 }
 function sanitizeCashReceiptInput(args, vatOnCashEnabled) {
     if (vatOnCashEnabled)

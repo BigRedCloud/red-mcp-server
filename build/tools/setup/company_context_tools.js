@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { buildConfirmConnectionCustomerMessage, buildConnectionPresentationInstructions, buildConnectionExpiryMetadata, buildListCompanyContextsCustomerMessage, buildListCompanyContextsExpiryFields, } from "../../auth/connection_presentation.js";
 import { getApiKeyRefusalMessage } from "../../config/mcp_config.js";
-import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, resolveHttpClientKey, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
+import { companyNameSchema, setApiKeyForCompany, listConnectedCompanyNames, clearCredentialForCompany, clearAllCompanyCredentials, getCredentialForCompany, jsonResponse, textResponse, ensureCredentialsForCurrentSession, resolveActiveMcpSessionId, getCurrentMcpSessionId, getCurrentConnectionId, } from "../../shared.js";
 import { redServerConfig, assertApiKeyAllowed, getApiKeyExpirationMs, getPublicBaseUrl, getConnectUrlHostMismatch, getConnectPublicBaseUrlDiagnostics, } from "../../config/server_config.js";
 import { claimConnectionCodeForSession, ClaimConnectionError, createPendingConnection, ensureConnectionStoreInitialized, getConnectionStore, getConnectionStoreTargetName, getDeploymentEnvironmentLabel, enterMcpSessionContext, } from "../../auth/connection_store.js";
+import { resolveClientKeyDetailsForToolSession, clientKeyForClaimInheritance, registerSessionClientKey, logConnectionClaimSaved, } from "../../auth/mcp_http_session.js";
 import { mergeRedTelemetryContext } from "../../telemetry/identity.js";
 import { buildCompanyNotConnectedResponse } from "../../auth/company_connection_errors.js";
 import { formatStartConnectionResponse, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, } from "../../auth/connection_wording.js";
@@ -46,7 +47,7 @@ export function registerCompanyContextTools(server) {
             .string()
             .min(1)
             .describe("The connection code from the secure Red connection page success message."),
-    }, async ({ code }) => {
+    }, async ({ code }, extra) => {
         await ensureConnectionStoreInitialized();
         const sessionId = resolveActiveMcpSessionId();
         if (!sessionId) {
@@ -57,8 +58,20 @@ export function registerCompanyContextTools(server) {
             ].join("\n"));
         }
         try {
+            const clientKeyDetails = resolveClientKeyDetailsForToolSession(sessionId, extra);
+            if (clientKeyDetails) {
+                registerSessionClientKey(sessionId, clientKeyDetails);
+            }
+            // Only durable-claim inherit-eligible keys (stable identity). IP-only
+            // keys rotate under Claude/Azure and must not seed cross-session inheritance.
+            const durableClaimKey = clientKeyForClaimInheritance(clientKeyDetails);
             const result = await claimConnectionCodeForSession(code, sessionId, {
-                clientKey: resolveHttpClientKey(),
+                clientKey: durableClaimKey,
+            });
+            logConnectionClaimSaved({
+                clientKey: durableClaimKey,
+                connectionPresent: Boolean(result.connectionId),
+                durableStoreWriteSucceeded: Boolean(durableClaimKey),
             });
             await ensureCredentialsForCurrentSession();
             enterMcpSessionContext({ sessionId, connectionId: result.connectionId });

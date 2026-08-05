@@ -4,9 +4,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_BRC_EDU_ENRICHED_CSV_PATH, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, getBrcEduEnrichedCsvPath, getBrcEduSupportCsvPath, isWindowsAbsolutePath, resolveBrcEduCsvPath, } from "./brc_edu_paths.js";
 const BASE_DIR = join(tmpdir(), "brc-edu-path-test");
+const EXAMPLE_WINDOWS_SUPPORT_CSV = "C:\\Users\\example\\Documents\\Red Edu\\webinar_video_routing_index.csv";
+const EXAMPLE_WINDOWS_ENRICHED_CSV = "C:\\Users\\example\\Documents\\Red Edu\\dev_only_video_routing_index_updated.csv";
+const EXAMPLE_WINDOWS_SUPPORT_CSV_FORWARD = "C:/Users/example/Documents/Red Edu/webinar_video_routing_index.csv";
 test("isWindowsAbsolutePath recognises drive-letter and UNC paths", () => {
-    assert.equal(isWindowsAbsolutePath("C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv"), true);
-    assert.equal(isWindowsAbsolutePath("C:/Users/Lauren.Dwyer/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv"), true);
+    assert.equal(isWindowsAbsolutePath(EXAMPLE_WINDOWS_SUPPORT_CSV), true);
+    assert.equal(isWindowsAbsolutePath(EXAMPLE_WINDOWS_SUPPORT_CSV_FORWARD), true);
     assert.equal(isWindowsAbsolutePath("\\\\server\\share\\file.csv"), true);
     assert.equal(isWindowsAbsolutePath("data/webinar_video_routing_index.csv"), false);
 });
@@ -15,10 +18,8 @@ test("resolveBrcEduCsvPath keeps POSIX absolute paths unchanged", () => {
     assert.equal(resolveBrcEduCsvPath(absolutePath, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR), absolutePath);
 });
 test("resolveBrcEduCsvPath keeps Windows drive-letter paths unchanged", () => {
-    const backslashPath = "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
-    const forwardSlashPath = "C:/Users/Lauren.Dwyer/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv";
-    assert.equal(resolveBrcEduCsvPath(backslashPath, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR), backslashPath);
-    assert.equal(resolveBrcEduCsvPath(forwardSlashPath, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR), forwardSlashPath);
+    assert.equal(resolveBrcEduCsvPath(EXAMPLE_WINDOWS_SUPPORT_CSV, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR), EXAMPLE_WINDOWS_SUPPORT_CSV);
+    assert.equal(resolveBrcEduCsvPath(EXAMPLE_WINDOWS_SUPPORT_CSV_FORWARD, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR), EXAMPLE_WINDOWS_SUPPORT_CSV_FORWARD);
 });
 test("resolveBrcEduCsvPath keeps UNC paths unchanged", () => {
     const uncPath = "\\\\server\\share\\dev_only_video_routing_index_updated.csv";
@@ -31,10 +32,8 @@ test("getBrcEduSupportCsvPath and getBrcEduEnrichedCsvPath return absolute Windo
     const previousSupport = process.env.BRC_EDU_SUPPORT_CSV_PATH;
     const previousEnriched = process.env.BRC_EDU_ENRICHED_CSV_PATH;
     try {
-        process.env.BRC_EDU_SUPPORT_CSV_PATH =
-            "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
-        process.env.BRC_EDU_ENRICHED_CSV_PATH =
-            "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\dev_only_video_routing_index_updated.csv";
+        process.env.BRC_EDU_SUPPORT_CSV_PATH = EXAMPLE_WINDOWS_SUPPORT_CSV;
+        process.env.BRC_EDU_ENRICHED_CSV_PATH = EXAMPLE_WINDOWS_ENRICHED_CSV;
         assert.equal(getBrcEduSupportCsvPath(BASE_DIR), process.env.BRC_EDU_SUPPORT_CSV_PATH);
         assert.equal(getBrcEduEnrichedCsvPath(BASE_DIR), process.env.BRC_EDU_ENRICHED_CSV_PATH);
     }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
 import { enforceTransactionSettingsOrThrow, getCompanyProcessingSettings, loadAndEnforceTransactionSettings, } from "../../guards/company_processing_settings.js";
 import { enforceReferenceSettingsOrThrow, getCompanyReferenceSettings, } from "../../guards/company_reference_settings.js";
-import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildProductPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, unwrapPayload, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, } from "./payloads_tools.js";
+import { buildBankAccountPayload, buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, buildCustomerLikePayload, buildMissingCustomerLikeInformationResponse, buildProductPayload, collectMissingCustomerLikeFields, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, unwrapPayload, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, } from "./payloads_tools.js";
 import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "../../guards/sales_vat_category.js";
 import { checkCustomerNameEmailMatch } from "../../data_quality/customer_email_check.js";
 import { getMaxBatchItems } from "../../config/server_config.js";
@@ -60,6 +60,13 @@ export function registerRawCreateTool(server, toolName, description, path) {
             hasOpeningBalanceFields(finalPayload);
         if (openingBalanceIgnored) {
             finalPayload = removeOpeningBalanceFields(finalPayload);
+        }
+        if (path === "/v1/customers" || path === "/v1/suppliers") {
+            const ownerTypeId = path === "/v1/customers" ? 1 : 3;
+            const missingFields = collectMissingCustomerLikeFields(finalPayload);
+            if (missingFields.length > 0) {
+                return jsonResponse(buildMissingCustomerLikeInformationResponse(missingFields, ownerTypeId));
+            }
         }
         if (path === "/v1/products")
             finalPayload = buildProductPayload(finalPayload);

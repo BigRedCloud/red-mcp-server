@@ -56,6 +56,8 @@ test("register_all_tools includes brc_red_help", () => {
 test("register_all_tools includes brc_route_request", () => {
     assert.ok(registeredTools.has("brc_route_request"));
     assert.equal(isToolEnabled("brc_route_request"), true);
+    // Remains credential-exempt, but accepts optional connectionRef so connected
+    // sessions can embed a stable connectionBinding in the routeToken.
     assert.ok(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_route_request"));
     const tool = registeredTools.get("brc_route_request");
     assert.ok(tool);
@@ -63,7 +65,7 @@ test("register_all_tools includes brc_route_request", () => {
     assert.match(tool.description, /add a customer/i);
     assert.match(tool.description, /routeToken/i);
     assert.ok(tool.schema.message);
-    assert.equal(tool.schema.connectionRef, undefined);
+    assert.equal(schemaHasOptionalConnectionRef(tool.schema), true);
 });
 test("transactional tools require routeToken in registered schema", () => {
     const createCustomer = registeredTools.get("brc_create_customer");
