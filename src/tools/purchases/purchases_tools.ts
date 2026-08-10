@@ -20,8 +20,13 @@ export function registerPurchaseTools(server: ServerType){
 
 server.tool(
     "brc_create_purchase",
-    "Creates a BRC purchase using structured MCP fields. Requires a reference when the company is configured for manual purchase references; otherwise prefer brc_create_purchase_gen_ref.",
-    {
+    [
+      "Creates a BRC purchase using structured MCP fields.",
+      "Requires a reference when the company is configured for manual purchase references; otherwise prefer brc_create_purchase_gen_ref.",
+      "A transaction date outside the current financial year is not automatically refused by Red.",
+      "After the user confirms the requested date, attempt the create request and let the BRC endpoint determine whether that historical date is supported.",
+    ].join(" "),
+       {
       companyName: companyNameSchema,
       supplierId: z.string().describe("Supplier id, for example 26180406."),
       acCode: z.string().describe("Supplier account code, for example SUP001."),
@@ -49,15 +54,51 @@ server.tool(
         "manual"
       );
   
-      const createResponse = await brcJsonRequest(companyName, "POST", "/v1/purchases", payload);
-      return jsonResponse({ message: "Purchase created using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
-    }
+      let createResponse;
+
+try {
+  createResponse = await brcJsonRequest(
+    companyName,
+    "POST",
+    "/v1/purchases",
+    payload
+  );
+} catch (error) {
+  return jsonResponse({
+    success: false,
+    message:
+      "BRC rejected the purchase create request. Red attempted the requested date rather than automatically blocking it because of the financial year.",
+    companyName,
+    entryDate: payload.entryDate,
+    procDate: payload.procDate,
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  });
+}
+return jsonResponse({
+  success: true,
+  message: "Purchase created using structured MCP fields.",
+  companyName,
+  payloadSent: payload,
+  referenceWarnings:
+    referenceWarnings.length > 0
+      ? referenceWarnings
+      : undefined,
+  createResponse,
+});    }
   );
   
   server.tool(
     "brc_create_purchase_gen_ref",
-    "Creates a Purchases Book purchase with a generated reference using structured fields. Use when the company is configured for auto-generated purchase references.",
-    {
+    [
+      "Creates a Purchases Book purchase with a generated reference using structured fields.",
+      "Use when the company is configured for auto-generated purchase references.",
+      "A transaction date outside the current financial year is not automatically refused by Red.",
+      "After the user confirms the requested date, attempt the create request and let the BRC endpoint determine whether that historical date is supported.",
+    ].join(" "),
+        {
       companyName: companyNameSchema,
       supplierId: z.number().int().positive(),
       acCode: z.string(),
@@ -81,14 +122,50 @@ server.tool(
         payload,
         "generated"
       );
-      const createResponse = await brcJsonRequest(companyName, "POST", "/v1/purchases/createPurchaseWithGeneratingReference", payload);
-      return jsonResponse({ message: "Purchase created through BRC API.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
+      let createResponse;
+
+try {
+  createResponse = await brcJsonRequest(
+    companyName,
+    "POST",
+    "/v1/purchases/createPurchaseWithGeneratingReference",
+    payload
+  );
+} catch (error) {
+  return jsonResponse({
+    success: false,
+    message:
+      "BRC rejected the purchase create request. Red attempted the requested date rather than automatically blocking it because of the financial year.",
+    companyName,
+    entryDate: payload.entryDate,
+    procDate: payload.procDate,
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  });
+}
+return jsonResponse({
+  success: true,
+  message: "Purchase created using structured MCP fields.",
+  companyName,
+  payloadSent: payload,
+  referenceWarnings:
+    referenceWarnings.length > 0
+      ? referenceWarnings
+      : undefined,
+  createResponse,
+});
     }
   );
   
   server.tool(
     "brc_update_purchase",
-    "Updates a BRC purchase using structured MCP fields.",
+    [
+      "Updates a BRC purchase using structured MCP fields.",
+      "Historical transaction dates are not automatically blocked.",
+      "If entryDate or procDate is outside the current financial year, confirm the change with the user and attempt it; the BRC endpoint determines whether the historical update is supported.",
+    ].join(" "),
     {
       companyName: companyNameSchema,
       id: z.union([z.string(), z.number()]).describe("Purchase id."),
@@ -138,27 +215,121 @@ server.tool(
         payload.vatEntries = [{ ...existingVatEntry, vatRateId: finalVatRateId, percentage: finalVatPercentage, amount: finalNet }];
       }
   
-      const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/purchases/${encodeURIComponent(id)}`, payload);
-      const verification = await brcFetch(companyName, `/v1/purchases/${encodeURIComponent(id)}`);
-      return jsonResponse({ message: "Purchase updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
-    }
+      let updateResponse;
+
+try {
+  updateResponse = await brcJsonRequest(
+    companyName,
+    "PUT",
+    `/v1/purchases/${encodeURIComponent(String(id))}`,
+    payload
   );
-  
+} catch (error) {
+  return jsonResponse({
+    success: false,
+    message:
+      "BRC rejected the purchase update. Red attempted the requested historical update rather than automatically blocking it.",
+    companyName,
+    id,
+    entryDate: payload.entryDate,
+    procDate: payload.procDate,
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  });
+}
+      const verification = await brcFetch(companyName, `/v1/purchases/${encodeURIComponent(id)}`);
+      return jsonResponse({
+        success: true,
+        message: "Purchase updated using structured MCP fields.",
+        companyName,
+        payloadSent: payload,
+        updateResponse,
+        verification,
+      });
+        }
+  );
   server.tool(
     "brc_delete_purchase",
-    "Deletes a BRC purchase by id using timestamp confirmation.",
+    [
+      "Deletes a BRC purchase by id using timestamp confirmation.",
+      "Historical purchases are not automatically blocked because they belong to an earlier financial year.",
+      "The BRC endpoint determines whether the historical deletion is supported.",
+    ].join(" "),
     {
       companyName: companyNameSchema,
       id: z.union([z.string(), z.number()]).describe("Purchase id."),
       confirmDelete: z.boolean().default(false),
     },
     async ({ companyName, id, confirmDelete }) => {
-      if (!confirmDelete) throw new Error("Deletion not confirmed. Re-run with confirmDelete=true.");
-      const purchase = await brcFetch(companyName, `/v1/purchases/${encodeURIComponent(id)}`);
-      if (!purchase || typeof purchase !== "object" || Array.isArray(purchase)) throw new Error(`Could not read purchase ${id} before deletion.`);
-      const timestamp = getTimestampFromRecord(purchase as JsonRecord, `purchase ${id}`);
-      const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/purchases/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-      return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+      if (!confirmDelete) {
+        throw new Error(
+          "Deletion not confirmed. Re-run with confirmDelete=true."
+        );
+      }
+  
+      const endpoint =
+        `/v1/purchases/${encodeURIComponent(String(id))}`;
+  
+      const purchase = await brcFetch(
+        companyName,
+        endpoint
+      );
+  
+      if (
+        !purchase ||
+        typeof purchase !== "object" ||
+        Array.isArray(purchase)
+      ) {
+        throw new Error(
+          `Could not read purchase ${id} before deletion.`
+        );
+      }
+  
+      const record = purchase as JsonRecord;
+  
+      const timestamp = getTimestampFromRecord(
+        record,
+        `purchase ${id}`
+      );
+  
+      try {
+        const deleteResponse = await brcJsonRequest(
+          companyName,
+          "DELETE",
+          `${endpoint}?timestamp=${encodeURIComponent(timestamp)}`
+        );
+  
+        return jsonResponse({
+          deleted: true,
+          companyName,
+          id,
+          recordDate:
+            record.procDate ??
+            record.entryDate ??
+            undefined,
+          timestampUsed: timestamp,
+          deleteResponse,
+        });
+      } catch (error) {
+        return jsonResponse({
+          deleted: false,
+          companyName,
+          id,
+          recordDate:
+            record.procDate ??
+            record.entryDate ??
+            undefined,
+          success: false,
+          message:
+            "BRC rejected the purchase deletion. Red attempted the request rather than automatically blocking it because of the financial year.",
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        });
+      }
     }
   );
 }

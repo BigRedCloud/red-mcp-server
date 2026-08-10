@@ -32,13 +32,16 @@ export function buildTransactionDateValidation(transactionDate, start, end) {
         return {
             inFinancialYear,
             position,
-            message: `This transaction date is outside the company's current financial year.${detail} Please choose a date within the current financial year before creating the transaction.`,
+            message: `This transaction date is outside the company's current financial year.${detail} ` +
+                "This is a warning, not an automatic block. Historical transactions may be supported by this specific BRC endpoint. " +
+                "If the user has confirmed the action, use the appropriate Red transaction tool and report the exact BRC response if the API rejects the historical date.",
         };
     }
     return {
         inFinancialYear,
         position: "unknown",
-        message: "Red could not determine the company's current financial year, so this transaction date could not be checked. Please verify the financial year in Big Red Cloud before creating the transaction.",
+        message: "Red could not determine the company's current financial year. Do not assume the transaction is unsupported. " +
+            "Proceed only after confirming the requested date and let the relevant BRC endpoint determine whether that operation is allowed.",
     };
 }
 function deploymentPolicy() {
@@ -148,7 +151,10 @@ Write-action safety:
 - Supported create, update, delete, batch, and email actions require explicit plain-English confirmation before posting.
 - Where the relevant tool supports it, show a clear plain-English preview of what will be posted before asking for confirmation.
 - Confirm the company, transaction date, customer or supplier, products or accounts, VAT treatment, amounts, references, and totals as relevant.
-- Validate transaction dates against the current financial year.
+- Check transaction dates against the current financial year.
+- A date outside the current financial year is a warning, not by itself a reason to refuse the action.
+- Historical create, update, and delete support is endpoint-specific. After explicit user confirmation, use the appropriate Red tool and let the BRC API determine whether the operation is supported.
+- If BRC rejects a historical operation, report the actual API error. Do not invent a blanket rule that Red cannot work with previous financial years.
 - Do not bypass disabled actions with direct API calls, scripts, or configuration changes.
 - Delete, update, batch, and email actions depend on the current deployment capabilities above.
 - If an action is unavailable, explain that plainly and offer a read-only review or instructions for completing it directly in Big Red Cloud.
@@ -361,7 +367,7 @@ Supported create, update, delete, batch, and email actions require explicit plai
 Check the company, transaction date, customer or supplier, products or nominal accounts, VAT treatment, amounts, references, totals, and any warnings before confirming.
 
 7. Check transaction dates
-Accounting actions may fail when the transaction date is outside the company's current financial year. Validate the date before posting.
+Accounting actions outside the current financial year may be supported depending on the BRC endpoint. Check the date, warn the user when it is outside the current year, and after confirmation attempt the requested supported action. If BRC rejects it, explain the API response.
 
 8. Treat analysis as decision support
 Check important figures against Big Red Cloud. Red should explain the records used, calculations, assumptions, uncertainty, and limitations, and should never fill gaps by guessing.

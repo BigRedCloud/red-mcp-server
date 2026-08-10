@@ -231,23 +231,160 @@ export function registerSalesEntryInvoiceTools(server) {
         confirmCrAnalysisCategory: args.confirmCrAnalysisCategory,
         connectionRef: extractConnectionRefFromToolArgs(args),
     }));
-    server.tool("brc_update_sales_invoice", "Updates a BRC sales invoice using structured safe text/reference fields.", {
+    server.tool("brc_update_sales_invoice", [
+        "Updates an existing BRC sales invoice.",
+        "Can update text/reference fields, transaction dates, customer/sales-rep fields, and the full productTrans line collection.",
+        "Historical invoices are not automatically blocked because they fall outside the current financial year.",
+        "The BRC API is the source of truth for whether a historical invoice can be changed.",
+        "When changing monetary values, provide a complete internally consistent productTrans collection and matching totalNet, totalVAT and total.",
+        "Do not guess monetary fields.",
+    ].join(" "), {
         companyName: companyNameSchema,
-        id: z.union([z.string(), z.number()]).describe("Sales invoice id."),
-        note: z.string().optional().describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
-        reference: z.string().optional().describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
-    }, async ({ companyName, id, note, reference }) => {
-        const current = await brcFetch(companyName, `/v1/salesInvoices/${encodeURIComponent(id)}`);
-        if (!current || typeof current !== "object" || Array.isArray(current))
+        id: z
+            .union([z.string(), z.number()])
+            .describe("Sales invoice id."),
+        note: z
+            .string()
+            .optional()
+            .describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
+        reference: z
+            .string()
+            .optional()
+            .describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
+        ourReference: z.string().optional(),
+        yourReference: z.string().optional(),
+        details: z.string().optional(),
+        entryDate: z
+            .string()
+            .optional()
+            .describe("Entry date. Historical dates are permitted as an attempted update; BRC may accept or reject them."),
+        procDate: z
+            .string()
+            .optional()
+            .describe("Processing date. Historical dates are permitted as an attempted update; BRC may accept or reject them."),
+        customerId: z.number().int().optional(),
+        saleRepId: z.number().int().optional(),
+        vatTypeId: z.number().int().optional(),
+        bookTranTypeId: z.number().int().optional(),
+        totalNet: z.number().optional(),
+        totalVAT: z.number().optional(),
+        total: z.number().optional(),
+        productTrans: z
+            .array(z.record(z.string(), z.unknown()))
+            .optional()
+            .describe("Complete BRC productTrans collection. Use this when changing invoice lines, quantities, unit prices, VAT or line amounts."),
+    }, async ({ companyName, id, note, reference, ourReference, yourReference, details, entryDate, procDate, customerId, saleRepId, vatTypeId, bookTranTypeId, totalNet, totalVAT, total, productTrans, }) => {
+        const endpoint = `/v1/salesInvoices/${encodeURIComponent(String(id))}`;
+        const current = await brcFetch(companyName, endpoint);
+        if (!current ||
+            typeof current !== "object" ||
+            Array.isArray(current)) {
             throw new Error(`Could not read sales invoice ${id} before update.`);
+        }
         const payload = cloneJson(current);
         if (note !== undefined)
             payload.note = note;
         if (reference !== undefined)
             payload.reference = reference;
-        const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/salesInvoices/${encodeURIComponent(id)}`, payload);
-        const verification = await brcFetch(companyName, `/v1/salesInvoices/${encodeURIComponent(id)}`);
-        return jsonResponse({ message: "Sales invoice updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
+        if (ourReference !== undefined)
+            payload.ourReference = ourReference;
+        if (yourReference !== undefined)
+            payload.yourReference = yourReference;
+        if (details !== undefined)
+            payload.details = details;
+        if (entryDate !== undefined)
+            payload.entryDate = entryDate;
+        if (procDate !== undefined)
+            payload.procDate = procDate;
+        if (customerId !== undefined)
+            payload.customerId = customerId;
+        if (saleRepId !== undefined)
+            payload.saleRepId = saleRepId;
+        if (vatTypeId !== undefined)
+            payload.vatTypeId = vatTypeId;
+        if (bookTranTypeId !== undefined) {
+            payload.bookTranTypeId = bookTranTypeId;
+        }
+        if (productTrans !== undefined) {
+            payload.productTrans = productTrans;
+        }
+        if (totalNet !== undefined)
+            payload.totalNet = totalNet;
+        if (totalVAT !== undefined)
+            payload.totalVAT = totalVAT;
+        if (total !== undefined)
+            payload.total = total;
+        const monetaryEditRequested = totalNet !== undefined ||
+            totalVAT !== undefined ||
+            total !== undefined ||
+            productTrans !== undefined;
+        if (monetaryEditRequested) {
+            if (productTrans === undefined ||
+                totalNet === undefined ||
+                totalVAT === undefined ||
+                total === undefined) {
+                throw new Error("Monetary invoice updates require productTrans, totalNet, totalVAT and total together so Red does not send an inconsistent invoice to BRC.");
+            }
+        }
+        // Basic reconciliation before sending monetary changes.
+        if (productTrans !== undefined) {
+            const lines = productTrans;
+            const calculatedNet = lines.reduce((sum, line) => sum +
+                (typeof line.amountNet === "number"
+                    ? line.amountNet
+                    : 0), 0);
+            const calculatedVat = lines.reduce((sum, line) => sum +
+                (typeof line.vat === "number"
+                    ? line.vat
+                    : 0), 0);
+            const calculatedTotal = lines.reduce((sum, line) => sum +
+                (typeof line.amount === "number"
+                    ? line.amount
+                    : 0), 0);
+            const tolerance = 0.01;
+            if (totalNet !== undefined &&
+                Math.abs(totalNet - calculatedNet) > tolerance) {
+                throw new Error(`totalNet ${totalNet} does not match productTrans amountNet total ${calculatedNet}.`);
+            }
+            if (totalVAT !== undefined &&
+                Math.abs(totalVAT - calculatedVat) > tolerance) {
+                throw new Error(`totalVAT ${totalVAT} does not match productTrans VAT total ${calculatedVat}.`);
+            }
+            if (total !== undefined &&
+                Math.abs(total - calculatedTotal) > tolerance) {
+                throw new Error(`total ${total} does not match productTrans amount total ${calculatedTotal}.`);
+            }
+        }
+        try {
+            const updateResponse = await brcJsonRequest(companyName, "PUT", endpoint, payload);
+            const verification = await brcFetch(companyName, endpoint);
+            return jsonResponse({
+                message: "Sales invoice updated.",
+                companyName,
+                historicalDateAttempt: entryDate !== undefined || procDate !== undefined
+                    ? {
+                        entryDate: payload.entryDate,
+                        procDate: payload.procDate,
+                    }
+                    : undefined,
+                payloadSent: payload,
+                updateResponse,
+                verification,
+            });
+        }
+        catch (error) {
+            return jsonResponse({
+                message: "BRC rejected the sales invoice update. The requested update was attempted rather than automatically blocked because of its financial year.",
+                companyName,
+                id,
+                endpoint: `PUT ${endpoint}`,
+                requestedEntryDate: entryDate,
+                requestedProcDate: procDate,
+                error: error instanceof Error
+                    ? error.message
+                    : String(error),
+            });
+        }
     });
     server.tool("brc_delete_sales_invoice", "Deletes a BRC sales invoice by id using timestamp confirmation.", {
         companyName: companyNameSchema,

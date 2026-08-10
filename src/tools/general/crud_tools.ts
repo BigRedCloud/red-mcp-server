@@ -154,7 +154,32 @@ export function registerRawCreateTool(
       })
     : { status: "not_checked" as const };
 
-      const response = await brcJsonRequest(companyName, "POST", path, finalPayload);
+    let response;
+
+    try {
+      response = await brcJsonRequest(
+        companyName,
+        "POST",
+        path,
+        finalPayload
+      );
+    } catch (error) {
+      return jsonResponse({
+        success: false,
+        message:
+          "BRC rejected the create request. Red did not automatically block the request based on financial year; this response came from the BRC endpoint.",
+        companyName,
+        endpoint: `POST ${path}`,
+        transactionDate:
+          finalPayload.procDate ??
+          finalPayload.entryDate ??
+          undefined,
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    }
       return jsonResponse({
         message: openingBalanceIgnored
           ? "Create request sent to BRC. Opening balance was not included because opening balances cannot currently be created or updated through Red."
@@ -234,12 +259,32 @@ export function registerRawUpdateTool(
         ) as JsonRecord;
       }
 
-      const updateResponse = await brcJsonRequest(
-        companyName,
-        "PUT",
-        `${path}/${encodeURIComponent(String(id))}`,
-        payload
-      );
+      let updateResponse;
+
+try {
+  updateResponse = await brcJsonRequest(
+    companyName,
+    "PUT",
+    `${path}/${encodeURIComponent(String(id))}`,
+    payload
+  );
+} catch (error) {
+  return jsonResponse({
+    success: false,
+    message:
+      `${label} update was rejected by BRC. Red did not automatically block the request based on financial year.`,
+    companyName,
+    endpoint: `PUT ${path}/${id}`,
+    transactionDate:
+      payload.procDate ??
+      payload.entryDate ??
+      undefined,
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  });
+}
 
       const verification = await brcFetch(
         companyName,
@@ -295,12 +340,31 @@ export function registerRawDeleteTool(
         current as JsonRecord,
         `${label} ${id}`
       );
+      let deleteResponse;
 
-      const deleteResponse = await brcJsonRequest(
-        companyName,
-        "DELETE",
-        `${path}/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`
-      );
+try {
+  deleteResponse = await brcJsonRequest(
+    companyName,
+    "DELETE",
+    `${path}/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`
+  );
+} catch (error) {
+  return jsonResponse({
+    deleted: false,
+    companyName,
+    id,
+    message:
+      `${label} deletion was rejected by BRC. Red did not automatically refuse the request because the record may belong to an earlier financial year.`,
+    recordDate:
+      (current as JsonRecord).procDate ??
+      (current as JsonRecord).entryDate ??
+      undefined,
+    error:
+      error instanceof Error
+        ? error.message
+        : String(error),
+  });
+}
 
       return jsonResponse({
         deleted: true,
