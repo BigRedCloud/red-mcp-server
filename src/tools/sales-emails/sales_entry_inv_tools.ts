@@ -1,14 +1,15 @@
 import {z} from "zod";
 import type {ServerType} from "../../server.js"
 import {
-    brcFetch,
-    brcJsonRequest,
-    cloneJson,
-    companyNameSchema,
-    getTimestampFromRecord,
-    jsonResponse,
-    type JsonRecord,
-  }  from "../../shared.js";
+  brcFetch,
+  brcJsonRequest,
+  cloneJson,
+  companyNameSchema,
+  getTimestampFromRecord,
+  jsonResponse,
+  round2,
+  type JsonRecord,
+} from "../../shared.js";
   import{buildSalesInvoicePayload, buildSimpleSalesEntryPayload, resolveSalesInvoiceVatTypeId, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION, SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION, SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION, SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_NOTE_DESCRIPTION, SALES_DOCUMENT_CUSTOMER_NAME_DESCRIPTION, SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION, SALES_DOCUMENT_REFERENCE_DESCRIPTION, SALES_DOCUMENT_PRODUCT_LINE_DESCRIPTION_DESCRIPTION, SALES_DOCUMENT_PRODUCT_FIELDS_DESCRIPTION, SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION, applySalesPriceBasisToRawPayload, enforceSalesProductLineAnalysisOrThrow, enforceSalesProductLineProductIdOrThrow, requireSalesRepInPayload} from "../general/payloads_tools.js";
   import {
     buildSalesInvoiceGenRefValidationFailureBody,
@@ -180,22 +181,338 @@ server.tool(
   
   server.tool(
     "brc_update_sales_entry",
-    "Updates a BRC sales entry using structured safe text/reference fields.",
+    [
+      "Updates an existing BRC Sales Entry.",
+      "Supports text/reference changes, transaction dates, customer/account fields, and complete monetary/accounting update attempts.",
+      "Historical Sales Entries are not automatically blocked because they belong to an earlier financial year.",
+      "The BRC API is the source of truth for whether a requested historical change is permitted.",
+      "A note/reference-only update may be performed without supplying monetary fields.",
+      "For monetary changes, provide totalNet, totalVAT, total, acEntries and vatEntries together so Red can validate the accounting values before sending the update.",
+      "Do not manually change unpaid; Red preserves the existing BRC value.",
+    ].join(" "),
     {
       companyName: companyNameSchema,
-      id: z.union([z.string(), z.number()]).describe("Sales entry id."),
-      note: z.string().optional().describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
-      reference: z.string().optional().describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
+  
+      id: z
+        .union([z.string(), z.number()])
+        .describe("Sales Entry id, normally the bookTranId returned by customer account transactions."),
+  
+      note: z
+        .string()
+        .optional()
+        .describe(SALES_DOCUMENT_NOTE_DESCRIPTION),
+  
+      reference: z
+        .string()
+        .optional()
+        .describe(SALES_DOCUMENT_REFERENCE_DESCRIPTION),
+  
+      details: z
+        .string()
+        .optional()
+        .describe("Sales Entry details/description field."),
+  
+      entryDate: z
+        .string()
+        .optional()
+        .describe(
+          "Entry date in ISO format. Historical dates may be attempted; BRC determines whether the change is permitted."
+        ),
+  
+      procDate: z
+        .string()
+        .optional()
+        .describe(
+          "Processing date in ISO format. Historical dates may be attempted; BRC determines whether the change is permitted."
+        ),
+  
+      customerId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Customer id."),
+  
+      acCode: z
+        .string()
+        .optional()
+        .describe("Customer account code."),
+  
+      bookTranTypeId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          "Book transaction type id. Sales Entries normally use the existing record's transaction type."
+        ),
+  
+      vatTypeId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("VAT type id."),
+  
+      totalNet: z
+        .number()
+        .optional()
+        .describe(
+          "New total net value. For monetary edits this must be supplied together with totalVAT, total, acEntries and vatEntries."
+        ),
+  
+      totalVAT: z
+        .number()
+        .optional()
+        .describe(
+          "New total VAT value. For monetary edits this must be supplied together with totalNet, total, acEntries and vatEntries."
+        ),
+  
+      total: z
+        .number()
+        .optional()
+        .describe(
+          "New gross total. For monetary edits this must equal totalNet + totalVAT."
+        ),
+  
+      acEntries: z
+        .array(z.record(z.string(), z.unknown()))
+        .optional()
+        .describe(
+          "Complete BRC accounting-entry collection. For monetary edits, the sum of each entry's value must equal totalNet."
+        ),
+  
+      vatEntries: z
+        .array(z.record(z.string(), z.unknown()))
+        .optional()
+        .describe(
+          "Complete BRC VAT-entry collection. Each entry should contain the BRC vatRateId, percentage and net amount used to calculate VAT."
+        ),
     },
-    async ({ companyName, id, note, reference }) => {
-      const current = await brcFetch(companyName, `/v1/salesEntries/${encodeURIComponent(id)}`);
-      if (!current || typeof current !== "object" || Array.isArray(current)) throw new Error(`Could not read sales entry ${id} before update.`);
+  
+    async ({
+      companyName,
+      id,
+      note,
+      reference,
+      details,
+      entryDate,
+      procDate,
+      customerId,
+      acCode,
+      bookTranTypeId,
+      vatTypeId,
+      totalNet,
+      totalVAT,
+      total,
+      acEntries,
+      vatEntries,
+    }) => {
+      const endpoint =
+        `/v1/salesEntries/${encodeURIComponent(String(id))}`;
+  
+      const current = await brcFetch(
+        companyName,
+        endpoint
+      );
+  
+      if (
+        !current ||
+        typeof current !== "object" ||
+        Array.isArray(current)
+      ) {
+        throw new Error(
+          `Could not read sales entry ${id} before update.`
+        );
+      }
+  
       const payload = cloneJson(current) as JsonRecord;
-      if (note !== undefined) payload.note = note;
-      if (reference !== undefined) payload.reference = reference;
-      const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/salesEntries/${encodeURIComponent(id)}`, payload);
-      const verification = await brcFetch(companyName, `/v1/salesEntries/${encodeURIComponent(id)}`);
-      return jsonResponse({ message: "Sales entry updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
+  
+      // Non-monetary/text fields.
+      if (note !== undefined) {
+        payload.note = note;
+      }
+  
+      if (reference !== undefined) {
+        payload.reference = reference;
+      }
+  
+      if (details !== undefined) {
+        payload.details = details;
+      }
+  
+      if (entryDate !== undefined) {
+        payload.entryDate = entryDate;
+      }
+  
+      if (procDate !== undefined) {
+        payload.procDate = procDate;
+      }
+  
+      if (customerId !== undefined) {
+        payload.customerId = customerId;
+      }
+  
+      if (acCode !== undefined) {
+        payload.acCode = acCode;
+      }
+  
+      if (bookTranTypeId !== undefined) {
+        payload.bookTranTypeId = bookTranTypeId;
+      }
+  
+      if (vatTypeId !== undefined) {
+        payload.vatTypeId = vatTypeId;
+      }
+  
+      const monetaryEditRequested =
+        totalNet !== undefined ||
+        totalVAT !== undefined ||
+        total !== undefined ||
+        acEntries !== undefined ||
+        vatEntries !== undefined;
+  
+      if (monetaryEditRequested) {
+        if (
+          totalNet === undefined ||
+          totalVAT === undefined ||
+          total === undefined ||
+          acEntries === undefined ||
+          vatEntries === undefined
+        ) {
+          throw new Error(
+            "Monetary Sales Entry updates require totalNet, totalVAT, total, acEntries and vatEntries together so Red does not send an incomplete accounting payload to BRC."
+          );
+        }
+  
+        const expectedTotal = round2(totalNet + totalVAT);
+  
+        if (Math.abs(round2(total) - expectedTotal) > 0.01) {
+          throw new Error(
+            `Sales Entry total ${total} does not equal totalNet ${totalNet} + totalVAT ${totalVAT} (${expectedTotal}).`
+          );
+        }
+  
+        const calculatedAcTotal = round2(
+          acEntries.reduce((sum, entry) => {
+            const value = entry.value;
+  
+            if (typeof value !== "number") {
+              throw new Error(
+                "Each acEntries item must contain a numeric value."
+              );
+            }
+  
+            return sum + value;
+          }, 0)
+        );
+  
+        if (
+          Math.abs(
+            calculatedAcTotal - round2(totalNet)
+          ) > 0.01
+        ) {
+          throw new Error(
+            `acEntries total ${calculatedAcTotal} does not equal totalNet ${totalNet}.`
+          );
+        }
+  
+        const calculatedVatTotal = round2(
+          vatEntries.reduce((sum, entry) => {
+            const amount = entry.amount;
+            const percentage = entry.percentage;
+  
+            if (
+              typeof amount !== "number" ||
+              typeof percentage !== "number"
+            ) {
+              throw new Error(
+                "Each vatEntries item must contain numeric amount and percentage values."
+              );
+            }
+  
+            return sum + round2(
+              amount * (percentage / 100)
+            );
+          }, 0)
+        );
+  
+        if (
+          Math.abs(
+            calculatedVatTotal - round2(totalVAT)
+          ) > 0.01
+        ) {
+          throw new Error(
+            `VAT entries calculate to ${calculatedVatTotal}, which does not equal totalVAT ${totalVAT}.`
+          );
+        }
+  
+        payload.totalNet = round2(totalNet);
+        payload.totalVAT = round2(totalVAT);
+        payload.total = round2(total);
+        payload.acEntries = acEntries;
+        payload.vatEntries = vatEntries;
+  
+        // Do not manually modify payload.unpaid.
+        // Its existing value from BRC is preserved.
+      }
+  
+      try {
+        const updateResponse = await brcJsonRequest(
+          companyName,
+          "PUT",
+          endpoint,
+          payload
+        );
+  
+        const verification = await brcFetch(
+          companyName,
+          endpoint
+        );
+  
+        return jsonResponse({
+          success: true,
+          message:
+            "Sales Entry updated using structured MCP fields.",
+          companyName,
+          id,
+          endpoint: `PUT ${endpoint}`,
+  
+          historicalDateAttempt:
+            entryDate !== undefined ||
+            procDate !== undefined
+              ? {
+                  entryDate: payload.entryDate,
+                  procDate: payload.procDate,
+                }
+              : undefined,
+  
+          monetaryEditAttempted:
+            monetaryEditRequested,
+  
+          payloadSent: payload,
+          updateResponse,
+          verification,
+        });
+      } catch (error) {
+        return jsonResponse({
+          success: false,
+          message: "BRC rejected the Sales Entry update. Red attempted the requested change and this response came from the BRC endpoint.",
+          companyName,
+          id,
+          endpoint: `PUT ${endpoint}`,
+          requestedEntryDate:
+            entryDate ?? undefined,
+          requestedProcDate:
+            procDate ?? undefined,
+          monetaryEditAttempted:
+            monetaryEditRequested,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        });
+      }
     }
   );
   
