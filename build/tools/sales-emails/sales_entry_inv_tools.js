@@ -101,7 +101,25 @@ export function registerSalesEntryInvoiceTools(server) {
         vatPercentage: z.number(),
     }, async ({ companyName, customerId, acCode, note, entryDate, procDate, bookTranTypeId, analysisCategoryId, accountCode, description, netAmount, vatRateId, vatPercentage }) => {
         const payload = buildSimpleSalesEntryPayload({ ownerId: customerId, ownerField: "customerId", acCode, note, entryDate, procDate, bookTranTypeId, analysisCategoryId, accountCode, description, netAmount, vatRateId, vatPercentage });
-        const createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesEntries", payload);
+        let createResponse;
+        try {
+            createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesEntries", payload);
+        }
+        catch (error) {
+            return jsonResponse({
+                success: false,
+                message: "Error creating sales entry using structured MCP fields.",
+                companyName,
+                valid: false,
+                errors: [
+                    {
+                        field: "(root)",
+                        message: error instanceof Error ? error.message : String(error),
+                    },
+                ],
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
         return jsonResponse({ message: "Sales entry created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
     });
     server.tool("brc_update_sales_entry", [
@@ -312,8 +330,29 @@ export function registerSalesEntryInvoiceTools(server) {
         if (!salesEntry || typeof salesEntry !== "object" || Array.isArray(salesEntry))
             throw new Error(`Could not read sales entry ${id} before deletion.`);
         const timestamp = getTimestampFromRecord(salesEntry, `sales entry ${id}`);
-        const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesEntries/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-        return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+        try {
+            const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesEntries/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`);
+            return jsonResponse({
+                success: true,
+                deleted: true,
+                companyName,
+                id,
+                timestampUsed: timestamp,
+                deleteResponse,
+            });
+        }
+        catch (error) {
+            return jsonResponse({
+                success: false,
+                deleted: false,
+                companyName,
+                id,
+                endpoint: `DELETE /v1/salesEntries/${id}`,
+                error: error instanceof Error
+                    ? error.message
+                    : String(error),
+            });
+        }
     });
     // Sales invoice tools --------------------------------------------------------
     server.tool("brc_create_sales_invoice", `Creates a BRC sales invoice using structured MCP fields. Requires a reference when the company is configured for manual sales references; otherwise prefer brc_create_sales_invoice_gen_ref. Previews before posting include a Missing or not provided section for blank customer phone or email only — warnings only, do not invent values. Nothing is written to Big Red Cloud until you confirm. ${SALES_DOCUMENT_NOTE_DESCRIPTION} ${SALES_DOCUMENT_DELIVERY_TO_DESCRIPTION} ${SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION} ${SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION} ${SALES_DOCUMENT_GROSS_PRICE_ENTRY_DESCRIPTION} ${SALES_DOCUMENT_PRODUCT_ID_DESCRIPTION} ${SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION}`, {
@@ -576,7 +615,12 @@ export function registerSalesEntryInvoiceTools(server) {
         if (!invoice || typeof invoice !== "object" || Array.isArray(invoice))
             throw new Error(`Could not read sales invoice ${id} before deletion.`);
         const timestamp = getTimestampFromRecord(invoice, `sales invoice ${id}`);
-        const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesInvoices/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-        return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+        try {
+            const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesInvoices/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`);
+            return jsonResponse({ success: true, deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+        }
+        catch (error) {
+            return jsonResponse({ success: false, deleted: false, companyName, id, endpoint: `DELETE /v1/salesInvoices/${id}`, error: error instanceof Error ? error.message : String(error) });
+        }
     });
 }

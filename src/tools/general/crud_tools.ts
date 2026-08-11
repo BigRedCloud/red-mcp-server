@@ -255,7 +255,8 @@ export function registerRawUpdateTool(
         const currentRecord = current as JsonRecord;
         payload = mergeCashReceiptUpdateFromCurrent(
           buildCashReceiptPayload(payload, { vatOnCashEnabled }),
-          currentRecord
+          currentRecord,
+          mergeUpdates
         ) as JsonRecord;
       }
 

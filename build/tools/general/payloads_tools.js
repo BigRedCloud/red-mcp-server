@@ -539,37 +539,47 @@ export function buildCashReceiptPayload(args, options) {
     return applyCashReceiptConcurrencyFields(payload, argsForBuild);
 }
 /** Re-applies BRC GET fields that buildCashReceiptPayload drops — required for PUT concurrency. */
-export function mergeCashReceiptUpdateFromCurrent(built, current) {
+export function mergeCashReceiptUpdateFromCurrent(built, current, requestedUpdates) {
     const id = asNumber(current.id, 0);
-    if (id <= 0)
+    if (id <= 0) {
         return built;
-    const merged = { ...built };
-    if (typeof current.timestamp === "string" && current.timestamp) {
+    }
+    const merged = {
+        ...built,
+        id,
+    };
+    if (typeof current.timestamp === "string" &&
+        current.timestamp) {
         merged.timestamp = current.timestamp;
     }
-    for (const key of [
-        "reference",
-        "plaidTransactionId",
-        "vatTypeId",
-        "ledger",
-        "unallocated",
-        "totalNet",
-        "totalVat",
-        "totalVAT",
-    ]) {
-        if (key in current)
+    const preserveIfNotRequested = (key) => {
+        if (!(key in requestedUpdates) &&
+            key in current) {
             merged[key] = current[key];
-    }
-    if (Array.isArray(current.customFields)) {
+        }
+    };
+    preserveIfNotRequested("reference");
+    preserveIfNotRequested("plaidTransactionId");
+    preserveIfNotRequested("vatTypeId");
+    preserveIfNotRequested("ledger");
+    preserveIfNotRequested("unallocated");
+    preserveIfNotRequested("totalNet");
+    preserveIfNotRequested("totalVat");
+    preserveIfNotRequested("totalVAT");
+    if (!("customFields" in requestedUpdates) &&
+        Array.isArray(current.customFields)) {
         merged.customFields = current.customFields;
     }
-    if (Array.isArray(current.detailCollection) && current.detailCollection.length > 0) {
+    if (!("detailCollection" in requestedUpdates) &&
+        Array.isArray(current.detailCollection)) {
         merged.detailCollection = current.detailCollection;
     }
-    if (Array.isArray(current.acEntries)) {
+    if (!("acEntries" in requestedUpdates) &&
+        Array.isArray(current.acEntries)) {
         merged.acEntries = current.acEntries;
     }
-    if (Array.isArray(current.vatEntries)) {
+    if (!("vatEntries" in requestedUpdates) &&
+        Array.isArray(current.vatEntries)) {
         merged.vatEntries = current.vatEntries;
     }
     return merged;

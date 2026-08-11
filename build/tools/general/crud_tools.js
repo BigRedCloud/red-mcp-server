@@ -156,7 +156,7 @@ export function registerRawUpdateTool(server, toolName, description, path, label
             });
             const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
             const currentRecord = current;
-            payload = mergeCashReceiptUpdateFromCurrent(buildCashReceiptPayload(payload, { vatOnCashEnabled }), currentRecord);
+            payload = mergeCashReceiptUpdateFromCurrent(buildCashReceiptPayload(payload, { vatOnCashEnabled }), currentRecord, mergeUpdates);
         }
         let updateResponse;
         try {

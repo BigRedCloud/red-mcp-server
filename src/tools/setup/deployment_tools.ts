@@ -5,7 +5,12 @@ import {
   companyNameSchema,
   jsonResponse,
   textResponse,
+  type JsonRecord,
 } from "../../shared.js";
+import {
+  resolveTransactionDocumentKind,
+  type BookTranType,
+} from "../../routing/transaction-document-kind.js";
 import {
   getCustomerDeploymentCapabilities,
   redServerConfig,
@@ -462,6 +467,82 @@ Useful prompts:
 
 export { customerDeploymentPolicyText };
 
+export async function resolveBookTransactionType(
+  companyName: string,
+  bookTranTypeId: number,
+  deps: {
+    brcFetch: typeof brcFetch;
+  } = {
+    brcFetch,
+  }
+) {
+  const response = await deps.brcFetch(
+    companyName,
+    "/v1/bookTranTypes"
+  );
+
+  if (
+    !response ||
+    typeof response !== "object" ||
+    Array.isArray(response)
+  ) {
+    throw new Error(
+      "Could not load BRC book transaction types."
+    );
+  }
+
+  const items = Array.isArray(
+    (response as JsonRecord).Items
+  )
+    ? ((response as JsonRecord).Items as BookTranType[])
+    : [];
+
+  const matchedType = items.find(
+    (item) => item.id === bookTranTypeId
+  );
+
+  if (!matchedType) {
+    return {
+      resolved: false,
+      mapped: false,
+      companyName,
+      bookTranTypeId,
+      bookTranTypeDescription: null,
+      documentKind: "unknown" as const,
+      message:
+        `bookTranTypeId ${bookTranTypeId} was not present in this company's live /v1/bookTranTypes response.`,
+    };
+  }
+
+  const kind = resolveTransactionDocumentKind(
+    bookTranTypeId,
+    items
+  );
+
+  if (kind === "unknown") {
+    return {
+      resolved: true,
+      mapped: false,
+      companyName,
+      bookTranTypeId,
+      bookTranTypeDescription:
+        matchedType.description,
+      documentKind: "unknown" as const,
+      message:
+        `BRC returned transaction type "${matchedType.description}", but Red does not currently have a document-tool mapping for that transaction type.`,
+    };
+  }
+
+  return {
+    resolved: true,
+    mapped: true,
+    companyName,
+    bookTranTypeId,
+    bookTranTypeDescription:
+      matchedType.description,
+    documentKind: kind,
+  };
+}
 
 export function registerDeploymentTools(server: ServerType) {
   server.tool(
@@ -550,6 +631,27 @@ export function registerDeploymentTools(server: ServerType) {
     },
     async ({ companyName }) => jsonResponse(await runCompanyReadinessCheck(companyName))
   );
+
+  server.tool(
+    "brc_resolve_book_transaction_type",
+    [
+      "Resolves a bookTranTypeId from a BRC customer or supplier account transaction against the connected company's live /v1/bookTranTypes list.",
+      "Use this before choosing a get/update/delete transaction tool when accountTrans returns bookTranId and bookTranTypeId.",
+      "Do not infer the document type from bookTypeDesc alone and do not assume transaction type ids are globally fixed across companies.",
+    ].join(" "),
+    {
+      companyName: companyNameSchema,
+      bookTranTypeId: z.number().int().positive(),
+    },
+    async ({ companyName, bookTranTypeId }) =>
+      jsonResponse(
+        await resolveBookTransactionType(
+          companyName,
+          bookTranTypeId
+        )
+      )
+  );
+
 
   server.registerResource(
     "brc_help",

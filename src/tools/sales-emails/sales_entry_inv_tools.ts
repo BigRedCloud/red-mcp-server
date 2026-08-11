@@ -174,7 +174,30 @@ server.tool(
     },
     async ({ companyName, customerId, acCode, note, entryDate, procDate, bookTranTypeId, analysisCategoryId, accountCode, description, netAmount, vatRateId, vatPercentage }) => {
       const payload = buildSimpleSalesEntryPayload({ ownerId: customerId, ownerField: "customerId", acCode, note, entryDate, procDate, bookTranTypeId, analysisCategoryId, accountCode, description, netAmount, vatRateId, vatPercentage });
-      const createResponse = await brcJsonRequest(companyName, "POST", "/v1/salesEntries", payload);
+      let createResponse;
+
+try {
+  createResponse = await brcJsonRequest(
+    companyName,
+    "POST",
+    "/v1/salesEntries",
+    payload
+  );
+} catch (error) {
+  return jsonResponse({
+    success: false,
+    message: "Error creating sales entry using structured MCP fields.",
+    companyName,
+    valid: false,
+    errors: [
+      {
+        field: "(root)",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    ],
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
       return jsonResponse({ message: "Sales entry created using structured MCP fields.", companyName, payloadSent: payload, createResponse });
     }
   );
@@ -529,8 +552,35 @@ server.tool(
       const salesEntry = await brcFetch(companyName, `/v1/salesEntries/${encodeURIComponent(id)}`);
       if (!salesEntry || typeof salesEntry !== "object" || Array.isArray(salesEntry)) throw new Error(`Could not read sales entry ${id} before deletion.`);
       const timestamp = getTimestampFromRecord(salesEntry as JsonRecord, `sales entry ${id}`);
-      const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesEntries/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-      return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+      try {
+        const deleteResponse = await brcJsonRequest(
+          companyName,
+          "DELETE",
+          `/v1/salesEntries/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`
+        );
+      
+        return jsonResponse({
+          success: true,
+          deleted: true,
+          companyName,
+          id,
+          timestampUsed: timestamp,
+          deleteResponse,
+        });
+      } catch (error) {
+        return jsonResponse({
+          success: false,
+          deleted: false,
+          companyName,
+          id,
+          endpoint:
+            `DELETE /v1/salesEntries/${id}`,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        });
+      }
     }
   );
 
@@ -936,8 +986,17 @@ if (monetaryEditRequested) {
       const invoice = await brcFetch(companyName, `/v1/salesInvoices/${encodeURIComponent(id)}`);
       if (!invoice || typeof invoice !== "object" || Array.isArray(invoice)) throw new Error(`Could not read sales invoice ${id} before deletion.`);
       const timestamp = getTimestampFromRecord(invoice as JsonRecord, `sales invoice ${id}`);
-      const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/salesInvoices/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-      return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+
+      try {
+        const deleteResponse = await brcJsonRequest(
+          companyName,
+          "DELETE",
+          `/v1/salesInvoices/${encodeURIComponent(String(id))}?timestamp=${encodeURIComponent(timestamp)}`
+        );
+      return jsonResponse({ success: true, deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+      } catch (error) {
+        return jsonResponse({ success: false, deleted: false, companyName, id, endpoint: `DELETE /v1/salesInvoices/${id}`, error: error instanceof Error ? error.message : String(error) });
+      }
     }
   );
 } 

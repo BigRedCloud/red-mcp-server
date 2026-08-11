@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { brcFetch, companyNameSchema, jsonResponse, textResponse, } from "../../shared.js";
+import { resolveTransactionDocumentKind, } from "../../routing/transaction-document-kind.js";
 import { getCustomerDeploymentCapabilities, redServerConfig, } from "../../config/server_config.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
 import { dateWithinRange, deriveFinancialYear, runCompanyReadinessCheck, } from "./company_readiness.js";
@@ -395,6 +396,51 @@ Useful prompts:
 - "Clear my connected company sessions."`;
 }
 export { customerDeploymentPolicyText };
+export async function resolveBookTransactionType(companyName, bookTranTypeId, deps = {
+    brcFetch,
+}) {
+    const response = await deps.brcFetch(companyName, "/v1/bookTranTypes");
+    if (!response ||
+        typeof response !== "object" ||
+        Array.isArray(response)) {
+        throw new Error("Could not load BRC book transaction types.");
+    }
+    const items = Array.isArray(response.Items)
+        ? response.Items
+        : [];
+    const matchedType = items.find((item) => item.id === bookTranTypeId);
+    if (!matchedType) {
+        return {
+            resolved: false,
+            mapped: false,
+            companyName,
+            bookTranTypeId,
+            bookTranTypeDescription: null,
+            documentKind: "unknown",
+            message: `bookTranTypeId ${bookTranTypeId} was not present in this company's live /v1/bookTranTypes response.`,
+        };
+    }
+    const kind = resolveTransactionDocumentKind(bookTranTypeId, items);
+    if (kind === "unknown") {
+        return {
+            resolved: true,
+            mapped: false,
+            companyName,
+            bookTranTypeId,
+            bookTranTypeDescription: matchedType.description,
+            documentKind: "unknown",
+            message: `BRC returned transaction type "${matchedType.description}", but Red does not currently have a document-tool mapping for that transaction type.`,
+        };
+    }
+    return {
+        resolved: true,
+        mapped: true,
+        companyName,
+        bookTranTypeId,
+        bookTranTypeDescription: matchedType.description,
+        documentKind: kind,
+    };
+}
 export function registerDeploymentTools(server) {
     server.tool("brc_getting_started", [
         "Use this whenever the user asks how to start, says start or getting started, wants to connect or reconnect companies, or asks for a concise overview of Red.",
@@ -446,6 +492,14 @@ export function registerDeploymentTools(server) {
     ].join(" "), {
         companyName: companyNameSchema,
     }, async ({ companyName }) => jsonResponse(await runCompanyReadinessCheck(companyName)));
+    server.tool("brc_resolve_book_transaction_type", [
+        "Resolves a bookTranTypeId from a BRC customer or supplier account transaction against the connected company's live /v1/bookTranTypes list.",
+        "Use this before choosing a get/update/delete transaction tool when accountTrans returns bookTranId and bookTranTypeId.",
+        "Do not infer the document type from bookTypeDesc alone and do not assume transaction type ids are globally fixed across companies.",
+    ].join(" "), {
+        companyName: companyNameSchema,
+        bookTranTypeId: z.number().int().positive(),
+    }, async ({ companyName, bookTranTypeId }) => jsonResponse(await resolveBookTransactionType(companyName, bookTranTypeId)));
     server.registerResource("brc_help", "brc://help", {
         title: "Big Red Cloud Help",
         description: "Current getting-started guide for using Red with Big Red Cloud.",

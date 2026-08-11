@@ -111,7 +111,8 @@ export function registerPurchaseTools(server) {
     server.tool("brc_update_purchase", [
         "Updates a BRC purchase using structured MCP fields.",
         "Historical transaction dates are not automatically blocked.",
-        "If entryDate or procDate is outside the current financial year, confirm the change with the user and attempt it; the BRC endpoint determines whether the historical update is supported.",
+        "Existing historical purchases may support text, monetary, date and delete operations; the BRC endpoint is the source of truth.",
+        "When changing monetary values, preserve the existing unpaid/unallocated state and allow BRC to recalculate allocation fields where required.",
     ].join(" "), {
         companyName: companyNameSchema,
         id: z.union([z.string(), z.number()]).describe("Purchase id."),
@@ -156,7 +157,6 @@ export function registerPurchaseTools(server) {
             payload.totalNet = finalNet;
             payload.totalVAT = finalVat;
             payload.total = finalTotal;
-            payload.unpaid = finalTotal;
             payload.netGoods = 0;
             payload.netServices = 0;
             payload.acEntries = [{ ...existingAcEntry, accountCode: accountCode ?? existingAcEntry.accountCode, analysisCategoryId: analysisCategoryId ?? existingAcEntry.analysisCategoryId, description: description ?? existingAcEntry.description ?? "Purchase", value: finalNet }];
