@@ -282,3 +282,28 @@ test("routeRequest red-help add a customer → help with cleaned query", async (
   assert.equal(result.cleanedQuery, "add a customer");
   assert.equal(result.blockTransactionalTools, true);
 });
+test("classify: cash receipt update ignores customer in do-not-change constraints", () => {
+  const result = classifyRequestIntent(
+    'In Company C, update Cash Receipt id 550078131. Change only the note to: "CASH RECEIPT MERGE TEST". Do not change any monetary, VAT, allocation, ledger, customer, account or date fields. Use brc_update_cash_receipt. Show me the proposed update first and do not submit until I confirm.'
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: update cash receipt record is not treated as create", () => {
+  const result = classifyRequestIntent(
+    'Update cash receipt record. In Company C, update Cash Receipt id 550078131, changing only the note field to "CASH RECEIPT MERGE TEST".'
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});

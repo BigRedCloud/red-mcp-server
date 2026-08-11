@@ -706,17 +706,66 @@ export function toActionWorkflow(definition, allowedTools) {
  * Resolve a workflow from a user message. Returns null when no registry entry
  * matches. Callers must still filter by enabled tools before issuing a token.
  */
+function detectPrimaryAction(text) {
+    const regex = /\b(add|create|set\s+up|setup|new|raise|prepare|record|post|update|change|edit|amend|modify|delete|remove|erase|batch|bulk|import|email|send|mail)\b/i;
+    const match = regex.exec(text);
+    if (!match) {
+        return null;
+    }
+    const verb = match[1].toLowerCase();
+    let action;
+    if (/^(update|change|edit|amend|modify)$/.test(verb)) {
+        action = "update";
+    }
+    else if (/^(delete|remove|erase)$/.test(verb)) {
+        action = "delete";
+    }
+    else if (/^(batch|bulk|import)$/.test(verb)) {
+        action = "batch";
+    }
+    else if (/^(email|send|mail)$/.test(verb)) {
+        action = "email";
+    }
+    else {
+        action = "create";
+    }
+    return {
+        action,
+        index: match.index,
+    };
+}
+function earliestBusinessNounIndex(text, workflow, afterIndex) {
+    const lower = text.toLowerCase();
+    const indexes = workflow.businessNouns
+        .map((noun) => lower.indexOf(noun.toLowerCase(), afterIndex))
+        .filter((index) => index >= 0);
+    return indexes.length > 0
+        ? Math.min(...indexes)
+        : Number.MAX_SAFE_INTEGER;
+}
 export function resolveWorkflowFromMessage(cleanedQuery) {
     const text = cleanedQuery.trim();
     if (!text) {
         return null;
     }
-    for (const entry of ACTION_WORKFLOW_REGISTRY) {
-        if (entry.match.test(text)) {
-            return entry;
-        }
+    const matches = ACTION_WORKFLOW_REGISTRY.filter((entry) => entry.match.test(text));
+    if (matches.length === 0) {
+        return null;
     }
-    return null;
+    if (matches.length === 1) {
+        return matches[0];
+    }
+    const primary = detectPrimaryAction(text);
+    if (!primary) {
+        return matches[0];
+    }
+    const sameAction = matches.filter((entry) => entry.workflowId.startsWith(`${primary.action}_`));
+    if (sameAction.length === 0) {
+        return matches[0];
+    }
+    sameAction.sort((a, b) => earliestBusinessNounIndex(text, a, primary.index) -
+        earliestBusinessNounIndex(text, b, primary.index));
+    return sameAction[0];
 }
 /**
  * Resolve an enabled action workflow (legacy ActionWorkflow shape).
