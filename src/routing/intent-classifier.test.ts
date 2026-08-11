@@ -140,6 +140,58 @@ test("classify: list customers → read", () => {
 test("classify: empty → unknown", () => {
   assert.equal(classifyRequestIntent("").mode, "unknown");
 });
+test("classify: explicit cash receipt update routes correctly", () => {
+  const result = classifyRequestIntent(
+    "In Company C, update Cash Receipt id 550078131. Change only the note to CASH RECEIPT MERGE TEST."
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: short cash receipt update routes correctly", () => {
+  const result = classifyRequestIntent(
+    "update cash receipt 550078131"
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: changing a cash receipt note routes correctly", () => {
+  const result = classifyRequestIntent(
+    "change the note on cash receipt 550078131"
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("routeRequest: cash receipt update issues correct route token", async () => {
+  const result = await routeRequest(
+    "In Company C, update Cash Receipt id 550078131. Change only the note to CASH RECEIPT MERGE TEST."
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow, "update_cash_receipt");
+  assert.deepEqual(
+    result.allowedTools,
+    ["brc_update_cash_receipt"]
+  );
+  assert.ok(result.routeToken);
+});
 
 const sampleArticle: SyncedFreshdeskArticle = {
   id: "freshdesk-1001",
@@ -156,7 +208,7 @@ const sampleArticle: SyncedFreshdeskArticle = {
   enabled: true,
   slug: "how-do-i-add-a-customer",
   publicUrl:
-    "https://bigredcloud.freshdesk.com/support/solutions/articles/1001",
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer-",
 };
 
 test("routeRequest help mode calls unified help pipeline and blocks transactional tools", async () => {

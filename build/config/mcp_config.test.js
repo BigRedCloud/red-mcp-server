@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getBrcMcpServerInstructions } from "./mcp_config.js";
+import { getBrcMcpServerInstructions, MANDATORY_ROUTING_INSTRUCTION } from "./mcp_config.js";
 import { formatCredentialTtlForUser } from "../auth/connection_presentation.js";
 test("MCP server instructions keep connectionRef after successful lookups", () => {
     const instructions = getBrcMcpServerInstructions(50, false);
@@ -56,4 +56,9 @@ test("MCP server instructions define red-help mode and block auto transactional 
     assert.match(instructions, /RED-HELP SHORTCUT/i);
     assert.match(instructions, /red-help how do I add a customer/i);
     assert.match(instructions, /classifiers alone cannot force tool selection/i);
+});
+test("routing instructions forbid paraphrasing the original request", () => {
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /complete original message verbatim/i);
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /do not paraphrase/i);
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /do not.*retry.*different wording/i);
 });
