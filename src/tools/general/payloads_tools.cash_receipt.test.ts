@@ -178,6 +178,59 @@ test("cash receipt note-only update merge preserves VAT monetary and allocation 
   assert.deepEqual(result.acEntries, current.acEntries);
 });
 
+test("note-only merge keeps ledger 12.3 when builder would default it to 0", () => {
+  const current = {
+    id: 580633526,
+    note: "Before",
+    ledger: 12.3,
+    total: 12.3,
+    unallocated: 0,
+    bookTranTypeId: 1,
+    accountCode: "CR02",
+    analysisCategoryId: 4216690,
+    description: "Cash sale",
+    vatRateId: 1596277,
+    vatPercentage: 23,
+  };
+
+  const requestedUpdates = { note: "changed" };
+  const built = buildCashReceiptPayload({ ...current, ...requestedUpdates });
+  assert.equal(built.ledger, 0);
+
+  const merged = mergeCashReceiptUpdateFromCurrent(
+    built,
+    current,
+    requestedUpdates
+  );
+
+  assert.equal(merged.note, "changed");
+  assert.equal(merged.ledger, 12.3);
+  assert.equal(merged.total, 12.3);
+  assert.equal(merged.unallocated, 0);
+});
+
+test("explicit ledger update to 0 is applied", () => {
+  const current = {
+    id: 580633526,
+    note: "Before",
+    ledger: 12.3,
+    total: 12.3,
+    unallocated: 0,
+  };
+
+  const requestedUpdates = { ledger: 0 };
+  const built = buildCashReceiptPayload({ ...current, ...requestedUpdates });
+  const merged = mergeCashReceiptUpdateFromCurrent(
+    built,
+    current,
+    requestedUpdates
+  );
+
+  assert.equal(merged.ledger, 0);
+  assert.equal(merged.note, "Before");
+  assert.equal(merged.total, 12.3);
+});
+
 test("unrelated customer payload builder behaviour is unchanged", () => {
   const payload = buildCustomerLikePayload(
     {

@@ -827,7 +827,14 @@ export function buildCashReceiptPayload(
   return applyCashReceiptConcurrencyFields(payload, argsForBuild);
 }
 
-/** Re-applies BRC GET fields that buildCashReceiptPayload drops — required for PUT concurrency. */
+/**
+ * Builds the Cash Receipt PUT body as:
+ *   current BRC record + only explicitly requested update fields.
+ *
+ * `buildCashReceiptPayload` may default ledger/unallocated/etc. for CREATE; those
+ * defaults must not wipe existing values on note-only (or other partial) updates.
+ * Builder-normalized values are used for keys that were explicitly requested.
+ */
 export function mergeCashReceiptUpdateFromCurrent(
   built: Record<string, unknown>,
   current: Record<string, unknown>,
@@ -839,68 +846,28 @@ export function mergeCashReceiptUpdateFromCurrent(
     return built;
   }
 
-  const merged: Record<string, unknown> = {
-    ...built,
-    id,
-  };
+  const merged: Record<string, unknown> = { ...current, id };
 
-  if (
-    typeof current.timestamp === "string" &&
-    current.timestamp
-  ) {
+  if (typeof current.timestamp === "string" && current.timestamp) {
     merged.timestamp = current.timestamp;
   }
 
-  const preserveIfNotRequested = (key: string) => {
-    if (
-      !(key in requestedUpdates) &&
-      key in current
-    ) {
-      merged[key] = current[key];
+  for (const key of Object.keys(requestedUpdates)) {
+    if (key === "payload" || key === "id" || key === "timestamp") {
+      continue;
     }
-  };
 
-  preserveIfNotRequested("reference");
-  preserveIfNotRequested("plaidTransactionId");
-  preserveIfNotRequested("vatTypeId");
-  preserveIfNotRequested("ledger");
-  preserveIfNotRequested("unallocated");
-  preserveIfNotRequested("totalNet");
-  preserveIfNotRequested("totalVat");
-  preserveIfNotRequested("totalVAT");
-  preserveIfNotRequested("customerId");
-  preserveIfNotRequested("acCode");
-  preserveIfNotRequested("discount");
-  preserveIfNotRequested("total");
-  preserveIfNotRequested("entryDate");
-  preserveIfNotRequested("procDate");
+    // Treat undefined as "not supplied" so optional schema keys cannot wipe
+    // existing monetary/allocation fields.
+    if (requestedUpdates[key] === undefined) {
+      continue;
+    }
 
-  if (
-    !("customFields" in requestedUpdates) &&
-    Array.isArray(current.customFields)
-  ) {
-    merged.customFields = current.customFields;
-  }
-
-  if (
-    !("detailCollection" in requestedUpdates) &&
-    Array.isArray(current.detailCollection)
-  ) {
-    merged.detailCollection = current.detailCollection;
-  }
-
-  if (
-    !("acEntries" in requestedUpdates) &&
-    Array.isArray(current.acEntries)
-  ) {
-    merged.acEntries = current.acEntries;
-  }
-
-  if (
-    !("vatEntries" in requestedUpdates) &&
-    Array.isArray(current.vatEntries)
-  ) {
-    merged.vatEntries = current.vatEntries;
+    if (key in built) {
+      merged[key] = built[key];
+    } else {
+      merged[key] = requestedUpdates[key];
+    }
   }
 
   return merged;
