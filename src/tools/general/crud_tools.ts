@@ -278,6 +278,7 @@ try {
       payload.procDate ??
       payload.entryDate ??
       undefined,
+    payloadSent: payload,
     error:
       error instanceof Error
         ? error.message
