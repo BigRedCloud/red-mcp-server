@@ -198,6 +198,34 @@ export function registerRawCreateTool(
   );
 }
 
+/**
+ * Temporary staging diagnostics for Cash Receipt updates.
+ * Helps determine whether ledger: 0 on PUT came from requested updates,
+ * the CREATE-style builder, or the merge step.
+ */
+export function buildCashReceiptUpdateDiagnostics(args: {
+  mergeUpdates: Record<string, unknown>;
+  currentRecord: Record<string, unknown>;
+  builtCashReceiptPayload: Record<string, unknown>;
+  finalPayload: Record<string, unknown>;
+}): {
+  requestedUpdates: Record<string, unknown>;
+  requestedUpdateKeys: string[];
+  currentRecordLedger: unknown;
+  currentRecordTotal: unknown;
+  builtPayloadLedger: unknown;
+  finalPayloadLedger: unknown;
+} {
+  return {
+    requestedUpdates: args.mergeUpdates,
+    requestedUpdateKeys: Object.keys(args.mergeUpdates),
+    currentRecordLedger: args.currentRecord.ledger,
+    currentRecordTotal: args.currentRecord.total,
+    builtPayloadLedger: args.builtCashReceiptPayload.ledger,
+    finalPayloadLedger: args.finalPayload.ledger,
+  };
+}
+
 export function registerRawUpdateTool(
   server: ServerType,
   toolName: string,
@@ -242,20 +270,36 @@ export function registerRawUpdateTool(
       if (path === "/v1/customers") payload = { ...payload, ...buildCustomerLikePayload(payload, 1) };
       if (path === "/v1/suppliers") payload = { ...payload, ...buildCustomerLikePayload(payload, 3) };
       if (path === "/v1/bankAccounts") payload = { ...payload, ...buildBankAccountPayload(payload) };
+
+      let cashReceiptUpdateDiagnostics:
+        | ReturnType<typeof buildCashReceiptUpdateDiagnostics>
+        | undefined;
+
       if (path === "/v1/cashReceipts") {
         const processingSettings =
           await getCompanyProcessingSettings(companyName);
-      
+
         const vatOnCashEnabled =
           processingSettings.vatOnCashReceiptsEnabled === true;
-      
+
         const currentRecord = current as JsonRecord;
-      
+
+        const builtCashReceiptPayload = buildCashReceiptPayload(payload, {
+          vatOnCashEnabled,
+        });
+
         payload = mergeCashReceiptUpdateFromCurrent(
-          buildCashReceiptPayload(payload, { vatOnCashEnabled }),
+          builtCashReceiptPayload,
           currentRecord,
           mergeUpdates
         ) as JsonRecord;
+
+        cashReceiptUpdateDiagnostics = buildCashReceiptUpdateDiagnostics({
+          mergeUpdates,
+          currentRecord,
+          builtCashReceiptPayload,
+          finalPayload: payload,
+        });
       }
 
       let updateResponse;
@@ -302,6 +346,7 @@ try {
           : undefined,
         updateResponse,
         verification,
+        ...(cashReceiptUpdateDiagnostics ?? {}),
       });
     }
   );

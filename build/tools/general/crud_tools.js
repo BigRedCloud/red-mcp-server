@@ -120,6 +120,21 @@ export function registerRawCreateTool(server, toolName, description, path) {
         });
     });
 }
+/**
+ * Temporary staging diagnostics for Cash Receipt updates.
+ * Helps determine whether ledger: 0 on PUT came from requested updates,
+ * the CREATE-style builder, or the merge step.
+ */
+export function buildCashReceiptUpdateDiagnostics(args) {
+    return {
+        requestedUpdates: args.mergeUpdates,
+        requestedUpdateKeys: Object.keys(args.mergeUpdates),
+        currentRecordLedger: args.currentRecord.ledger,
+        currentRecordTotal: args.currentRecord.total,
+        builtPayloadLedger: args.builtCashReceiptPayload.ledger,
+        finalPayloadLedger: args.finalPayload.ledger,
+    };
+}
 export function registerRawUpdateTool(server, toolName, description, path, label) {
     server.tool(toolName, description, {
         companyName: companyNameSchema,
@@ -149,11 +164,21 @@ export function registerRawUpdateTool(server, toolName, description, path, label
             payload = { ...payload, ...buildCustomerLikePayload(payload, 3) };
         if (path === "/v1/bankAccounts")
             payload = { ...payload, ...buildBankAccountPayload(payload) };
+        let cashReceiptUpdateDiagnostics;
         if (path === "/v1/cashReceipts") {
             const processingSettings = await getCompanyProcessingSettings(companyName);
             const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
             const currentRecord = current;
-            payload = mergeCashReceiptUpdateFromCurrent(buildCashReceiptPayload(payload, { vatOnCashEnabled }), currentRecord, mergeUpdates);
+            const builtCashReceiptPayload = buildCashReceiptPayload(payload, {
+                vatOnCashEnabled,
+            });
+            payload = mergeCashReceiptUpdateFromCurrent(builtCashReceiptPayload, currentRecord, mergeUpdates);
+            cashReceiptUpdateDiagnostics = buildCashReceiptUpdateDiagnostics({
+                mergeUpdates,
+                currentRecord,
+                builtCashReceiptPayload,
+                finalPayload: payload,
+            });
         }
         let updateResponse;
         try {
@@ -187,6 +212,7 @@ export function registerRawUpdateTool(server, toolName, description, path, label
                 : undefined,
             updateResponse,
             verification,
+            ...(cashReceiptUpdateDiagnostics ?? {}),
         });
     });
 }
