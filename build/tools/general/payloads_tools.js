@@ -406,6 +406,63 @@ function sanitizeCashReceiptInput(args, vatOnCashEnabled) {
     }
     return next;
 }
+/**
+ * Cash Receipt acEntries use accountCode / analysisCategoryId / description /
+ * value only — never Sales Invoice-style netAmount / vatAmount / vatRateId /
+ * vatPercentage.
+ */
+function normalizeCashReceiptAcEntry(entry, fallbackDescription) {
+    const source = isRecord(entry) ? entry : {};
+    const value = source.value !== undefined
+        ? round2(asNumber(source.value))
+        : source.netAmount !== undefined
+            ? round2(asNumber(source.netAmount))
+            : 0;
+    const normalized = {
+        accountCode: asString(source.accountCode),
+        analysisCategoryId: asNumber(source.analysisCategoryId),
+        description: asString(source.description, fallbackDescription),
+        value,
+    };
+    if (source.id !== undefined) {
+        normalized.id = asNumber(source.id, 0);
+    }
+    return normalized;
+}
+/**
+ * Cash Receipt vatEntries use vatRateId / percentage / amount only.
+ * `amount` is the portion of the receipt TOTAL allocated to that VAT rate
+ * (not net, and not a separate vatAmount field).
+ */
+function normalizeCashReceiptVatEntry(entry) {
+    const source = isRecord(entry) ? entry : {};
+    const amount = source.amount !== undefined
+        ? round2(asNumber(source.amount))
+        : 0;
+    const normalized = {
+        vatRateId: asNumber(source.vatRateId),
+        percentage: asNumber(source.percentage ?? source.vatPercentage),
+        amount,
+    };
+    if (source.id !== undefined) {
+        normalized.id = asNumber(source.id, 0);
+    }
+    return normalized;
+}
+function applyExplicitCashReceiptOptionalTotals(payload, args) {
+    if (args.vatTypeId !== undefined) {
+        payload.vatTypeId = asNumber(args.vatTypeId);
+    }
+    if (args.totalNet !== undefined) {
+        payload.totalNet = round2(asNumber(args.totalNet));
+    }
+    if (args.totalVat !== undefined) {
+        payload.totalVat = round2(asNumber(args.totalVat));
+    }
+    if (args.totalVAT !== undefined) {
+        payload.totalVAT = round2(asNumber(args.totalVAT));
+    }
+}
 export function buildCashReceiptPayload(args, options) {
     const argsForBuild = sanitizeCashReceiptInput(args, options?.vatOnCashEnabled ?? true);
     const total = round2(asNumber(argsForBuild.total));
@@ -421,8 +478,9 @@ export function buildCashReceiptPayload(args, options) {
         ? argsForBuild.vatEntries
         : [];
     const hasRawVatSplit = rawAcEntries.length > 0 && rawVatEntries.length > 0;
-    // If a raw VAT-split payload was supplied, preserve it.
-    // This is needed for stricter/paid BRC companies that reject simple ledger-only receipts.
+    // If a raw VAT-split payload was supplied, normalise it to the Cash Receipt
+    // contract. This is needed for stricter/paid BRC companies that reject
+    // simple ledger-only receipts.
     if (hasRawVatSplit) {
         const { payload: _payload, ...cleanArgs } = argsForBuild;
         const payload = {
@@ -439,9 +497,14 @@ export function buildCashReceiptPayload(args, options) {
             detailCollection: Array.isArray(argsForBuild.detailCollection)
                 ? argsForBuild.detailCollection
                 : [note],
-            acEntries: rawAcEntries,
-            vatEntries: rawVatEntries,
+            acEntries: rawAcEntries.map((entry) => normalizeCashReceiptAcEntry(entry, note)),
+            vatEntries: rawVatEntries.map((entry) => normalizeCashReceiptVatEntry(entry)),
         };
+        // Do not invent Sales Invoice-style header totals on Cash Receipts.
+        delete payload.totalNet;
+        delete payload.totalVat;
+        delete payload.totalVAT;
+        delete payload.vatTypeId;
         if (argsForBuild.unallocated !== undefined) {
             payload.unallocated = round2(asNumber(argsForBuild.unallocated, 0));
         }
@@ -454,18 +517,7 @@ export function buildCashReceiptPayload(args, options) {
         else {
             payload.ledger = 0;
         }
-        if (argsForBuild.vatTypeId !== undefined) {
-            payload.vatTypeId = asNumber(argsForBuild.vatTypeId, 1);
-        }
-        if (argsForBuild.totalNet !== undefined) {
-            payload.totalNet = round2(asNumber(argsForBuild.totalNet));
-        }
-        if (argsForBuild.totalVat !== undefined) {
-            payload.totalVat = round2(asNumber(argsForBuild.totalVat));
-        }
-        if (argsForBuild.totalVAT !== undefined) {
-            payload.totalVAT = round2(asNumber(argsForBuild.totalVAT));
-        }
+        applyExplicitCashReceiptOptionalTotals(payload, argsForBuild);
         return applyCashReceiptConcurrencyFields(payload, argsForBuild);
     }
     const analysisCategoryId = argsForBuild.analysisCategoryId !== undefined
@@ -483,10 +535,6 @@ export function buildCashReceiptPayload(args, options) {
         accountCode !== undefined &&
         vatRateId !== undefined &&
         vatPercentage !== undefined;
-    const net = hasFlatVatSplit
-        ? round2(total / (1 + vatPercentage / 100))
-        : total;
-    const vat = hasFlatVatSplit ? round2(total - net) : 0;
     const ledger = hasFlatVatSplit
         ? 0
         : round2(asNumber(argsForBuild.ledger, argsForBuild.customerId !== undefined || argsForBuild.acCode !== undefined ? total : 0));
@@ -506,35 +554,33 @@ export function buildCashReceiptPayload(args, options) {
         acEntries: [],
         vatEntries: [],
     };
-    if (!hasFlatVatSplit) {
-        if (argsForBuild.customerId !== undefined) {
-            payload.customerId = asNumber(argsForBuild.customerId);
-        }
-        if (argsForBuild.acCode !== undefined) {
-            payload.acCode = asString(argsForBuild.acCode);
-        }
+    // Preserve explicitly supplied customer-ledger fields; never invent them for
+    // analysed cash receipts.
+    if (argsForBuild.customerId !== undefined) {
+        payload.customerId = asNumber(argsForBuild.customerId);
+    }
+    if (argsForBuild.acCode !== undefined) {
+        payload.acCode = asString(argsForBuild.acCode);
     }
     if (hasFlatVatSplit) {
         payload.acEntries = [
             {
-                id: 0,
                 accountCode,
                 analysisCategoryId,
                 description,
                 value: total,
             },
         ];
+        // Cash Receipt vatEntries[].amount is the portion of the receipt TOTAL
+        // allocated to this VAT rate (with one rate, that is the full total).
         payload.vatEntries = [
             {
-                id: 0,
                 vatRateId,
                 percentage: vatPercentage,
-                amount: net,
+                amount: total,
             },
         ];
-        payload.vatTypeId = asNumber(argsForBuild.vatTypeId, 1);
-        payload.totalNet = net;
-        payload.totalVAT = vat;
+        applyExplicitCashReceiptOptionalTotals(payload, argsForBuild);
     }
     return applyCashReceiptConcurrencyFields(payload, argsForBuild);
 }
@@ -566,6 +612,12 @@ export function mergeCashReceiptUpdateFromCurrent(built, current, requestedUpdat
     preserveIfNotRequested("totalNet");
     preserveIfNotRequested("totalVat");
     preserveIfNotRequested("totalVAT");
+    preserveIfNotRequested("customerId");
+    preserveIfNotRequested("acCode");
+    preserveIfNotRequested("discount");
+    preserveIfNotRequested("total");
+    preserveIfNotRequested("entryDate");
+    preserveIfNotRequested("procDate");
     if (!("customFields" in requestedUpdates) &&
         Array.isArray(current.customFields)) {
         merged.customFields = current.customFields;

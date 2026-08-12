@@ -168,6 +168,7 @@ export function registerRawUpdateTool(server, toolName, description, path, label
                 transactionDate: payload.procDate ??
                     payload.entryDate ??
                     undefined,
+                payloadSent: payload,
                 error: error instanceof Error
                     ? error.message
                     : String(error),
