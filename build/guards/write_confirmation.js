@@ -207,18 +207,29 @@ function hasSupplierCounterparty(body) {
         (typeof supplierId === "string" && supplierId.trim().length > 0)) &&
         isNonEmptyString(body.acCode));
 }
-function hasCashReceiptCounterparty(body) {
-    if (hasCustomerCounterparty(body)) {
-        return true;
-    }
+/**
+ * Analysed Cash Receipts post via analysis allocation (flat analysis fields or
+ * acEntries) and do not require a customer counterparty.
+ */
+function isAnalysedCashReceipt(body) {
     if (isPositiveNumber(body.analysisCategoryId) &&
         isNonEmptyString(body.accountCode)) {
         return true;
     }
-    if (Array.isArray(body.acEntries) && body.acEntries.length > 0) {
+    return Array.isArray(body.acEntries) && body.acEntries.length > 0;
+}
+function hasCashReceiptCounterparty(body) {
+    if (hasCustomerCounterparty(body)) {
         return true;
     }
-    return false;
+    return isAnalysedCashReceipt(body);
+}
+/**
+ * Customer-ledger Cash Receipts require explicit customer confirmation.
+ * Analysed Cash Receipts (allocation only, no customer) do not.
+ */
+function cashReceiptNeedsExplicitCustomerConfirmation(body) {
+    return hasCustomerCounterparty(body);
 }
 function hasCashPaymentCounterparty(body) {
     if (hasSupplierCounterparty(body)) {
@@ -319,35 +330,54 @@ async function validateCounterpartyForWrite(args) {
     if (!kind) {
         return null;
     }
-    const bodies = args.toolName.startsWith("brc_batch_") && getBatchItems(args.payload).length > 0
-        ? getBatchItems(args.payload)
+    const isBatch = args.toolName.startsWith("brc_batch_");
+    const bodies = isBatch && getBatchItems(args.payload).length > 0
+        ? getBatchItems(args.payload).map((entry) => extractBatchItemBody(entry))
         : [getWriteBody(args.payload)];
     const missingIndex = bodies.findIndex((body) => !bodyHasCounterparty(kind, body));
     if (missingIndex !== -1) {
         const label = counterpartyLabel(kind);
+        const missingGuidance = kind === "cash_receipt"
+            ? [
+                `Ask the user for a customer (customerId/acCode) or an analysis allocation (analysisCategoryId + accountCode, or acEntries) before calling this tool again.`,
+                "Do not invent a customer for an analysed cash receipt.",
+            ]
+            : [
+                `Ask the user which ${label} to use before calling this tool again.`,
+                "You may suggest a customer or supplier from an earlier preview as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
+            ];
         return jsonResponse({
             status: "counterparty_missing",
             message: [
                 `Red stopped before showing a preview because the required ${label} is missing.`,
                 "",
-                `Ask the user which ${label} to use before calling this tool again.`,
-                "You may suggest a customer or supplier from an earlier preview as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
+                ...missingGuidance,
                 "",
-                "Do not call this tool again, and do not pass confirmWrite: true, until the user has explicitly provided or confirmed the counterparty.",
+                "Do not call this tool again, and do not pass confirmWrite: true, until the required counterparty or allocation details are provided.",
             ].join("\n"),
             toolName: args.toolName,
             companyName: args.companyName,
             counterpartyKind: kind,
             counterpartyLabel: label,
-            missingBatchItemIndex: args.toolName.startsWith("brc_batch_") ? missingIndex : undefined,
+            missingBatchItemIndex: isBatch ? missingIndex : undefined,
             confirmationField: "confirmCounterpartyExplicit",
         });
     }
     if (isCounterpartyExplicitlyConfirmed(args.payload)) {
         return null;
     }
-    const label = counterpartyLabel(kind);
-    const isBatch = args.toolName.startsWith("brc_batch_");
+    // Analysed Cash Receipts (allocation only) do not require a customer or
+    // confirmCounterpartyExplicit. Customer-ledger Cash Receipts still do.
+    // Ordinary preview-before-posting / confirmWrite remains required.
+    if (kind === "cash_receipt") {
+        const needsCustomerConfirm = bodies.some((body) => cashReceiptNeedsExplicitCustomerConfirmation(body));
+        if (!needsCustomerConfirm) {
+            return null;
+        }
+    }
+    // Customer-ledger cash receipts ask for the customer specifically — not a
+    // fake "choose a customer" prompt for analysed receipts (those bypass above).
+    const label = kind === "cash_receipt" ? "customer" : counterpartyLabel(kind);
     const batchHints = isBatch ? collectBatchCounterpartyHints(bodies) : [];
     const hint = isBatch
         ? batchHints[0]
@@ -561,7 +591,8 @@ export async function requireWriteConfirmation(args) {
             "Red shows what it will post and waits for confirmation.",
             "Passing preflight checks is not confirmation.",
             "",
-            "The customer or supplier must be explicitly named or confirmed in the current conversation before any validated preview for posting. Do not reuse a counterparty from an earlier preview without that confirmation.",
+            "When a customer or supplier is required, they must be explicitly named or confirmed in the current conversation before any validated preview for posting. Do not reuse a counterparty from an earlier preview without that confirmation.",
+            "Analysed cash receipts that use an analysis allocation (or acEntries) do not require a customer.",
             "",
             "Red must not invent missing customer phone or customer email values.",
             "",
@@ -601,13 +632,18 @@ export function wrapWriteToolHandler(toolName, handler) {
             return counterpartyBlock;
         }
         if (isWriteActionConfirmed(args)) {
-            if (requiresCounterpartyConfirmation(toolName) &&
-                !isCounterpartyExplicitlyConfirmed(args)) {
-                return validateCounterpartyForWrite({
+            // Re-run counterparty validation so customer-ledger tools still require
+            // confirmCounterpartyExplicit on post. Analysed cash receipts that do not
+            // use a customer return null here and may proceed with confirmWrite alone.
+            if (requiresCounterpartyConfirmation(toolName)) {
+                const postCounterpartyBlock = await validateCounterpartyForWrite({
                     toolName,
                     companyName,
                     payload: args,
                 });
+                if (postCounterpartyBlock) {
+                    return postCounterpartyBlock;
+                }
             }
             return handler(args);
         }
