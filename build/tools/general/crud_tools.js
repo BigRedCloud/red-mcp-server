@@ -150,10 +150,7 @@ export function registerRawUpdateTool(server, toolName, description, path, label
         if (path === "/v1/bankAccounts")
             payload = { ...payload, ...buildBankAccountPayload(payload) };
         if (path === "/v1/cashReceipts") {
-            const processingSettings = await loadAndEnforceTransactionSettings(companyName, "cash_receipt", {
-                ...current,
-                ...mergeUpdates,
-            });
+            const processingSettings = await getCompanyProcessingSettings(companyName);
             const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
             const currentRecord = current;
             payload = mergeCashReceiptUpdateFromCurrent(buildCashReceiptPayload(payload, { vatOnCashEnabled }), currentRecord, mergeUpdates);

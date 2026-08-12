@@ -243,16 +243,14 @@ export function registerRawUpdateTool(
       if (path === "/v1/suppliers") payload = { ...payload, ...buildCustomerLikePayload(payload, 3) };
       if (path === "/v1/bankAccounts") payload = { ...payload, ...buildBankAccountPayload(payload) };
       if (path === "/v1/cashReceipts") {
-        const processingSettings = await loadAndEnforceTransactionSettings(
-          companyName,
-          "cash_receipt",
-          {
-            ...(current as JsonRecord),
-            ...mergeUpdates,
-          }
-        );
-        const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
+        const processingSettings =
+          await getCompanyProcessingSettings(companyName);
+      
+        const vatOnCashEnabled =
+          processingSettings.vatOnCashReceiptsEnabled === true;
+      
         const currentRecord = current as JsonRecord;
+      
         payload = mergeCashReceiptUpdateFromCurrent(
           buildCashReceiptPayload(payload, { vatOnCashEnabled }),
           currentRecord,
