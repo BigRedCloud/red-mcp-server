@@ -904,11 +904,49 @@ export function assertQuoteManualReferenceLengthOrThrow(reference) {
         throw new Error(QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE);
     }
 }
+/**
+ * Quote-specific 2-decimal money rounding.
+ *
+ * Big Red Cloud Quote validation rejects half-up VAT rounding for observed
+ * midpoint values (for example 7.50 @ 23%: 1.73 rejected, 1.72 accepted). Quote
+ * calculations therefore use a Quote-specific rounding rule. Do not apply this
+ * globally; Sales Invoice accepts the half-up result.
+ *
+ * For the confirmed midpoint 1.725, this helper returns 1.72. The deterministic
+ * rule used here is round-half-to-even at two decimal places (via integer
+ * thousandths), which matches that observed Quote API case. This is not a claim
+ * that BRC uses banker's rounding for every document type.
+ */
+export function roundQuoteMoney2(value) {
+    if (!Number.isFinite(value)) {
+        return value;
+    }
+    const sign = value < 0 ? -1 : 1;
+    const abs = Math.abs(value);
+    // Scale to thousandths so .xx5 midpoints are exact integers (e.g. 1.725 → 1725).
+    const thousandths = Math.round(abs * 1000);
+    const remainder = thousandths % 10;
+    const centsTrunc = Math.trunc(thousandths / 10);
+    let cents;
+    if (remainder < 5) {
+        cents = centsTrunc;
+    }
+    else if (remainder > 5) {
+        cents = centsTrunc + 1;
+    }
+    else if (centsTrunc % 2 === 0) {
+        cents = centsTrunc;
+    }
+    else {
+        cents = centsTrunc + 1;
+    }
+    return (sign * cents) / 100;
+}
 export function buildQuotePayload(args) {
     assertQuoteManualReferenceLengthOrThrow(args.reference);
-    const net = round2(args.quantity * args.unitPrice);
-    const vat = round2(net * (args.vatPercentage / 100));
-    const total = round2(net + vat);
+    const net = roundQuoteMoney2(args.quantity * args.unitPrice);
+    const vat = roundQuoteMoney2(net * (args.vatPercentage / 100));
+    const total = roundQuoteMoney2(net + vat);
     const companyId = requireQuoteCompanyId(args.companyId);
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     const deliveryTo = normaliseDeliveryTo(args.deliveryTo);
