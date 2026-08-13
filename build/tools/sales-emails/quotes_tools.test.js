@@ -3,7 +3,7 @@ import test from "node:test";
 import { wrapWriteToolHandler } from "../../guards/write_confirmation.js";
 import { enforceReferenceSettingsOrThrow, } from "../../guards/company_reference_settings.js";
 import { assertQuoteManualReferenceLengthOrThrow, buildQuoteCreatePayloadFromToolArgs, buildQuotePayload, normalizeBatchItems, QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE, } from "../general/payloads_tools.js";
-import { buildQuoteReferenceUpdatePayload, quoteManualReferenceSchema, } from "./quotes_tools.js";
+import { buildGenerateSalesInvoiceFromQuotePayload, buildQuoteReferenceUpdatePayload, quoteManualReferenceSchema, } from "./quotes_tools.js";
 function parseBody(result) {
     const text = result.content[0].text;
     return JSON.parse(text);
@@ -331,4 +331,105 @@ test("brc_update_quote reference-only update clones current Quote and patches re
 test("brc_update_quote rejects reference longer than 6 characters before PUT body is built", () => {
     assert.throws(() => buildQuoteReferenceUpdatePayload({ id: 1, reference: "QT0001", timeStamp: "ts" }, "TOOLONG"), (error) => error instanceof Error &&
         error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE);
+});
+test("buildGenerateSalesInvoiceFromQuotePayload keeps only quoteId and supported dates", () => {
+    const payload = buildGenerateSalesInvoiceFromQuotePayload({
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+    });
+    assert.deepEqual(payload, {
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+    });
+    assert.equal("companyName" in payload, false);
+    assert.equal("invoiceDate" in payload, false);
+    assert.equal("transactionDate" in payload, false);
+    assert.equal("date" in payload, false);
+});
+test("brc_generate_sales_invoice_from_quote confirmWrite=false previews BRC body and does not POST", async () => {
+    let handlerCalled = false;
+    const wrapped = wrapWriteToolHandler("brc_generate_sales_invoice_from_quote", async () => {
+        handlerCalled = true;
+        return "posted";
+    });
+    const result = await wrapped({
+        companyName: "Company C",
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+        confirmWrite: false,
+        routeToken: "should-not-appear",
+        connectionRef: "should-not-appear",
+        apiKey: "should-not-appear",
+    });
+    const body = parseBody(result);
+    assert.equal(handlerCalled, false);
+    assert.equal(body.status, "confirmation_required");
+    assert.equal(body.confirmationRequired, true);
+    assert.equal(body.endpoint, "POST /v1/quotes/generateSaleInvoice");
+    const preview = body.payloadPreview;
+    assert.deepEqual(preview, {
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+    });
+    assert.equal("companyName" in preview, false);
+    assert.equal("routeToken" in preview, false);
+    assert.equal("connectionRef" in preview, false);
+    assert.equal("apiKey" in preview, false);
+    assert.equal("invoiceDate" in preview, false);
+    assert.equal("transactionDate" in preview, false);
+    assert.equal("date" in preview, false);
+});
+test("brc_generate_sales_invoice_from_quote confirmed payload matches preview", async () => {
+    const expected = buildGenerateSalesInvoiceFromQuotePayload({
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+    });
+    const wrapped = wrapWriteToolHandler("brc_generate_sales_invoice_from_quote", async (args) => {
+        const record = args;
+        const payloadSent = buildGenerateSalesInvoiceFromQuotePayload({
+            quoteId: Number(record.quoteId),
+            entryDate: String(record.entryDate),
+            procDate: String(record.procDate),
+        });
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        status: "ok",
+                        endpoint: "POST /v1/quotes/generateSaleInvoice",
+                        payloadSent,
+                    }),
+                },
+            ],
+        };
+    });
+    const previewResult = await wrapped({
+        companyName: "Company C",
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+        confirmWrite: false,
+        routeToken: "secret",
+    });
+    const previewBody = parseBody(previewResult);
+    const postResult = await wrapped({
+        companyName: "Company C",
+        quoteId: 2892396,
+        entryDate: "2026-08-13",
+        procDate: "2026-08-13",
+        confirmWrite: true,
+        routeToken: "secret",
+    });
+    const postBody = parseBody(postResult);
+    assert.deepEqual(previewBody.payloadPreview, expected);
+    assert.deepEqual(postBody.payloadSent, expected);
+    assert.deepEqual(postBody.payloadSent, previewBody.payloadPreview);
+    assert.equal("routeToken" in postBody.payloadSent, false);
+    assert.equal("companyName" in postBody.payloadSent, false);
 });

@@ -3,6 +3,7 @@ import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "../shared.js";
 import { applySalesPriceBasisToRawPayload, buildQuoteCreatePayloadFromToolArgs, enforceSalesProductLineProductIdOrThrow, } from "../tools/general/payloads_tools.js";
+import { buildGenerateSalesInvoiceFromQuotePayload } from "../tools/sales-emails/quotes_tools.js";
 import { buildSalesInvoiceGenRefValidationFailureBody, validateGeneratedReferenceSalesInvoicePayload, } from "../tools/sales-emails/sales_invoice_payload_schemas.js";
 import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "./sales_vat_category.js";
 /**
@@ -461,6 +462,9 @@ function writeActionLabel(toolName) {
     if (toolName.includes("reopen")) {
         return "reopening this record";
     }
+    if (toolName.includes("generate_sales_invoice_from_quote")) {
+        return "generating a sales invoice from this quote";
+    }
     if (toolName.includes("purchase")) {
         return "creating this purchase";
     }
@@ -597,22 +601,33 @@ function buildWritePayloadPreview(input) {
     }
     return preview;
 }
-function quoteCreateEndpoint(toolName) {
+function writeToolEndpoint(toolName) {
     if (toolName === "brc_create_quote") {
         return "POST /v1/quotes";
     }
     if (toolName === "brc_create_quote_gen_ref") {
         return "POST /v1/quotes/createQuoteWithGeneratingReference";
     }
+    if (toolName === "brc_generate_sales_invoice_from_quote") {
+        return "POST /v1/quotes/generateSaleInvoice";
+    }
     return undefined;
 }
 /**
  * Builds the payload shown in confirmation_required / counterparty preview.
  * Quote create tools expose the nested BRC body from buildQuotePayload.
+ * Generate-invoice-from-quote exposes the exact generateSaleInvoice POST body.
  */
 function buildToolWritePayloadPreview(toolName, args) {
     if (QUOTE_CREATE_WRITE_TOOLS.has(toolName)) {
         return buildWritePayloadPreview(buildQuoteCreatePayloadFromToolArgs(args));
+    }
+    if (toolName === "brc_generate_sales_invoice_from_quote") {
+        return buildWritePayloadPreview(buildGenerateSalesInvoiceFromQuotePayload({
+            quoteId: Number(args.quoteId),
+            entryDate: typeof args.entryDate === "string" ? args.entryDate : undefined,
+            procDate: typeof args.procDate === "string" ? args.procDate : undefined,
+        }));
     }
     return buildWritePayloadPreview(args);
 }
@@ -700,7 +715,7 @@ export function wrapWriteToolHandler(toolName, handler) {
             toolName,
             companyName,
             payload: displayPayload,
-            endpoint: quoteCreateEndpoint(toolName),
+            endpoint: writeToolEndpoint(toolName),
         });
     };
 }

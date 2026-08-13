@@ -50,6 +50,30 @@ import {
     return payload;
   }
 
+  /**
+   * BRC body for POST /v1/quotes/generateSaleInvoice.
+   * Only quoteId plus optional entryDate/procDate from the tool contract.
+   * Do not add speculative date aliases (invoiceDate/transactionDate/date).
+   */
+  export function buildGenerateSalesInvoiceFromQuotePayload(args: {
+    quoteId: number;
+    entryDate?: string;
+    procDate?: string;
+  }): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      quoteId: args.quoteId,
+    };
+
+    if (args.entryDate) {
+      payload.entryDate = args.entryDate;
+      payload.procDate = args.procDate || args.entryDate;
+    } else if (args.procDate) {
+      payload.procDate = args.procDate;
+    }
+
+    return payload;
+  }
+
   export function registerQuoteTools(server:ServerType){
 
 // Quote tools ----------------------------------------------------------------
@@ -221,7 +245,7 @@ const quoteSchemaBase = {
   );
   server.tool(
     "brc_generate_sales_invoice_from_quote",
-    "Generates a sales invoice from a BRC quote.",
+    "Generates a sales invoice from a BRC quote. Preview-before-posting shows the exact POST /v1/quotes/generateSaleInvoice body (quoteId and optional entryDate/procDate only). Nothing is written until you confirm.",
     {
       companyName: companyNameSchema,
       quoteId: z.number().int().positive().describe("Quote id."),
@@ -229,33 +253,23 @@ const quoteSchemaBase = {
       procDate: z.string().optional().describe("Optional invoice processing date in ISO format."),
     },
     async ({ companyName, quoteId, entryDate, procDate }) => {
-      const payload: Record<string, unknown> = { quoteId };
-  
-      if (entryDate) {
-        payload.entryDate = entryDate;
-        payload.procDate = procDate || entryDate;
-  
-        // Extra date aliases in case BRC expects a different generated-invoice date field.
-        payload.invoiceDate = entryDate;
-        payload.transactionDate = entryDate;
-        payload.date = entryDate;
-      } else if (procDate) {
-        payload.procDate = procDate;
-        payload.invoiceDate = procDate;
-        payload.transactionDate = procDate;
-        payload.date = procDate;
-      }
-  
+      const payload = buildGenerateSalesInvoiceFromQuotePayload({
+        quoteId,
+        entryDate,
+        procDate,
+      });
+
       const response = await brcJsonRequest(
         companyName,
         "POST",
         "/v1/quotes/generateSaleInvoice",
         payload
       );
-  
+
       return jsonResponse({
         message: "Generate sales invoice from quote request sent.",
         companyName,
+        endpoint: "POST /v1/quotes/generateSaleInvoice",
         payloadSent: payload,
         response,
       });
