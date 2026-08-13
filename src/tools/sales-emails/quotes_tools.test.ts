@@ -138,6 +138,135 @@ test("brc_create_quote confirmWrite=false returns nested payloadPreview and does
   assert.equal("tranNote" in preview, false);
 });
 
+test("brc_batch_quotes confirmWrite=false previews exact BRC batch body and does not PUT", async () => {
+  let handlerCalled = false;
+  const wrapped = wrapWriteToolHandler("brc_batch_quotes", async () => {
+    handlerCalled = true;
+    return "posted";
+  });
+
+  const flatItem = {
+    ...DISPOSABLE_QUOTE_ARGS,
+    unitPrice: 7.5,
+    reference: "QB0002",
+  };
+  delete (flatItem as { companyName?: string }).companyName;
+
+  const result = await wrapped({
+    companyName: "Company C",
+    items: [{ opCode: 1, item: flatItem }],
+    confirmCounterpartyExplicit: true,
+    confirmWrite: false,
+    routeToken: "should-not-appear",
+    connectionRef: "should-not-appear",
+    apiKey: "should-not-appear",
+  });
+  const body = parseBody(result);
+
+  assert.equal(handlerCalled, false);
+  assert.equal(body.status, "confirmation_required");
+  assert.equal(body.confirmationRequired, true);
+  assert.equal(body.endpoint, "PUT /v1/quotes/batch");
+  assert.equal(body.confirmationField, "confirmWrite");
+
+  const preview = body.payloadPreview as Array<{
+    opCode: number;
+    item: Record<string, unknown>;
+  }>;
+  assert.ok(Array.isArray(preview));
+  assert.equal(preview.length, 1);
+  assert.equal(preview[0]!.opCode, 1);
+
+  const quote = preview[0]!.item;
+  assert.equal(quote.companyId, 806559);
+  assert.equal(quote.customerOwnerId, 26540869);
+  assert.equal(quote.totalNet, 7.5);
+  assert.equal(quote.totalVat, 1.72);
+  assert.equal(quote.total, 9.22);
+  assert.equal("totalVAT" in quote, false);
+
+  const line = (quote.productTrans as Record<string, unknown>[])[0]!;
+  assert.equal(line.percentage, 23);
+  assert.equal(line.vatRateId, 1596277);
+  assert.equal(line.productId, 5023355);
+  assert.equal(line.quantity, 1);
+  assert.equal(line.unitPrice, 7.5);
+  assert.equal(line.vatAmount, 1.72);
+  assert.equal(line.amount, 9.22);
+  assert.ok(Array.isArray(line.acEntries));
+  assert.equal((line.acEntries as Record<string, unknown>[])[0]!.value, 7.5);
+  assert.equal((line.acEntries as Record<string, unknown>[])[0]!.accountCode, "SA01");
+
+  assert.equal("companyName" in quote, false);
+  assert.equal("routeToken" in quote, false);
+  assert.equal("connectionRef" in quote, false);
+  assert.equal("apiKey" in quote, false);
+  assert.equal("routeToken" in (preview[0] as object), false);
+
+  const expected = normalizeBatchItems("/v1/quotes", [
+    { opCode: 1, item: flatItem },
+  ]);
+  assert.deepEqual(preview, expected);
+});
+
+test("brc_batch_quotes confirmed payloadSent matches preview shape via normalizeBatchItems", async () => {
+  const flatItem = {
+    ...DISPOSABLE_QUOTE_ARGS,
+    unitPrice: 7.5,
+    reference: "QB0002",
+  };
+  delete (flatItem as { companyName?: string }).companyName;
+
+  const expected = normalizeBatchItems("/v1/quotes", [
+    { opCode: 1, item: flatItem },
+  ]);
+
+  const wrapped = wrapWriteToolHandler("brc_batch_quotes", async (args) => {
+    const record = args as Record<string, unknown>;
+    const items = record.items as Record<string, unknown>[];
+    const payloadSent = normalizeBatchItems("/v1/quotes", items);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "ok",
+            endpoint: "PUT /v1/quotes/batch",
+            payloadSent,
+          }),
+        },
+      ],
+    };
+  });
+
+  const previewBody = parseBody(
+    await wrapped({
+      companyName: "Company C",
+      items: [{ opCode: 1, item: flatItem }],
+      confirmCounterpartyExplicit: true,
+      confirmWrite: false,
+    })
+  );
+  assert.deepEqual(previewBody.payloadPreview, expected);
+
+  const postBody = parseBody(
+    await wrapped({
+      companyName: "Company C",
+      items: [{ opCode: 1, item: flatItem }],
+      confirmCounterpartyExplicit: true,
+      confirmWrite: true,
+    })
+  );
+  assert.equal(postBody.endpoint, "PUT /v1/quotes/batch");
+  assert.deepEqual(postBody.payloadSent, previewBody.payloadPreview);
+  assert.deepEqual(postBody.payloadSent, expected);
+
+  const sentItem = (postBody.payloadSent as Array<{ item: Record<string, unknown> }>)[0]!
+    .item;
+  assert.equal(sentItem.totalVat, 1.72);
+  assert.equal(sentItem.total, 9.22);
+});
+
 test("brc_create_quote confirmed path uses same nested payload shape as preview", async () => {
   const expected = buildQuoteCreatePayloadFromToolArgs({ ...DISPOSABLE_QUOTE_ARGS });
   let capturedArgs: Record<string, unknown> | undefined;

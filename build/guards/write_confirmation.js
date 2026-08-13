@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
 import { jsonResponse } from "../shared.js";
-import { applySalesPriceBasisToRawPayload, buildQuoteCreatePayloadFromToolArgs, enforceSalesProductLineProductIdOrThrow, } from "../tools/general/payloads_tools.js";
+import { applySalesPriceBasisToRawPayload, buildQuoteCreatePayloadFromToolArgs, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, } from "../tools/general/payloads_tools.js";
 import { buildGenerateSalesInvoiceFromQuotePayload } from "../tools/sales-emails/quotes_tools.js";
 import { buildSalesInvoiceGenRefValidationFailureBody, validateGeneratedReferenceSalesInvoicePayload, } from "../tools/sales-emails/sales_invoice_payload_schemas.js";
 import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "./sales_vat_category.js";
@@ -555,7 +555,10 @@ function draftFieldsForTool(toolName) {
     return [...WRITE_DRAFT_FIELDS_COMMON];
 }
 async function enrichWriteConfirmationResponse(toolName, companyName, payload, response) {
-    const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payload);
+    const payloadRecord = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload
+        : {};
+    const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payloadRecord);
     if (!draftDetails.documentDraftDetails) {
         return response;
     }
@@ -570,6 +573,7 @@ async function enrichWriteConfirmationResponse(toolName, companyName, payload, r
     };
 }
 const SENSITIVE_WRITE_PREVIEW_KEYS = [
+    "companyName",
     "routeToken",
     "connectionRef",
     "apiKey",
@@ -590,7 +594,15 @@ const QUOTE_CREATE_WRITE_TOOLS = new Set([
     "brc_create_quote_gen_ref",
 ]);
 function buildWritePayloadPreview(input) {
-    const preview = { ...input };
+    if (Array.isArray(input)) {
+        return input.map((entry) => buildWritePayloadPreview(entry));
+    }
+    if (!input || typeof input !== "object") {
+        return input;
+    }
+    const preview = {
+        ...input,
+    };
     for (const key of Object.keys(preview)) {
         if (key === "confirmWrite" || key.startsWith("confirm")) {
             delete preview[key];
@@ -598,6 +610,10 @@ function buildWritePayloadPreview(input) {
     }
     for (const key of SENSITIVE_WRITE_PREVIEW_KEYS) {
         delete preview[key];
+    }
+    // Batch entries use { opCode, item }; strip auth/routing from nested item too.
+    if (preview.item && typeof preview.item === "object") {
+        preview.item = buildWritePayloadPreview(preview.item);
     }
     return preview;
 }
@@ -611,16 +627,27 @@ function writeToolEndpoint(toolName) {
     if (toolName === "brc_generate_sales_invoice_from_quote") {
         return "POST /v1/quotes/generateSaleInvoice";
     }
+    if (toolName === "brc_batch_quotes") {
+        return "PUT /v1/quotes/batch";
+    }
     return undefined;
 }
 /**
  * Builds the payload shown in confirmation_required / counterparty preview.
  * Quote create tools expose the nested BRC body from buildQuotePayload.
+ * Quote batch exposes the exact PUT /v1/quotes/batch body from normalizeBatchItems.
  * Generate-invoice-from-quote exposes the exact generateSaleInvoice POST body.
  */
 function buildToolWritePayloadPreview(toolName, args) {
     if (QUOTE_CREATE_WRITE_TOOLS.has(toolName)) {
         return buildWritePayloadPreview(buildQuoteCreatePayloadFromToolArgs(args));
+    }
+    if (toolName === "brc_batch_quotes") {
+        const items = Array.isArray(args.items)
+            ? args.items
+            : [];
+        // Same normalizeBatchItems → buildQuotePayload path used by the real PUT.
+        return buildWritePayloadPreview(normalizeBatchItems("/v1/quotes", items));
     }
     if (toolName === "brc_generate_sales_invoice_from_quote") {
         return buildWritePayloadPreview(buildGenerateSalesInvoiceFromQuotePayload({
@@ -634,7 +661,7 @@ function buildToolWritePayloadPreview(toolName, args) {
 export async function requireWriteConfirmation(args) {
     const action = writeActionLabel(args.toolName);
     const draftFields = draftFieldsForTool(args.toolName);
-    const payload = buildWritePayloadPreview((args.payload ?? {}));
+    const payload = buildWritePayloadPreview(args.payload ?? {});
     const response = await enrichWriteConfirmationResponse(args.toolName, args.companyName, payload, {
         status: "confirmation_required",
         confirmationRequired: true,

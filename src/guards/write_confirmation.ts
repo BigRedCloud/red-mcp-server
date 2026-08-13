@@ -6,6 +6,7 @@ import {
   applySalesPriceBasisToRawPayload,
   buildQuoteCreatePayloadFromToolArgs,
   enforceSalesProductLineProductIdOrThrow,
+  normalizeBatchItems,
 } from "../tools/general/payloads_tools.js";
 import { buildGenerateSalesInvoiceFromQuotePayload } from "../tools/sales-emails/quotes_tools.js";
 import {
@@ -462,8 +463,8 @@ async function validateCounterpartyForWrite(args: {
   toolName: string;
   companyName?: string;
   payload: Record<string, unknown>;
-  /** When set, used for payloadPreview only (e.g. nested Quote POST body). */
-  displayPayload?: Record<string, unknown>;
+  /** When set, used for payloadPreview only (e.g. nested Quote POST/batch body). */
+  displayPayload?: unknown;
 }) {
   const kind = getCounterpartyKind(args.toolName);
   if (!kind) {
@@ -752,13 +753,17 @@ function draftFieldsForTool(toolName: string): string[] {
 async function enrichWriteConfirmationResponse(
   toolName: string,
   companyName: string | undefined,
-  payload: Record<string, unknown>,
+  payload: unknown,
   response: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  const payloadRecord =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
   const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(
     toolName,
     companyName,
-    payload
+    payloadRecord
   );
 
   if (!draftDetails.documentDraftDetails) {
@@ -778,6 +783,7 @@ async function enrichWriteConfirmationResponse(
 }
 
 const SENSITIVE_WRITE_PREVIEW_KEYS = [
+  "companyName",
   "routeToken",
   "connectionRef",
   "apiKey",
@@ -799,10 +805,18 @@ const QUOTE_CREATE_WRITE_TOOLS = new Set([
   "brc_create_quote_gen_ref",
 ]);
 
-function buildWritePayloadPreview(
-  input: Record<string, unknown>
-): Record<string, unknown> {
-  const preview: Record<string, unknown> = { ...input };
+function buildWritePayloadPreview(input: unknown): unknown {
+  if (Array.isArray(input)) {
+    return input.map((entry) => buildWritePayloadPreview(entry));
+  }
+
+  if (!input || typeof input !== "object") {
+    return input;
+  }
+
+  const preview: Record<string, unknown> = {
+    ...(input as Record<string, unknown>),
+  };
 
   for (const key of Object.keys(preview)) {
     if (key === "confirmWrite" || key.startsWith("confirm")) {
@@ -812,6 +826,11 @@ function buildWritePayloadPreview(
 
   for (const key of SENSITIVE_WRITE_PREVIEW_KEYS) {
     delete preview[key];
+  }
+
+  // Batch entries use { opCode, item }; strip auth/routing from nested item too.
+  if (preview.item && typeof preview.item === "object") {
+    preview.item = buildWritePayloadPreview(preview.item);
   }
 
   return preview;
@@ -827,20 +846,32 @@ function writeToolEndpoint(toolName: string): string | undefined {
   if (toolName === "brc_generate_sales_invoice_from_quote") {
     return "POST /v1/quotes/generateSaleInvoice";
   }
+  if (toolName === "brc_batch_quotes") {
+    return "PUT /v1/quotes/batch";
+  }
   return undefined;
 }
 
 /**
  * Builds the payload shown in confirmation_required / counterparty preview.
  * Quote create tools expose the nested BRC body from buildQuotePayload.
+ * Quote batch exposes the exact PUT /v1/quotes/batch body from normalizeBatchItems.
  * Generate-invoice-from-quote exposes the exact generateSaleInvoice POST body.
  */
 function buildToolWritePayloadPreview(
   toolName: string,
   args: Record<string, unknown>
-): Record<string, unknown> {
+): unknown {
   if (QUOTE_CREATE_WRITE_TOOLS.has(toolName)) {
     return buildWritePayloadPreview(buildQuoteCreatePayloadFromToolArgs(args));
+  }
+
+  if (toolName === "brc_batch_quotes") {
+    const items = Array.isArray(args.items)
+      ? (args.items as Record<string, unknown>[])
+      : [];
+    // Same normalizeBatchItems → buildQuotePayload path used by the real PUT.
+    return buildWritePayloadPreview(normalizeBatchItems("/v1/quotes", items));
   }
 
   if (toolName === "brc_generate_sales_invoice_from_quote") {
@@ -865,9 +896,7 @@ export async function requireWriteConfirmation(args: {
 }) {
   const action = writeActionLabel(args.toolName);
   const draftFields = draftFieldsForTool(args.toolName);
-  const payload = buildWritePayloadPreview(
-    (args.payload ?? {}) as Record<string, unknown>
-  );
+  const payload = buildWritePayloadPreview(args.payload ?? {});
 
   const response = await enrichWriteConfirmationResponse(
     args.toolName,
