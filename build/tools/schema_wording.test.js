@@ -132,6 +132,17 @@ test("write tool descriptions do not describe BRC previews as drafts", () => {
     const confirmWriteDesc = confirmWriteSchema.description ?? "";
     assert.equal(/\bdraft\b/i.test(confirmWriteDesc), false);
 });
+test("quote create tools require companyId with no test-company default wording", () => {
+    for (const name of ["brc_create_quote", "brc_create_quote_gen_ref"]) {
+        const { schema } = getTool(name);
+        const companyId = schema.companyId;
+        assert.ok(companyId, `${name} expected a companyId field`);
+        assert.equal(companyId.isOptional(), false, `${name} companyId must be required`);
+        assert.match(companyId.description ?? "", /required/i);
+        assert.match(companyId.description ?? "", /connected company/i);
+        assert.equal(/previous test company|defaults to/i.test(companyId.description ?? ""), false, `${name} companyId must not use test-environment default wording`);
+    }
+});
 test("nominal report tools state monthly values are period movements", () => {
     for (const name of [
         "brc_grouped_nominal_accounts_report",

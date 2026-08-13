@@ -18,7 +18,13 @@ import {
 
 const quoteSchemaBase = {
     companyName: companyNameSchema,
-    companyId: z.number().int().positive().optional().describe("Optional BRC company id used in quote payload. Defaults to previous test company id if omitted."),
+    companyId: z
+      .number()
+      .int()
+      .positive()
+      .describe(
+        "Required BRC company id for the quote payload. Use the connected company's id from existing records such as customers, products, or sales reps. Do not omit this field."
+      ),
     customerOwnerId: z.number().int().positive(),
     acCode: z.string(),
     customerOwnerName: z.string(),
