@@ -1,7 +1,16 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { buildQuoteCreatePayloadFromToolArgs, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, } from "../general/payloads_tools.js";
+import { assertQuoteManualReferenceLengthOrThrow, buildQuoteCreatePayloadFromToolArgs, QUOTE_MANUAL_REFERENCE_DESCRIPTION, QUOTE_MANUAL_REFERENCE_MAX_LENGTH, QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, } from "../general/payloads_tools.js";
 import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
+/** Shared Zod schema for manual Quote references (create/update). */
+export const quoteManualReferenceSchema = z
+    .string()
+    .max(QUOTE_MANUAL_REFERENCE_MAX_LENGTH, {
+    message: QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE,
+});
+export const quoteManualReferenceFieldSchema = quoteManualReferenceSchema
+    .optional()
+    .describe(QUOTE_MANUAL_REFERENCE_DESCRIPTION);
 export function registerQuoteTools(server) {
     // Quote tools ----------------------------------------------------------------
     const quoteSchemaBase = {
@@ -20,7 +29,7 @@ export function registerQuoteTools(server) {
         vatTypeId: z.number().int().positive().optional(),
         saleRepId: z.number().int().positive().describe("Sales rep id from brc_list_sales_reps."),
         saleRepCode: z.string().min(1).describe("Sales rep code from brc_list_sales_reps."),
-        reference: z.string().optional().describe("Required when quote references are manual, or when the quote reference setting is unknown."),
+        reference: quoteManualReferenceFieldSchema,
         poNumber: z.string().optional(),
         ddNumber: z.string().optional(),
         confirmQuotesAutoGenerateInBrc: z
@@ -80,12 +89,13 @@ export function registerQuoteTools(server) {
             return jsonResponse({ message: "Error creating quote with a generated reference.", companyName, endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_update_quote", "Updates a BRC quote using structured safe text/reference fields.", {
+    server.tool("brc_update_quote", "Updates a BRC quote using structured safe text/reference fields. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.", {
         companyName: companyNameSchema,
         id: z.union([z.string(), z.number()]).describe("Quote id."),
         note: z.string().optional(),
-        reference: z.string().optional(),
+        reference: quoteManualReferenceFieldSchema,
     }, async ({ companyName, id, note, reference }) => {
+        assertQuoteManualReferenceLengthOrThrow(reference);
         const current = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
         if (!current || typeof current !== "object" || Array.isArray(current))
             throw new Error(`Could not read quote ${id} before update.`);

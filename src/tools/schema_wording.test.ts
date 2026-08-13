@@ -190,6 +190,36 @@ test("quote create tools require companyId with no test-company default wording"
   }
 });
 
+test("quote manual reference schemas enforce max 6 characters", () => {
+  for (const name of [
+    "brc_create_quote",
+    "brc_create_quote_gen_ref",
+    "brc_update_quote",
+  ]) {
+    const { schema } = getTool(name);
+    const reference = schema.reference;
+    assert.ok(reference, `${name} expected a reference field`);
+
+    const accepted = reference.safeParse("BQ1234");
+    assert.equal(accepted.success, true, `${name} should accept BQ1234`);
+
+    const rejected = reference.safeParse("QUOTE-TEST-20260813-01");
+    assert.equal(rejected.success, false, `${name} should reject long references`);
+    if (!rejected.success) {
+      assert.match(
+        rejected.error.issues[0]!.message,
+        /6 characters or fewer because Big Red Cloud truncates/i
+      );
+    }
+
+    assert.match(
+      reference.description ?? "",
+      /6 characters/i,
+      `${name} reference description should mention the 6-character limit`
+    );
+  }
+});
+
 test("nominal report tools state monthly values are period movements", () => {
   for (const name of [
     "brc_grouped_nominal_accounts_report",

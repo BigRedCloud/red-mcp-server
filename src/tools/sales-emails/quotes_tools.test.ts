@@ -7,19 +7,27 @@ import {
   type CompanyReferenceSettings,
 } from "../../guards/company_reference_settings.js";
 import {
+  assertQuoteManualReferenceLengthOrThrow,
   buildQuoteCreatePayloadFromToolArgs,
   buildQuotePayload,
+  normalizeBatchItems,
+  QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE,
 } from "../general/payloads_tools.js";
+import { quoteManualReferenceSchema } from "./quotes_tools.js";
 
 function parseBody(result: unknown): Record<string, unknown> {
   const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+/**
+ * Note: BRC list-vs-get differences for Quote fields such as note/accountCode are
+ * API representation differences and are not create failures.
+ */
 const DISPOSABLE_QUOTE_ARGS = {
   companyName: "Company C",
   companyId: 806559,
-  reference: "QUOTE-TEST-20260813-01",
+  reference: "BQ1234",
   customerOwnerId: 26540869,
   acCode: "878",
   customerOwnerName: "Paul Conroy Ltd",
@@ -77,7 +85,7 @@ function assertNestedQuoteShape(preview: Record<string, unknown>): void {
 test("buildQuotePayload disposable input matches nested Quote contract fields", () => {
   const payload = buildQuotePayload({ ...DISPOSABLE_QUOTE_ARGS });
   assertNestedQuoteShape(payload);
-  assert.equal(payload.reference, "QUOTE-TEST-20260813-01");
+  assert.equal(payload.reference, "BQ1234");
   assert.equal(payload.acCode, "878");
   assert.equal(payload.customerOwnerName, "Paul Conroy Ltd");
   assert.equal(payload.saleRepCode, "7777");
@@ -118,7 +126,7 @@ test("brc_create_quote confirmWrite=false returns nested payloadPreview and does
 
   const preview = body.payloadPreview as Record<string, unknown>;
   assertNestedQuoteShape(preview);
-  assert.equal(preview.reference, "QUOTE-TEST-20260813-01");
+  assert.equal(preview.reference, "BQ1234");
   assert.equal("routeToken" in preview, false);
   assert.equal("connectionRef" in preview, false);
   assert.equal("apiKey" in preview, false);
@@ -213,7 +221,7 @@ test("manual quote reference guard still requires a reference when Quotes are Ma
   const ok = enforceReferenceSettingsOrThrow(
     settings,
     "quote",
-    { reference: "QUOTE-TEST-20260813-01" },
+    { reference: "BQ1234" },
     "manual"
   );
   assert.deepEqual(ok.warnings, []);
@@ -240,4 +248,107 @@ test("generated quote reference guard allows gen-ref when Quotes are Auto", () =
 
   const result = enforceReferenceSettingsOrThrow(settings, "quote", {}, "generated");
   assert.deepEqual(result.warnings, []);
+});
+
+test("manual Quote reference accepts BQ1234 and 000001", () => {
+  assert.doesNotThrow(() => assertQuoteManualReferenceLengthOrThrow("BQ1234"));
+  assert.doesNotThrow(() => assertQuoteManualReferenceLengthOrThrow("000001"));
+  assert.equal(quoteManualReferenceSchema.parse("BQ1234"), "BQ1234");
+  assert.equal(quoteManualReferenceSchema.parse("000001"), "000001");
+
+  const withBq = buildQuotePayload({ ...DISPOSABLE_QUOTE_ARGS, reference: "BQ1234" });
+  assert.equal(withBq.reference, "BQ1234");
+  const withZeros = buildQuotePayload({ ...DISPOSABLE_QUOTE_ARGS, reference: "000001" });
+  assert.equal(withZeros.reference, "000001");
+});
+
+test("manual Quote reference rejects 7-character and long staging values", () => {
+  assert.throws(
+    () => assertQuoteManualReferenceLengthOrThrow("BQ12345"),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+  assert.throws(
+    () => assertQuoteManualReferenceLengthOrThrow("QUOTE-TEST-20260813-01"),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+
+  const seven = quoteManualReferenceSchema.safeParse("BQ12345");
+  assert.equal(seven.success, false);
+  if (!seven.success) {
+    assert.match(seven.error.issues[0]!.message, /6 characters or fewer/i);
+  }
+
+  const staging = quoteManualReferenceSchema.safeParse("QUOTE-TEST-20260813-01");
+  assert.equal(staging.success, false);
+
+  assert.throws(
+    () =>
+      buildQuotePayload({
+        ...DISPOSABLE_QUOTE_ARGS,
+        reference: "QUOTE-TEST-20260813-01",
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+});
+
+test("batch Quote long reference is rejected before posting", () => {
+  assert.throws(
+    () =>
+      normalizeBatchItems("/v1/quotes", [
+        {
+          opCode: 1,
+          item: {
+            ...DISPOSABLE_QUOTE_ARGS,
+            reference: "QUOTE-TEST-20260813-01",
+          },
+        },
+      ]),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+
+  assert.throws(
+    () =>
+      normalizeBatchItems("/v1/quotes", [
+        {
+          opCode: 1,
+          item: {
+            companyId: 806559,
+            customerOwnerId: 26540869,
+            acCode: "878",
+            customerOwnerName: "Paul Conroy Ltd",
+            reference: "TOOLONG",
+            productTrans: [{ productId: 1 }],
+          },
+        },
+      ]),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+});
+
+test("update Quote long reference schema is rejected", () => {
+  const result = quoteManualReferenceSchema.safeParse("QUOTE-TEST-20260813-01");
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(
+      result.error.issues[0]!.message,
+      QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+    );
+  }
+
+  assert.throws(
+    () => assertQuoteManualReferenceLengthOrThrow("QUOTE-TEST-20260813-01"),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
 });

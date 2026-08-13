@@ -909,6 +909,7 @@ export function normalizeBatchItems(
     if (path === "/v1/salesInvoices") item = buildSalesInvoicePayload({ ...(raw as any), customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo as any, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
     if (path === "/v1/salesCreditNotes") item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
     if (path === "/v1/quotes") {
+      assertQuoteManualReferenceLengthOrThrow(raw.reference);
       if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
         item = raw;
       } else {
@@ -1240,6 +1241,34 @@ export function buildSalesCreditNotePayload(args: {
     };
   }
   
+  /**
+   * BRC Quote manual references are stored in a 6-character field.
+   * Evidence: official Quote sample uses "000032"; live Company C POST of a longer
+   * reference was accepted then returned truncated to 6 characters on GET; existing
+   * Company C quote references fit within 6 characters. Red rejects longer values
+   * rather than silently truncating.
+   */
+  export const QUOTE_MANUAL_REFERENCE_MAX_LENGTH = 6;
+
+  export const QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE =
+    "Quote reference must be 6 characters or fewer because Big Red Cloud truncates longer references.";
+
+  export const QUOTE_MANUAL_REFERENCE_DESCRIPTION =
+    `Optional manual quote reference, max ${QUOTE_MANUAL_REFERENCE_MAX_LENGTH} characters. Required when quote references are manual, or when the quote reference setting is unknown. ${QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE}`;
+
+  export function assertQuoteManualReferenceLengthOrThrow(
+    reference: unknown
+  ): void {
+    if (reference === undefined || reference === null) {
+      return;
+    }
+
+    const value = String(reference);
+    if (value.length > QUOTE_MANUAL_REFERENCE_MAX_LENGTH) {
+      throw new Error(QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE);
+    }
+  }
+
   export function buildQuotePayload(args: {
     companyId?: number;
     customerOwnerId: number;
@@ -1266,6 +1295,7 @@ export function buildSalesCreditNotePayload(args: {
     analysisCategoryId: number;
     accountCode: string;
   }) {
+    assertQuoteManualReferenceLengthOrThrow(args.reference);
     const net = round2(args.quantity * args.unitPrice);
     const vat = round2(net * (args.vatPercentage / 100));
     const total = round2(net + vat);
