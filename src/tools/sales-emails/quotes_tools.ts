@@ -9,7 +9,12 @@ import {
     jsonResponse,
     type JsonRecord,
   }  from "../../shared.js";
-  import{buildQuotePayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow} from "../general/payloads_tools.js";
+  import{
+    buildQuoteCreatePayloadFromToolArgs,
+    SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION,
+    SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION,
+    enforceSalesProductLineAnalysisOrThrow,
+  } from "../general/payloads_tools.js";
   import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
 
   export function registerQuoteTools(server:ServerType){
@@ -78,7 +83,7 @@ const quoteSchemaBase = {
           },
           "manual"
         );
-        payload = buildQuotePayload(args);
+        payload = buildQuoteCreatePayloadFromToolArgs(args as Record<string, unknown>);
         enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
           confirmCrAnalysisCategory,
         });
@@ -108,7 +113,7 @@ const quoteSchemaBase = {
           "generated",
           { userConfirmedAutoGenerate: confirmQuotesAutoGenerateInBrc }
         );
-        payload = buildQuotePayload(args);
+        payload = buildQuoteCreatePayloadFromToolArgs(args as Record<string, unknown>);
         enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
           confirmCrAnalysisCategory,
         });

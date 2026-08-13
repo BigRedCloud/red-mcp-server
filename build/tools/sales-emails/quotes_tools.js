@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { brcFetch, brcJsonRequest, cloneJson, companyNameSchema, getTimestampFromRecord, jsonResponse, } from "../../shared.js";
-import { buildQuotePayload, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow } from "../general/payloads_tools.js";
+import { buildQuoteCreatePayloadFromToolArgs, SALES_DOCUMENT_ANALYSIS_CATEGORY_DESCRIPTION, SALES_DOCUMENT_SALES_REP_REQUIRED_DESCRIPTION, enforceSalesProductLineAnalysisOrThrow, } from "../general/payloads_tools.js";
 import { loadAndEnforceReferenceSettings } from "../../guards/company_reference_settings.js";
 export function registerQuoteTools(server) {
     // Quote tools ----------------------------------------------------------------
@@ -50,7 +50,7 @@ export function registerQuoteTools(server) {
                 poNumber: args.poNumber,
                 ddNumber: args.ddNumber,
             }, "manual");
-            payload = buildQuotePayload(args);
+            payload = buildQuoteCreatePayloadFromToolArgs(args);
             enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
                 confirmCrAnalysisCategory,
             });
@@ -69,7 +69,7 @@ export function registerQuoteTools(server) {
                 poNumber: args.poNumber,
                 ddNumber: args.ddNumber,
             }, "generated", { userConfirmedAutoGenerate: confirmQuotesAutoGenerateInBrc });
-            payload = buildQuotePayload(args);
+            payload = buildQuoteCreatePayloadFromToolArgs(args);
             enforceSalesProductLineAnalysisOrThrow(payload, "quote", {
                 confirmCrAnalysisCategory,
             });

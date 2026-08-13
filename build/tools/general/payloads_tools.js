@@ -952,6 +952,54 @@ export function buildQuotePayload(args) {
     }
     return payload;
 }
+/**
+ * Builds the nested BRC Quote POST body from flat MCP create-quote tool args.
+ * Shared by confirmation preview and confirmed POST so both use the same path.
+ */
+export function buildQuoteCreatePayloadFromToolArgs(args) {
+    const companyIdRaw = args.companyId;
+    const companyId = typeof companyIdRaw === "number"
+        ? companyIdRaw
+        : companyIdRaw !== undefined && companyIdRaw !== null && String(companyIdRaw).trim() !== ""
+            ? Number(companyIdRaw)
+            : undefined;
+    return buildQuotePayload({
+        companyId: Number.isFinite(companyId) ? companyId : undefined,
+        customerOwnerId: Number(args.customerOwnerId),
+        acCode: String(args.acCode ?? ""),
+        customerOwnerName: String(args.customerOwnerName ?? ""),
+        comments: String(args.comments ?? ""),
+        entryDate: String(args.entryDate ?? ""),
+        procDate: String(args.procDate ?? ""),
+        vatTypeId: args.vatTypeId !== undefined && args.vatTypeId !== null
+            ? Number(args.vatTypeId)
+            : undefined,
+        saleRepId: Number(args.saleRepId),
+        saleRepCode: String(args.saleRepCode ?? ""),
+        reference: args.reference !== undefined && args.reference !== null
+            ? String(args.reference)
+            : undefined,
+        poNumber: args.poNumber !== undefined && args.poNumber !== null
+            ? String(args.poNumber)
+            : undefined,
+        ddNumber: args.ddNumber !== undefined && args.ddNumber !== null
+            ? String(args.ddNumber)
+            : undefined,
+        deliveryTo: args.deliveryTo,
+        layoutType: args.layoutType !== undefined && args.layoutType !== null
+            ? Number(args.layoutType)
+            : undefined,
+        productId: Number(args.productId),
+        productCode: String(args.productCode ?? ""),
+        quantity: Number(args.quantity),
+        unitPrice: Number(args.unitPrice),
+        vatRateId: Number(args.vatRateId),
+        vatPercentage: Number(args.vatPercentage),
+        tranNote: String(args.tranNote ?? ""),
+        analysisCategoryId: Number(args.analysisCategoryId),
+        accountCode: String(args.accountCode ?? ""),
+    });
+}
 export function buildBankAccountPayload(args) {
     const acCode = asString(args.acCode ?? args.code);
     const details = asString(args.details ?? args.name ?? args.accountName);

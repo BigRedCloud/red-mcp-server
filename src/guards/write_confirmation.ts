@@ -4,6 +4,7 @@ import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.j
 import { jsonResponse } from "../shared.js";
 import {
   applySalesPriceBasisToRawPayload,
+  buildQuoteCreatePayloadFromToolArgs,
   enforceSalesProductLineProductIdOrThrow,
 } from "../tools/general/payloads_tools.js";
 import {
@@ -460,6 +461,8 @@ async function validateCounterpartyForWrite(args: {
   toolName: string;
   companyName?: string;
   payload: Record<string, unknown>;
+  /** When set, used for payloadPreview only (e.g. nested Quote POST body). */
+  displayPayload?: Record<string, unknown>;
 }) {
   const kind = getCounterpartyKind(args.toolName);
   if (!kind) {
@@ -535,8 +538,10 @@ async function validateCounterpartyForWrite(args: {
     hint
   );
 
+  const previewSource = args.displayPayload ?? args.payload;
+
   return jsonResponse(
-    await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
+    await enrichWriteConfirmationResponse(args.toolName, args.companyName, previewSource, {
       status: "counterparty_confirmation_required",
       message: [
         `Red stopped because the ${label} must be explicitly confirmed in the current conversation before showing a validated preview for posting.`,
@@ -561,7 +566,7 @@ async function validateCounterpartyForWrite(args: {
       suggestedCounterpartyName: hint,
       batchCounterpartyNames: isBatch ? batchHints : undefined,
       exampleUserQuestion: exampleQuestion,
-      payloadPreview: buildWritePayloadPreview(args.payload),
+      payloadPreview: buildWritePayloadPreview(previewSource),
       confirmationField: "confirmCounterpartyExplicit",
       confirmWriteRequiresExplicitCounterparty: true,
     })
@@ -767,6 +772,28 @@ async function enrichWriteConfirmationResponse(
   };
 }
 
+const SENSITIVE_WRITE_PREVIEW_KEYS = [
+  "routeToken",
+  "connectionRef",
+  "apiKey",
+  "api_key",
+  "credentials",
+  "credential",
+  "password",
+  "authorization",
+  "Authorization",
+  "auth",
+  "session",
+  "sessionId",
+  "mcpSessionId",
+  "mcp_session_id",
+] as const;
+
+const QUOTE_CREATE_WRITE_TOOLS = new Set([
+  "brc_create_quote",
+  "brc_create_quote_gen_ref",
+]);
+
 function buildWritePayloadPreview(
   input: Record<string, unknown>
 ): Record<string, unknown> {
@@ -778,13 +805,43 @@ function buildWritePayloadPreview(
     }
   }
 
+  for (const key of SENSITIVE_WRITE_PREVIEW_KEYS) {
+    delete preview[key];
+  }
+
   return preview;
+}
+
+function quoteCreateEndpoint(toolName: string): string | undefined {
+  if (toolName === "brc_create_quote") {
+    return "POST /v1/quotes";
+  }
+  if (toolName === "brc_create_quote_gen_ref") {
+    return "POST /v1/quotes/createQuoteWithGeneratingReference";
+  }
+  return undefined;
+}
+
+/**
+ * Builds the payload shown in confirmation_required / counterparty preview.
+ * Quote create tools expose the nested BRC body from buildQuotePayload.
+ */
+function buildToolWritePayloadPreview(
+  toolName: string,
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  if (QUOTE_CREATE_WRITE_TOOLS.has(toolName)) {
+    return buildWritePayloadPreview(buildQuoteCreatePayloadFromToolArgs(args));
+  }
+
+  return buildWritePayloadPreview(args);
 }
 
 export async function requireWriteConfirmation(args: {
   toolName: string;
   companyName?: string;
   payload?: unknown;
+  endpoint?: string;
 }) {
   const action = writeActionLabel(args.toolName);
   const draftFields = draftFieldsForTool(args.toolName);
@@ -798,6 +855,7 @@ export async function requireWriteConfirmation(args: {
     payload,
     {
       status: "confirmation_required",
+      confirmationRequired: true,
       message: [
         `Red stopped before ${action} because explicit user confirmation is required.`,
         "",
@@ -823,6 +881,7 @@ export async function requireWriteConfirmation(args: {
       companyName: args.companyName,
       proposedAction: action,
       draftFieldsToShow: draftFields,
+      endpoint: args.endpoint,
       payloadPreview: payload,
       confirmationField: "confirmWrite",
       preflightPassedIsNotConfirmation: true,
@@ -844,27 +903,27 @@ export function wrapWriteToolHandler<T extends Record<string, unknown>>(
   return async (args: T) => {
     const companyName =
       typeof args.companyName === "string" ? args.companyName : undefined;
+    const rawArgs = args as Record<string, unknown>;
 
-    runSalesDocumentProductIdPreflight(toolName, args as Record<string, unknown>);
-    await runSalesDocumentSalesVatPreflight(
-      toolName,
-      companyName,
-      args as Record<string, unknown>
-    );
+    runSalesDocumentProductIdPreflight(toolName, rawArgs);
+    await runSalesDocumentSalesVatPreflight(toolName, companyName, rawArgs);
 
     const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(
       toolName,
       companyName,
-      args as Record<string, unknown>
+      rawArgs
     );
     if (genRefValidationBlock) {
       return genRefValidationBlock;
     }
 
+    const displayPayload = buildToolWritePayloadPreview(toolName, rawArgs);
+
     const counterpartyBlock = await validateCounterpartyForWrite({
       toolName,
       companyName,
-      payload: args as Record<string, unknown>,
+      payload: rawArgs,
+      displayPayload,
     });
     if (counterpartyBlock) {
       return counterpartyBlock;
@@ -878,7 +937,8 @@ export function wrapWriteToolHandler<T extends Record<string, unknown>>(
         const postCounterpartyBlock = await validateCounterpartyForWrite({
           toolName,
           companyName,
-          payload: args as Record<string, unknown>,
+          payload: rawArgs,
+          displayPayload,
         });
         if (postCounterpartyBlock) {
           return postCounterpartyBlock;
@@ -891,7 +951,8 @@ export function wrapWriteToolHandler<T extends Record<string, unknown>>(
     return requireWriteConfirmation({
       toolName,
       companyName,
-      payload: buildWritePayloadPreview(args),
+      payload: displayPayload,
+      endpoint: quoteCreateEndpoint(toolName),
     });
   };
 }
