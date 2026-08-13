@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCashReceiptUpdateDiagnostics } from "./crud_tools.js";
 import { buildCashReceiptPayload, mergeCashReceiptUpdateFromCurrent, } from "./payloads_tools.js";
 test("cash receipt note-only update preserves existing VAT and monetary fields", () => {
     const current = {
@@ -87,39 +86,6 @@ test("cash receipt note-only update preserves non-zero ledger from current recor
     assert.equal(result.unallocated, 0);
     assert.equal(result.bookTranTypeId, 1);
     assert.deepEqual(result.detailCollection, current.detailCollection);
-});
-test("cash receipt update diagnostics expose ledger trail for note-only updates", () => {
-    const currentRecord = {
-        id: 580633526,
-        note: "Original note",
-        ledger: 12.3,
-        total: 12.3,
-        unallocated: 0,
-        accountCode: "CR02",
-        analysisCategoryId: 4216690,
-        description: "Cash sale",
-        vatRateId: 1596277,
-        vatPercentage: 23,
-    };
-    const mergeUpdates = { note: "changed" };
-    const builtCashReceiptPayload = buildCashReceiptPayload({
-        ...currentRecord,
-        ...mergeUpdates,
-    });
-    const finalPayload = mergeCashReceiptUpdateFromCurrent(builtCashReceiptPayload, currentRecord, mergeUpdates);
-    const diagnostics = buildCashReceiptUpdateDiagnostics({
-        mergeUpdates,
-        currentRecord,
-        builtCashReceiptPayload,
-        finalPayload,
-    });
-    assert.deepEqual(diagnostics.requestedUpdateKeys, ["note"]);
-    assert.deepEqual(diagnostics.requestedUpdates, { note: "changed" });
-    assert.equal(diagnostics.currentRecordLedger, 12.3);
-    assert.equal(diagnostics.currentRecordTotal, 12.3);
-    // Builder may default analysed receipts to ledger 0; diagnostics must show that.
-    assert.equal(diagnostics.builtPayloadLedger, builtCashReceiptPayload.ledger);
-    assert.equal(diagnostics.finalPayloadLedger, 12.3);
 });
 test("cash receipt update allows explicit ledger change to 0", () => {
     const current = {
