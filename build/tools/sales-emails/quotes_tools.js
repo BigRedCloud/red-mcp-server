@@ -11,6 +11,19 @@ export const quoteManualReferenceSchema = z
 export const quoteManualReferenceFieldSchema = quoteManualReferenceSchema
     .optional()
     .describe(QUOTE_MANUAL_REFERENCE_DESCRIPTION);
+/**
+ * Builds the PUT body for brc_update_quote: clone the current Quote from GET,
+ * then apply only an explicit manual reference change. Staging proved Quote.note
+ * is not persisted by PUT /v1/quotes/{id}; do not advertise or patch note here.
+ */
+export function buildQuoteReferenceUpdatePayload(current, reference) {
+    assertQuoteManualReferenceLengthOrThrow(reference);
+    const payload = cloneJson(current);
+    if (reference !== undefined) {
+        payload.reference = reference;
+    }
+    return payload;
+}
 export function registerQuoteTools(server) {
     // Quote tools ----------------------------------------------------------------
     const quoteSchemaBase = {
@@ -89,24 +102,18 @@ export function registerQuoteTools(server) {
             return jsonResponse({ message: "Error creating quote with a generated reference.", companyName, endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
         }
     });
-    server.tool("brc_update_quote", "Updates a BRC quote using structured safe text/reference fields. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.", {
+    server.tool("brc_update_quote", "Updates a BRC quote's manual reference only. Staging has proven Quote.reference is writable via PUT /v1/quotes/{id}; Quote.note is not persisted by this endpoint and is not accepted here. Loads the current quote, preserves all other fields (including timestamp, product lines, analysis entries, totals, customer, sales rep, dates, comments, and closed state), applies the new reference, then PUTs the full record. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.", {
         companyName: companyNameSchema,
         id: z.union([z.string(), z.number()]).describe("Quote id."),
-        note: z.string().optional(),
         reference: quoteManualReferenceFieldSchema,
-    }, async ({ companyName, id, note, reference }) => {
-        assertQuoteManualReferenceLengthOrThrow(reference);
+    }, async ({ companyName, id, reference }) => {
         const current = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
         if (!current || typeof current !== "object" || Array.isArray(current))
             throw new Error(`Could not read quote ${id} before update.`);
-        const payload = cloneJson(current);
-        if (note !== undefined)
-            payload.note = note;
-        if (reference !== undefined)
-            payload.reference = reference;
+        const payload = buildQuoteReferenceUpdatePayload(current, reference);
         const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/quotes/${encodeURIComponent(id)}`, payload);
         const verification = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
-        return jsonResponse({ message: "Quote updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
+        return jsonResponse({ message: "Quote reference updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
     });
     server.tool("brc_close_quote", "Closes a BRC quote.", {
         companyName: companyNameSchema,

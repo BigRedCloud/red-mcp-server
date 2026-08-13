@@ -13,7 +13,10 @@ import {
   normalizeBatchItems,
   QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE,
 } from "../general/payloads_tools.js";
-import { quoteManualReferenceSchema } from "./quotes_tools.js";
+import {
+  buildQuoteReferenceUpdatePayload,
+  quoteManualReferenceSchema,
+} from "./quotes_tools.js";
 
 function parseBody(result: unknown): Record<string, unknown> {
   const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
@@ -347,6 +350,93 @@ test("update Quote long reference schema is rejected", () => {
 
   assert.throws(
     () => assertQuoteManualReferenceLengthOrThrow("QUOTE-TEST-20260813-01"),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE
+  );
+});
+
+test("brc_update_quote reference-only update clones current Quote and patches reference", () => {
+  const current = {
+    id: 2892396,
+    companyId: 806559,
+    customerOwnerId: 26540869,
+    vatTypeId: 1,
+    saleRepId: 153992,
+    saleRepCode: "7777",
+    entryDate: "2026-08-13T00:00:00",
+    procDate: "2026-08-13T00:00:00",
+    closedDate: null,
+    reference: "QT0001",
+    customerOwnerName: "Paul Conroy Ltd",
+    comments: "Keep comments",
+    layoutType: 1,
+    total: 12.3,
+    totalVat: 2.3,
+    totalNet: 10,
+    note: null,
+    acCode: "878",
+    timeStamp: "ABC123timestamp=",
+    productTrans: [
+      {
+        id: 100,
+        companyId: 806559,
+        percentage: 23,
+        vatRateId: 1596277,
+        productId: 5023355,
+        productCode: "PR001",
+        quantity: 1,
+        unitPrice: 10,
+        amount: 12.3,
+        vatAmount: 2.3,
+        tranNotes: ["Line note"],
+        acEntries: [
+          {
+            id: 200,
+            companyId: 806559,
+            accountCode: "SA01",
+            analysisCategoryId: 4216701,
+            quoteProductTranId: 100,
+            value: 10,
+          },
+        ],
+        vatAnalysisTypeId: 0,
+      },
+    ],
+  };
+
+  const payload = buildQuoteReferenceUpdatePayload(current, "QT0002");
+
+  assert.equal(payload.reference, "QT0002");
+  assert.equal(payload.timeStamp, "ABC123timestamp=");
+  assert.equal(payload.note, null);
+  assert.equal(payload.comments, "Keep comments");
+  assert.equal(payload.customerOwnerId, 26540869);
+  assert.equal(payload.acCode, "878");
+  assert.equal(payload.saleRepId, 153992);
+  assert.equal(payload.saleRepCode, "7777");
+  assert.equal(payload.totalNet, 10);
+  assert.equal(payload.totalVat, 2.3);
+  assert.equal(payload.total, 12.3);
+  assert.equal(payload.closedDate, null);
+  assert.deepEqual(payload.productTrans, current.productTrans);
+
+  const line = (payload.productTrans as Record<string, unknown>[])[0]!;
+  assert.ok(Array.isArray(line.acEntries));
+  assert.deepEqual(line.acEntries, current.productTrans[0]!.acEntries);
+
+  // Mutation safety: clone, do not rewrite the GET record in place.
+  assert.equal(current.reference, "QT0001");
+  assert.notEqual(payload.productTrans, current.productTrans);
+});
+
+test("brc_update_quote rejects reference longer than 6 characters before PUT body is built", () => {
+  assert.throws(
+    () =>
+      buildQuoteReferenceUpdatePayload(
+        { id: 1, reference: "QT0001", timeStamp: "ts" },
+        "TOOLONG"
+      ),
     (error: unknown) =>
       error instanceof Error &&
       error.message === QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE

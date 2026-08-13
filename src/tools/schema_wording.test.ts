@@ -220,6 +220,20 @@ test("quote manual reference schemas enforce max 6 characters", () => {
   }
 });
 
+test("brc_update_quote advertises reference-only updates and does not expose note", () => {
+  const { schema, description } = getTool("brc_update_quote");
+
+  assert.equal("note" in schema, false, "note must not be in brc_update_quote schema");
+  assert.ok(schema.reference, "reference must remain in brc_update_quote schema");
+  assert.match(description, /manual reference only/i);
+  assert.match(description, /note is not persisted/i);
+  assert.equal(
+    /update quote note/i.test(description),
+    false,
+    "description must not advertise updating quote notes"
+  );
+});
+
 test("nominal report tools state monthly values are period movements", () => {
   for (const name of [
     "brc_grouped_nominal_accounts_report",

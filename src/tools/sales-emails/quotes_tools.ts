@@ -33,6 +33,23 @@ import {
       .optional()
       .describe(QUOTE_MANUAL_REFERENCE_DESCRIPTION);
 
+  /**
+   * Builds the PUT body for brc_update_quote: clone the current Quote from GET,
+   * then apply only an explicit manual reference change. Staging proved Quote.note
+   * is not persisted by PUT /v1/quotes/{id}; do not advertise or patch note here.
+   */
+  export function buildQuoteReferenceUpdatePayload(
+    current: JsonRecord,
+    reference: string | undefined
+  ): JsonRecord {
+    assertQuoteManualReferenceLengthOrThrow(reference);
+    const payload = cloneJson(current) as JsonRecord;
+    if (reference !== undefined) {
+      payload.reference = reference;
+    }
+    return payload;
+  }
+
   export function registerQuoteTools(server:ServerType){
 
 // Quote tools ----------------------------------------------------------------
@@ -143,23 +160,19 @@ const quoteSchemaBase = {
   
   server.tool(
     "brc_update_quote",
-    "Updates a BRC quote using structured safe text/reference fields. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.",
+    "Updates a BRC quote's manual reference only. Staging has proven Quote.reference is writable via PUT /v1/quotes/{id}; Quote.note is not persisted by this endpoint and is not accepted here. Loads the current quote, preserves all other fields (including timestamp, product lines, analysis entries, totals, customer, sales rep, dates, comments, and closed state), applies the new reference, then PUTs the full record. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.",
     {
       companyName: companyNameSchema,
       id: z.union([z.string(), z.number()]).describe("Quote id."),
-      note: z.string().optional(),
       reference: quoteManualReferenceFieldSchema,
     },
-    async ({ companyName, id, note, reference }) => {
-      assertQuoteManualReferenceLengthOrThrow(reference);
+    async ({ companyName, id, reference }) => {
       const current = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
       if (!current || typeof current !== "object" || Array.isArray(current)) throw new Error(`Could not read quote ${id} before update.`);
-      const payload = cloneJson(current) as JsonRecord;
-      if (note !== undefined) payload.note = note;
-      if (reference !== undefined) payload.reference = reference;
+      const payload = buildQuoteReferenceUpdatePayload(current as JsonRecord, reference);
       const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/quotes/${encodeURIComponent(id)}`, payload);
       const verification = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
-      return jsonResponse({ message: "Quote updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
+      return jsonResponse({ message: "Quote reference updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
     }
   );
   

@@ -391,7 +391,8 @@ export const ACTION_WORKFLOW_REGISTRY: readonly ActionWorkflowDefinition[] = [
   },
   {
     workflowId: "update_quote",
-    description: "Update a quote after confirming the record.",
+    description:
+      "Update a quote's manual reference after confirming the record. Does not update Quote notes.",
     allowedTools: ["brc_update_quote"],
     actionVerbs: ["update", "change", "edit"],
     businessNouns: ["quote"],
