@@ -6,7 +6,8 @@ import { jsonResponse } from "../../shared.js";
 import { routeRequest } from "../../routing/route-request.js";
 
 export const ROUTE_REQUEST_TOOL_DESCRIPTION = [
-  "MANDATORY FIRST STEP for Red requests that may create, update, delete, post, email, or batch-write company data.",
+  "MANDATORY FIRST STEP for broad Red requests involving read, create, update, delete, correct, undo, reverse, email, or batch actions.",
+  "This tool is brc_route_request.",
   "Classify and route a user request between Red's two main behaviours: action (perform the accounting workflow) and help (manual Big Red Cloud instructions).",
   "Also returns connection, read, correction, unsupported_action, or unknown when those specialised modes apply.",
   "Pass the user's complete original message — never only a confirmation word such as yes or delete it when starting a new action.",

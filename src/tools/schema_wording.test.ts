@@ -108,6 +108,28 @@ test("brc_start_company_connection guides reconnect and fresh-link behaviour", (
   assert.match(description, /empty list/i);
 });
 
+test("brc_start_company_connection registered description includes deferred-search intents", () => {
+  const { description } = getTool("brc_start_company_connection");
+  assert.match(description, /MANDATORY FIRST TOOL/i);
+  assert.match(description, /connect my companies to Red/i);
+  assert.match(description, /does not require companyName or connectionRef/i);
+  assert.match(description, /Do not tell the user to go manually to the Big Red Cloud website/i);
+});
+
+test("brc_confirm_company_connection registered description includes finish/complete connection wording", () => {
+  const { description } = getTool("brc_confirm_company_connection");
+  assert.match(description, /confirm company connection/i);
+  assert.match(description, /finish connection/i);
+  assert.match(description, /complete connection after the secure page/i);
+});
+
+test("brc_list_company_contexts registered description includes connected-company discovery wording", () => {
+  const { description } = getTool("brc_list_company_contexts");
+  assert.match(description, /which companies are connected/i);
+  assert.match(description, /show connected companies/i);
+  assert.match(description, /check existing Red company connections/i);
+});
+
 test("brc_list_company_contexts says connection credentials, not API keys", () => {
   const { description } = getTool("brc_list_company_contexts");
   assert.match(description, /connection credentials are never returned/i);

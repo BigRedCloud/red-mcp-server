@@ -1,5 +1,5 @@
 {
-  "storedAt": "2026-08-11T17:45:26.187Z",
+  "storedAt": "2026-08-17T23:19:47.815Z",
   "resources": [
     {
       "title": "Integration bank feeds",
@@ -10,7 +10,7 @@
       "isActive": true,
       "contentType": "video",
       "source": "Big Red Cloud",
-      "lastReviewed": "2026-08-11",
+      "lastReviewed": "2026-08-17",
       "generatedFrom": "webinar_video_routing_index.csv",
       "needsReview": false
     }

@@ -20,14 +20,14 @@
     "test:readonly:legacy": "node scripts/tests/test_readonly_tools.mjs",
     "test:dev:legacy": "node scripts/tests/dev-only/dev_test.mjs",
     "test:email:legacy": "node scripts/tests/dev-only/dev_test_email_tools.mjs",
-    "test:unit": "npm run build && node --test build/src/**/*.test.js",
+    "test:unit": "npm run build && node scripts/run_node_tests.mjs --unit",
     "test:security": "npm run build && node --test build/tests/security/**/*.test.js",
     "test:config": "npm run build && node --test build/tests/config/**/*.test.js",
-    "test:integration": "npm run build && node --test build/tests/integration/**/*.test.js",
+    "test:integration": "node scripts/run_node_tests.mjs --http",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "leftovers:scan": "node scripts/tests/dev-only/dev_test_cleanup.mjs scan",
     "leftovers:delete": "node scripts/tests/dev-only/dev_test_cleanup.mjs delete",
-    "test": "npm run build && node --test build/**/*.test.js && npm test --prefix functions/brc-edu-resource-processor",
+    "test": "npm run build && node scripts/run_node_tests.mjs && npm test --prefix functions/brc-edu-resource-processor",
     "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs"
   },
   "dependencies": {
