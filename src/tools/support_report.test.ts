@@ -23,6 +23,13 @@ import {
   setApiKeyForCompany,
   type RedAuditEntry,
 } from "../shared.js";
+import {
+  __resetBrcFailureTelemetryForTests,
+} from "../telemetry/brc_failure.js";
+import {
+  buildTelemetryCustomDimensions,
+  runWithRedTelemetryContext,
+} from "../telemetry/identity.js";
 import { registerAuditTools } from "./audit_session_tools.js";
 
 const CUSTOMER_FACING_AUDIT_KEYS = new Set([
@@ -44,6 +51,21 @@ const CUSTOMER_FACING_AUDIT_KEYS = new Set([
 const GET_FAILURE = new Error(
   'BRC API GET /v1/quotes/999999999 failed for "Company C": 500 Internal Server Error. Unknown error occurred. Please contact the Big Red Cloud Support Team.'
 );
+
+const STAGING_CONNECTION_SESSION_ID = "7f9104a2-f4bc-455b-8bac-f8ebbd796878";
+const STAGING_TELEMETRY_CLIENT_ID = "41a462cb-e28c-4964-8e64-968c10509d46";
+
+function withStagingTelemetry<T>(fn: () => T): T {
+  return runWithRedTelemetryContext(
+    {
+      connectionSessionId: STAGING_CONNECTION_SESSION_ID,
+      telemetryClientId: STAGING_TELEMETRY_CLIENT_ID,
+      environment: "staging",
+      toolName: "brc_update_quote",
+    },
+    fn
+  );
+}
 
 function listedTechnical(companyName: string): RedAuditEntry[] {
   return getRedAuditLog({
@@ -146,79 +168,144 @@ test("customer-facing audit output does not gain support-report technical fields
   assert.equal("connectionId" in customerFacing[0]!, false);
   assert.equal("userId" in customerFacing[0]!, false);
   assert.equal("statusCode" in customerFacing[0]!, false);
+  assert.equal("failedMethod" in customerFacing[0]!, false);
+  assert.equal("failedPath" in customerFacing[0]!, false);
+  assert.equal("telemetryConnectionSessionId" in customerFacing[0]!, false);
+  assert.equal("telemetryClientId" in customerFacing[0]!, false);
 });
 
 test("support report includes success, confirmed Quote preflight failure, and routed request", async () => {
   __resetRedAuditLogForTests();
   __resetInitiatingRequestsForTests();
+  __resetBrcFailureTelemetryForTests();
 
-  recordRedAuditEntry({
-    companyName: "Company C",
-    method: "PUT",
-    path: "/v1/quotes/2892411",
-    outcome: "success",
-    initiatingRequest: "Update Quote 2892411 reference to QA0002",
+  await withStagingTelemetry(async () => {
+    recordRedAuditEntry({
+      companyName: "Company C",
+      method: "PUT",
+      path: "/v1/quotes/2892411",
+      outcome: "success",
+      initiatingRequest: "Update Quote 2892411 reference to QA0002",
+      stage: "write",
+      statusCode: 200,
+      statusText: "OK",
+    });
+
+    const wrapped = wrapWriteToolHandler("brc_update_quote", async () => {
+      throw GET_FAILURE;
+    });
+
+    await runWithInitiatingRequest(
+      "Change Quote id 999999999 reference to QA0001",
+      async () => {
+        await assert.rejects(() =>
+          invokeWrapped(wrapped, {
+            companyName: "Company C",
+            id: 999999999,
+            reference: "QA0001",
+            confirmWrite: true,
+          })
+        );
+      }
+    );
+
+    const azureDims = buildTelemetryCustomDimensions();
+    const technical = listedTechnical("Company C");
+    assert.equal(technical.length, 2);
+    const report = buildRedSupportReport({
+      companyName: "Company C",
+      entries: technical,
+      generatedAtUtc: "2026-08-17T14:02:10.718Z",
+      redVersion: "1.5.0",
+      environment: "staging",
+    });
+
+    assert.equal(
+      report.filename,
+      "red-support-report-Company-C-20260817T140210Z.txt"
+    );
+    assert.match(report.text, /Red Support Diagnostic Report/);
+    assert.match(report.text, /generatedAtUtc: 2026-08-17T14:02:10.718Z/);
+    assert.match(report.text, /companyName: Company C/);
+    assert.match(report.text, /redVersion: 1.5.0/);
+    assert.match(report.text, /environment: staging/);
+    assert.match(report.text, /AZURE CORRELATION/);
+    assert.match(
+      report.text,
+      new RegExp(
+        `telemetryConnectionSessionId: ${STAGING_CONNECTION_SESSION_ID}`
+      )
+    );
+    assert.match(
+      report.text,
+      new RegExp(`telemetryClientId: ${STAGING_TELEMETRY_CLIENT_ID}`)
+    );
+    assert.equal(
+      report.text.match(/telemetryConnectionSessionId: ([^\r\n]+)/)?.[1],
+      azureDims["red.connection_session_id"]
+    );
+    assert.equal(
+      report.text.match(/telemetryClientId: ([^\r\n]+)/)?.[1],
+      azureDims["red.telemetry_client_id"]
+    );
+    assert.match(
+      report.text,
+      /Use telemetryConnectionSessionId to locate this Red session in Application Insights/
+    );
+    assert.match(report.text, /mcpSessionId:/);
+    assert.match(report.text, /connectionId:/);
+    assert.match(report.text, /does not receive the full chat transcript/i);
+    assert.match(report.text, /attemptedWrites: 2/);
+    assert.match(report.text, /successes: 1/);
+    assert.match(report.text, /failures: 1/);
+    assert.match(report.text, /Quote 2892411/);
+    assert.match(report.text, /SUCCESS/);
+    assert.match(
+      report.text,
+      /Intended write:\r?\nPUT \/v1\/quotes\/2892411/
+    );
+    assert.match(
+      report.text,
+      /Actual BRC request:\r?\nPUT \/v1\/quotes\/2892411/
+    );
+    assert.match(report.text, /Quote 999999999/);
+    assert.match(report.text, /FAILURE/);
+    assert.match(report.text, /Preflight/);
+    assert.match(
+      report.text,
+      /Intended write:\r?\nPUT \/v1\/quotes\/999999999/
+    );
+    assert.match(
+      report.text,
+      /Actual BRC request:\r?\nGET \/v1\/quotes\/999999999\r?\n500 Internal Server Error/
+    );
+    assert.match(report.text, /The intended write did not run\./);
+    assert.equal(
+      /Actual BRC request:\r?\nPUT \/v1\/quotes\/999999999/.test(report.text),
+      false
+    );
+    assert.match(report.text, /500 Internal Server Error/);
+    assert.match(report.text, /Unknown error occurred/);
+    assert.match(report.text, /Change Quote id 999999999 reference to QA0001/);
+    assert.equal(report.text.includes("userId"), false);
+    assert.equal("userId" in technical[1]!, false);
+    assert.equal(technical[1]!.method, "PUT");
+    assert.equal(technical[1]!.failedMethod, "GET");
+    assert.equal(technical[1]!.failedPath, "/v1/quotes/999999999");
+
+    const customerFacing = listedCustomer("Company C");
+    assert.equal("telemetryConnectionSessionId" in customerFacing[1]!, false);
+    assert.equal("telemetryClientId" in customerFacing[1]!, false);
+    assert.equal("failedMethod" in customerFacing[1]!, false);
+    assert.equal(customerFacing[1]!.method, "PUT");
+
+    const beforeCount = listedTechnical("Company C").length;
+    buildRedSupportReport({
+      companyName: "Company C",
+      entries: listedTechnical("Company C"),
+    });
+    assert.equal(listedTechnical("Company C").length, beforeCount);
   });
-
-  const wrapped = wrapWriteToolHandler("brc_update_quote", async () => {
-    throw GET_FAILURE;
-  });
-
-  await runWithInitiatingRequest(
-    "Change Quote id 999999999 reference to QA0001",
-    async () => {
-      await assert.rejects(() =>
-        invokeWrapped(wrapped, {
-          companyName: "Company C",
-          id: 999999999,
-          reference: "QA0001",
-          confirmWrite: true,
-        })
-      );
-    }
-  );
-
-  const technical = listedTechnical("Company C");
-  assert.equal(technical.length, 2);
-  const report = buildRedSupportReport({
-    companyName: "Company C",
-    entries: technical,
-    generatedAtUtc: "2026-08-17T14:02:10.718Z",
-    redVersion: "1.5.0",
-    environment: "staging",
-  });
-
-  assert.equal(
-    report.filename,
-    "red-support-report-Company-C-20260817T140210Z.txt"
-  );
-  assert.match(report.text, /Red Support Diagnostic Report/);
-  assert.match(report.text, /generatedAtUtc: 2026-08-17T14:02:10.718Z/);
-  assert.match(report.text, /companyName: Company C/);
-  assert.match(report.text, /redVersion: 1.5.0/);
-  assert.match(report.text, /environment: staging/);
-  assert.match(report.text, /mcpSessionId:/);
-  assert.match(report.text, /does not receive the full chat transcript/i);
-  assert.match(report.text, /attemptedWrites: 2/);
-  assert.match(report.text, /successes: 1/);
-  assert.match(report.text, /failures: 1/);
-  assert.match(report.text, /Quote 2892411/);
-  assert.match(report.text, /SUCCESS/);
-  assert.match(report.text, /Quote 999999999/);
-  assert.match(report.text, /FAILURE/);
-  assert.match(report.text, /Preflight/);
-  assert.match(report.text, /500 Internal Server Error/);
-  assert.match(report.text, /Unknown error occurred/);
-  assert.match(report.text, /Change Quote id 999999999 reference to QA0001/);
-  assert.equal(report.text.includes("userId"), false);
-  assert.equal("userId" in technical[1]!, false);
-
-  const beforeCount = listedTechnical("Company C").length;
-  buildRedSupportReport({
-    companyName: "Company C",
-    entries: listedTechnical("Company C"),
-  });
-  assert.equal(listedTechnical("Company C").length, beforeCount);
 });
 
 test("support report does not invent a user request when routing text was not received", async () => {
@@ -308,6 +395,8 @@ test("support report redacts credentials from initiating request and never store
   assert.equal(blob.includes("redconn_secretref"), false);
   assert.equal(blob.includes("redroute_secrettok"), false);
   assert.equal(/Authorization:/i.test(blob), false);
+  assert.equal(blob.includes("userId"), false);
+  assert.equal(/password/i.test(blob), false);
   assert.match(blob, /<REDACTED>/);
 });
 
@@ -423,7 +512,61 @@ test("brc_generate_support_report is scoped to the connected company and is not 
     assert.equal(text.includes("Company B"), false);
     assert.equal(text.includes("other-company-secret-should-not-leak"), false);
     assert.equal(text.includes("test-key-not-for-report"), false);
+    assert.equal(text.includes("userId"), false);
   } finally {
     clearCredentialForCompany("Company C");
   }
+});
+
+test("preflight failure without a known BRC request is marked unavailable", () => {
+  __resetRedAuditLogForTests();
+  recordRedAuditEntry({
+    companyName: "Company C",
+    method: "PUT",
+    path: "/v1/quotes/999999999",
+    outcome: "failure",
+    stage: "preflight",
+    errorSummary: "Write did not complete. Could not read Quote 999999999.",
+    initiatingRequest: "Change Quote 999999999 reference to QA0001",
+  });
+
+  const report = buildRedSupportReport({
+    companyName: "Company C",
+    entries: listedTechnical("Company C"),
+  });
+  assert.match(report.text, /Intended write:\r?\nPUT \/v1\/quotes\/999999999/);
+  assert.match(report.text, /Actual BRC request:\r?\nunavailable/);
+  assert.equal(
+    /Actual BRC request:\r?\nGET \/v1\/quotes\/999999999/.test(report.text),
+    false
+  );
+  assert.equal(report.text.includes("The intended write did not run."), false);
+  assert.match(report.text, /Preflight/);
+  assert.match(report.text, /Change Quote 999999999 reference to QA0001/);
+});
+
+test("support report stamped telemetry IDs match App Insights dimensions when live context is absent", () => {
+  __resetRedAuditLogForTests();
+  withStagingTelemetry(() => {
+    recordRedAuditEntry({
+      companyName: "Company C",
+      method: "PUT",
+      path: "/v1/quotes/42",
+      outcome: "success",
+    });
+  });
+
+  const report = buildRedSupportReport({
+    companyName: "Company C",
+    entries: listedTechnical("Company C"),
+  });
+  assert.match(
+    report.text,
+    new RegExp(`telemetryConnectionSessionId: ${STAGING_CONNECTION_SESSION_ID}`)
+  );
+  assert.match(
+    report.text,
+    new RegExp(`telemetryClientId: ${STAGING_TELEMETRY_CLIENT_ID}`)
+  );
+  assert.equal(report.text.includes("userId"), false);
 });

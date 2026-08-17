@@ -1,3 +1,4 @@
+import { buildTelemetryCustomDimensions, getRedTelemetryContext, } from "../telemetry/identity.js";
 import { resolveRedTelemetryEnvironment } from "../telemetry/platform.js";
 const REQUEST_CAPTURE_LIMITATION = "Red records the instruction passed to request routing (the user's original accounting request). Red does not receive the full chat transcript. If no routed instruction was available for an action, a generated action summary is shown instead — nothing is invented.";
 function sanitizeFilenamePart(value) {
@@ -29,7 +30,7 @@ function formatStage(stage) {
     }
     return "not available";
 }
-function brcResponseLine(entry) {
+function brcStatusLine(entry) {
     if (entry.statusCode !== undefined) {
         return [entry.statusCode, entry.statusText].filter(Boolean).join(" ");
     }
@@ -37,7 +38,7 @@ function brcResponseLine(entry) {
     if (fromSummary?.[1]) {
         return fromSummary[1].trim();
     }
-    return "not available";
+    return undefined;
 }
 function generatedActionSummary(entry) {
     const record = entry.recordId !== undefined
@@ -53,6 +54,48 @@ function generatedActionSummary(entry) {
                     ? "Batch"
                     : entry.action || entry.operation;
     return `${verb} ${record}`.trim();
+}
+function intendedWriteLine(entry) {
+    if (!entry.method || !entry.path) {
+        return "not available";
+    }
+    return `${entry.method} ${entry.path}`;
+}
+function actualBrcRequestLines(entry) {
+    const intended = intendedWriteLine(entry);
+    const actualMethod = entry.failedMethod;
+    const actualPath = entry.failedPath;
+    if (!actualMethod && !actualPath) {
+        if (entry.outcome === "success") {
+            return [intended];
+        }
+        if (entry.stage === "write") {
+            const status = brcStatusLine(entry);
+            return status ? [intended, status] : [intended];
+        }
+        return ["unavailable"];
+    }
+    const request = [actualMethod, actualPath].filter(Boolean).join(" ");
+    const status = brcStatusLine(entry);
+    const lines = status ? [request, status] : [request];
+    const actualDiffersFromIntended = (actualMethod &&
+        entry.method &&
+        actualMethod.toUpperCase() !== entry.method.toUpperCase()) ||
+        (actualPath && entry.path && actualPath !== entry.path);
+    if (actualDiffersFromIntended) {
+        lines.push("The intended write did not run.");
+    }
+    return lines;
+}
+function resolveAzureCorrelation(entries) {
+    const live = buildTelemetryCustomDimensions(getRedTelemetryContext());
+    return {
+        telemetryConnectionSessionId: live["red.connection_session_id"] ??
+            entries.find((entry) => entry.telemetryConnectionSessionId)
+                ?.telemetryConnectionSessionId,
+        telemetryClientId: live["red.telemetry_client_id"] ??
+            entries.find((entry) => entry.telemetryClientId)?.telemetryClientId,
+    };
 }
 function formatActivityBlock(entry) {
     const userRequest = entry.initiatingRequest
@@ -74,20 +117,17 @@ function formatActivityBlock(entry) {
         "Stage:",
         formatStage(entry.stage),
         "",
-        "BRC response:",
-        brcResponseLine(entry),
+        "Intended write:",
+        intendedWriteLine(entry),
+        "",
+        "Actual BRC request:",
+        ...actualBrcRequestLines(entry),
         "",
         "Error:",
         entry.outcome === "failure"
             ? entry.errorSummary ?? "Write did not complete."
             : "none",
-        "",
-        "Correlation:",
-        line("mcpSessionId", entry.mcpSessionId),
-        line("connectionId", entry.connectionId),
-        line("method", entry.method),
-        line("path", entry.path),
-        ...(entry.toolName ? [line("toolName", entry.toolName)] : []),
+        ...(entry.toolName ? ["", line("toolName", entry.toolName)] : []),
         "--------------------------------------------------",
     ].join("\n");
 }
@@ -108,6 +148,7 @@ export function buildRedSupportReport(args) {
     const sessionId = entries.find((entry) => entry.mcpSessionId)?.mcpSessionId;
     const connectionId = entries.find((entry) => entry.connectionId)
         ?.connectionId;
+    const azure = resolveAzureCorrelation(entries);
     const start = entries[0]?.timestampUtc;
     const end = entries[entries.length - 1]?.timestampUtc;
     const environment = args.environment ?? resolveRedTelemetryEnvironment();
@@ -123,8 +164,16 @@ export function buildRedSupportReport(args) {
         line("companyId", companyId),
         line("redVersion", redVersion),
         line("environment", environment),
+        "",
+        "AZURE CORRELATION",
+        line("telemetryConnectionSessionId", azure.telemetryConnectionSessionId),
+        line("telemetryClientId", azure.telemetryClientId),
         line("mcpSessionId", sessionId),
         line("connectionId", connectionId),
+        "",
+        "Support note:",
+        "Use telemetryConnectionSessionId to locate this Red session in Application Insights.",
+        'It matches customDimensions["red.connection_session_id"]. telemetryClientId matches customDimensions["red.telemetry_client_id"]. These are anonymous diagnostic identifiers, not a Big Red Cloud login.',
         "",
         "USER REQUEST CAPTURE",
         REQUEST_CAPTURE_LIMITATION,

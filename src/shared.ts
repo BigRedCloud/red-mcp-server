@@ -2,6 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import { getActiveInitiatingRequest } from "./audit/initiating_request.js";
+import {
+  recordBrcDownstreamFailureTelemetry,
+  telemetryIdsFromContext,
+} from "./telemetry/brc_failure.js";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import {
   clearAllCompaniesFromConnectionStore,
@@ -889,6 +893,16 @@ export type RedAuditEntry = {
   /** Technical-only: BRC HTTP status when known. */
   statusCode?: number;
   statusText?: string;
+  /**
+   * Technical-only: the HTTP request that actually failed, when it differs
+   * from the intended write (for example a preflight GET before PUT).
+   */
+  failedMethod?: string;
+  failedPath?: string;
+  /** Technical-only: App Insights customDimensions["red.connection_session_id"]. */
+  telemetryConnectionSessionId?: string;
+  /** Technical-only: App Insights customDimensions["red.telemetry_client_id"]. */
+  telemetryClientId?: string;
   requestBody?: unknown;
   responseBody?: unknown;
   /**
@@ -1373,18 +1387,30 @@ function sanitizeConfirmedWriteError(error: unknown): string {
     : "Write did not complete.";
 }
 
-function parseHttpStatusFromUnknown(error: unknown): {
+function parseFailedBrcRequestFromError(error: unknown): {
+  failedMethod?: string;
+  failedPath?: string;
   statusCode?: number;
   statusText?: string;
 } {
   const message = error instanceof Error ? error.message : String(error);
-  const match = /\b(\d{3})\s+([A-Za-z][A-Za-z ]+?)(?:\.|$)/.exec(message);
-  if (!match) {
-    return {};
-  }
+  const api = /BRC API (GET|POST|PUT|PATCH|DELETE) ([^\s:]+) failed/i.exec(
+    message
+  );
+  const status = /\b(\d{3})\s+([A-Za-z][A-Za-z ]+?)(?:\.|$)/.exec(message);
   return {
-    statusCode: Number(match[1]),
-    statusText: match[2]!.trim(),
+    ...(api
+      ? {
+          failedMethod: api[1]!.toUpperCase(),
+          failedPath: api[2],
+        }
+      : {}),
+    ...(status
+      ? {
+          statusCode: Number(status[1]),
+          statusText: status[2]!.trim(),
+        }
+      : {}),
   };
 }
 
@@ -1395,6 +1421,8 @@ function recordConfirmedWriteFailureIfNeeded(
     errorSummary?: string;
     statusCode?: number;
     statusText?: string;
+    failedMethod?: string;
+    failedPath?: string;
   }
 ): void {
   const store = confirmedWriteAuditAls.getStore();
@@ -1403,18 +1431,43 @@ function recordConfirmedWriteFailureIfNeeded(
   }
 
   const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
-  const parsedStatus = parseHttpStatusFromUnknown(error);
+  const parsed = parseFailedBrcRequestFromError(error);
+  const failedMethod = options?.failedMethod ?? parsed.failedMethod;
+  const failedPath = options?.failedPath ?? parsed.failedPath;
+  const stage = options?.stage ?? inferConfirmedWriteFailureStage(error);
+  const errorSummary = options?.errorSummary ?? sanitizeConfirmedWriteError(error);
   store.audited = true;
   recordRedAuditEntry({
     companyName: store.companyName,
     method: target.method,
     path: target.path,
     outcome: "failure",
-    errorSummary: options?.errorSummary ?? sanitizeConfirmedWriteError(error),
-    stage: options?.stage ?? inferConfirmedWriteFailureStage(error),
-    statusCode: options?.statusCode ?? parsedStatus.statusCode,
-    statusText: options?.statusText ?? parsedStatus.statusText,
+    errorSummary,
+    stage,
+    statusCode: options?.statusCode ?? parsed.statusCode,
+    statusText: options?.statusText ?? parsed.statusText,
+    failedMethod,
+    failedPath,
   });
+
+  if (failedMethod && failedPath) {
+    const parsedIntended = parseAuditPath(target.path);
+    recordBrcDownstreamFailureTelemetry({
+      method: failedMethod,
+      path: failedPath,
+      statusCode: options?.statusCode ?? parsed.statusCode,
+      statusText: options?.statusText ?? parsed.statusText,
+      stage,
+      operation: resolveAuditOperation(
+        resolveAuditAction(target.method, parsedIntended),
+        parsedIntended
+      ),
+      recordType: parsedIntended.recordType,
+      recordId: parsedIntended.recordId,
+      toolName: store.toolName,
+      errorSummary,
+    });
+  }
 }
 
 /**
@@ -1461,6 +1514,10 @@ export function recordRedAuditEntry(args: {
   toolName?: string;
   statusCode?: number;
   statusText?: string;
+  failedMethod?: string;
+  failedPath?: string;
+  telemetryConnectionSessionId?: string;
+  telemetryClientId?: string;
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
@@ -1484,6 +1541,7 @@ export function recordRedAuditEntry(args: {
   const initiatingRequest =
     args.initiatingRequest ?? getActiveInitiatingRequest();
   const toolName = args.toolName ?? confirmedWrite?.toolName;
+  const telemetryIds = telemetryIdsFromContext();
   const statusFromBody =
     args.responseBody &&
     typeof args.responseBody === "object" &&
@@ -1518,6 +1576,22 @@ export function recordRedAuditEntry(args: {
       : typeof statusFromBody?.statusText === "string"
         ? { statusText: statusFromBody.statusText }
         : {}),
+    ...(args.failedMethod ? { failedMethod: args.failedMethod } : {}),
+    ...(args.failedPath ? { failedPath: args.failedPath.split("?")[0] } : {}),
+    ...(args.telemetryConnectionSessionId ||
+    telemetryIds.telemetryConnectionSessionId
+      ? {
+          telemetryConnectionSessionId:
+            args.telemetryConnectionSessionId ??
+            telemetryIds.telemetryConnectionSessionId,
+        }
+      : {}),
+    ...(args.telemetryClientId || telemetryIds.telemetryClientId
+      ? {
+          telemetryClientId:
+            args.telemetryClientId ?? telemetryIds.telemetryClientId,
+        }
+      : {}),
     requestBody: args.requestBody,
     responseBody: args.responseBody,
     mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1535,6 +1609,36 @@ export function recordRedAuditEntry(args: {
   }
 
   return entry;
+}
+
+function emitBrcHttpFailureTelemetry(args: {
+  method: string;
+  path: string;
+  statusCode: number;
+  statusText: string;
+  stage: "preflight" | "write";
+  errorSummary: string;
+}): void {
+  const confirmed = confirmedWriteAuditAls.getStore();
+  const intended = confirmed
+    ? inferConfirmedWriteAuditTarget(confirmed.toolName, confirmed.args)
+    : { method: args.method, path: args.path };
+  const parsed = parseAuditPath(intended.path.split("?")[0] ?? intended.path);
+  recordBrcDownstreamFailureTelemetry({
+    method: args.method,
+    path: args.path,
+    statusCode: args.statusCode,
+    statusText: args.statusText,
+    stage: args.stage,
+    operation: resolveAuditOperation(
+      resolveAuditAction(intended.method, parsed),
+      parsed
+    ),
+    recordType: parsed.recordType,
+    recordId: parsed.recordId,
+    toolName: confirmed?.toolName,
+    errorSummary: args.errorSummary,
+  });
 }
 
 export async function brcFetch(
@@ -1594,6 +1698,11 @@ export async function brcFetch(
     }
 
     if (isWriteHttpMethod(method)) {
+      const errorSummary = sanitizeAuditErrorSummary(
+        response.status,
+        response.statusText,
+        text
+      );
       recordRedAuditEntry({
         companyName,
         method,
@@ -1604,27 +1713,34 @@ export async function brcFetch(
           statusText: response.statusText,
         },
         outcome: "failure",
-        errorSummary: sanitizeAuditErrorSummary(
-          response.status,
-          response.statusText,
-          text
-        ),
+        errorSummary,
         stage: "write",
         statusCode: response.status,
         statusText: response.statusText,
       });
+      emitBrcHttpFailureTelemetry({
+        method,
+        path: safePath,
+        statusCode: response.status,
+        statusText: response.statusText,
+        stage: "write",
+        errorSummary,
+      });
     } else if (confirmedWriteAuditAls.getStore()) {
+      const errorSummary = sanitizeAuditErrorSummary(
+        response.status,
+        response.statusText,
+        text
+      );
       recordConfirmedWriteFailureIfNeeded(
         new Error(`${response.status} ${response.statusText}`),
         {
           stage: "preflight",
-          errorSummary: sanitizeAuditErrorSummary(
-            response.status,
-            response.statusText,
-            text
-          ),
+          errorSummary,
           statusCode: response.status,
           statusText: response.statusText,
+          failedMethod: method,
+          failedPath: safePath,
         }
       );
     }
