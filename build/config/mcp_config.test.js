@@ -78,6 +78,9 @@ test("MCP server instructions include correction/undo planning before another wr
     assert.match(instructions, /Never mention internal tool names in customer-facing correction or reversal explanations/i);
     assert.match(instructions, /Do not say deletion or removal is the only supported correction/i);
     assert.match(instructions, /Example fields the current Cash Payment update can change include amount, date, and supplier/i);
+    assert.match(instructions, /Do not say deletion is the only supported operation for this record type/i);
+    assert.equal(/rather than naming one/i.test(instructions), false);
+    assert.match(instructions, /which verified actions on the existing record are available/i);
 });
 test("routing instructions forbid paraphrasing the original request", () => {
     assert.match(MANDATORY_ROUTING_INSTRUCTION, /complete original message verbatim/i);

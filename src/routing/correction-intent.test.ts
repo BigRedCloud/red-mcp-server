@@ -6,6 +6,8 @@ process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET =
   process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET ||
   "test-route-token-signing-secret-correction";
 
+import { getBrcMcpServerInstructions } from "../config/mcp_config.js";
+import { ROUTE_REQUEST_TOOL_DESCRIPTION } from "../tools/routing/route_request_tools.js";
 import { classifyRequestIntent } from "./intent-classifier.js";
 import { routeRequest } from "./route-request.js";
 import { isAffirmativeConfirmation } from "./pending-action.js";
@@ -429,6 +431,66 @@ test("staging: Reverse Cash Payment does not say delete is the only supported co
     "Red can delete this cash payment record. That's the only supported correction action available for a cash payment.";
   assert.equal(
     correctionGuidanceClaimsDeleteIsOnlyCorrection(stagingDeleteOnly),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceClaimsDeleteIsOnlyCorrection(
+      "Red has a supported action to permanently delete this cash payment record. That's the only supported operation for this record type",
+    ),
+    true,
+  );
+});
+
+test("assembled runtime guidance for Reverse Cash Payment is not delete-only", async () => {
+  const message = "Reverse Cash Payment id 581729508";
+  const routed = await routeRequest(message);
+  const instructions = getBrcMcpServerInstructions(50, false);
+  const assembled = [
+    instructions,
+    ROUTE_REQUEST_TOOL_DESCRIPTION,
+    JSON.stringify(routed),
+  ].join("\n");
+
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+  assert.equal(routed.blockTransactionalTools, true);
+  assert.deepEqual(routed.supportedExistingRecordActions, [
+    "remove",
+    "change_supported_details",
+  ]);
+  assert.equal(
+    routed.preferredTools.includes("brc_delete_cash_payment"),
+    false,
+  );
+  assert.equal(
+    routed.preferredTools.includes("brc_update_cash_payment"),
+    false,
+  );
+
+  assert.match(routed.guidance, /Two verified actions exist on the existing Cash Payment/i);
+  assert.match(routed.guidance, /remove it, and change supported details/i);
+  assert.match(routed.guidance, /Both are available/i);
+  assert.match(routed.guidance, /Neither is automatically the correct accounting treatment/i);
+  assert.match(
+    routed.guidance,
+    /Do not say deletion is the only supported operation for this record type/i,
+  );
+  assert.equal(/\bbrc_/i.test(routed.guidance), false);
+  assert.equal(correctionGuidanceClaimsDeleteIsOnlyCorrection(routed.guidance), false);
+  assert.equal(correctionGuidanceProposesUnverifiedOpposite(routed.guidance), false);
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(routed.guidance),
+    false,
+  );
+
+  assert.match(assembled, /remove it, and change supported details/i);
+  assert.match(assembled, /change_supported_details/);
+  assert.match(assembled, /Ask what the user is trying to correct/i);
+  assert.equal(/rather than naming one/i.test(assembled), false);
+  assert.equal(
+    correctionGuidanceClaimsDeleteIsOnlyCorrection(
+      "Red has a supported action to permanently delete this cash payment record. That's the only supported operation for this record type",
+    ),
     true,
   );
 });

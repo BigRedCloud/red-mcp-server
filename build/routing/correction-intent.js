@@ -36,7 +36,7 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
     "Do not immediately create, update, delete, reverse, or email a record.",
     "Do not issue or invent a transactional routeToken for this message.",
     "Use read-only lookups and the current-session Red activity record where needed to establish what changed. Never invent previous values.",
-    "Then explain in friendly business language: what changed; whether it can genuinely be undone; what supported action you propose; any consequences that are actually verified; anything you need to check first; and ask permission before another change. Do not invent unverified accounting effects.",
+    "Then explain in friendly business language: what changed; whether it can genuinely be undone; which verified actions on the existing record are available; any consequences that are actually verified; anything you need to check first; and ask permission before another change. Do not invent unverified accounting effects. Do not choose one action automatically.",
     "Existing preview-before-posting, confirmWrite, confirmDelete, counterparty, and email confirmation rules still apply after the user agrees to a plan.",
     "If the user agrees, start the normal supported business workflow for that plan — do not bypass confirmation.",
     "Never quote internal tool identifiers, preferredTools, allowedTools, route tokens, endpoints, HTTP methods, JSON, or MCP names in customer-facing correction or reversal explanations. Use those identifiers only to choose and call tools. Speak to the user in plain business language, for example remove the record, change the record, check the quote, recreate the record, or show the proposed change.",
@@ -53,7 +53,7 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
     "Do not claim what the resulting customer or supplier outstanding balance, allocation state, ledger balance, VAT position, audit history, or outstanding amount will become unless that effect is directly supported by available data or a verified BRC workflow.",
     "Do not say deletion makes a transaction look like it never existed or never happened unless Big Red Cloud's retained-history behaviour is verified. Do not claim there will be no audit trail.",
     "If the downstream accounting effect is uncertain, say so clearly in non-technical language and do not invent it.",
-    "For financial records: read the current record first; state the supported actions Red can actually perform; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask what the user is trying to correct.",
+    "For financial records: read the current record first. Name the verified actions Red can perform on the existing record. For a Cash Payment those are removing it and changing supported details. Do not invent a separate reversing transaction type. Do not treat the absence of a formal reversing-entry process as meaning deletion is the only supported operation. Do not say deletion is the only supported operation for this record type. Ask what the user is trying to correct before choosing.",
     "Do not claim an action is reversible unless Red can actually do it. If it cannot, say what Red can and cannot do and that the rest must be completed in Big Red Cloud.",
 ].join(" ");
 /**
@@ -67,12 +67,41 @@ export const CORRECTION_CUSTOMER_LANGUAGE_RULES = [
     "Do not invent previous values. If the earlier value is unknown, say you need to check what it was first.",
     "A deleted record cannot simply be switched back on. Offer to check whether there is enough information to recreate it, and show what would be recreated before anything is posted.",
     "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. Ask what they are trying to correct before choosing an accounting treatment.",
-    "State supported actions Red can actually perform on the existing record. For a Cash Payment those include removing it and changing supported details such as amount, date, or supplier. Do not present removal as the sole available correction. Do not invent a new record that supposedly cancels the original. If a formal reversing process has not been proven, offer to check what correction options are supported.",
+    "State supported actions Red can actually perform on the existing record. For a Cash Payment those include removing it and changing supported details such as amount, date, or supplier. Do not present removal as the sole available correction. Do not invent a new record that supposedly cancels the original. Do not treat the absence of a formal reversing-entry process as meaning deletion is the only supported operation.",
     "Do not call deletion the safest option just because Red can remove the record. Removing it and changing the existing record are both available when supported, but whether either is the correct accounting treatment depends on why the user wants to reverse it.",
     "Do not claim unverified effects on customer or supplier outstanding balances, allocations, ledger balances, VAT, or whether the transaction will still appear in accounting history. If those effects are uncertain, say so.",
     "If a quote has generated a sales invoice, those are linked records. Changing or reopening the quote does not automatically remove the invoice. Explain what Red can safely do, then ask permission.",
     "Wait for explicit permission before making another change.",
 ].join(" ");
+export function isCashPaymentCorrectionMessage(message) {
+    return /\bcash\s+payments?\b/i.test(message);
+}
+/**
+ * Prepended onto the route-request JSON guidance for Cash Payment reverse.
+ * This is what the model actually reads; explainFinancialReverse is not sent
+ * at runtime.
+ */
+export const CASH_PAYMENT_CORRECTION_ROUTE_GUIDANCE = [
+    "Cash Payment reverse/correction: do not write yet.",
+    "Two verified actions exist on the existing Cash Payment: remove it, and change supported details such as amount, date, or supplier.",
+    "Both are available. Neither is automatically the correct accounting treatment.",
+    "Do not say deletion is the only supported operation for this record type.",
+    "Do not say permanently delete is the only supported action.",
+    "Do not invent a reversing, offsetting, opposite, or negative transaction.",
+    "Ask what the user is trying to correct before choosing.",
+].join(" ");
+export const CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS = [
+    "remove",
+    "change_supported_details",
+];
+/** Guidance actually returned by brc_route_request in correction mode. */
+export function assembleCorrectionGuidance(message) {
+    const shared = [CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES].join(" ");
+    if (isCashPaymentCorrectionMessage(message)) {
+        return `${CASH_PAYMENT_CORRECTION_ROUTE_GUIDANCE} ${shared}`;
+    }
+    return shared;
+}
 export function explainQuoteReferenceUndo(args) {
     if (!args.fromReference || !args.toReference) {
         return "I can check what the quote reference was changed from and to, then show you how I would change it back. I will not guess the earlier reference. Would you like me to check?";
@@ -219,8 +248,11 @@ export function correctionGuidanceClaimsDeleteIsOnlyCorrection(text) {
     return [
         /\bthe only supported\b/i,
         /\bonly supported correction\b/i,
+        /\bonly supported operation\b/i,
+        /\bonly supported action\b/i,
         /\bonly (?:available )?correction (?:action|option)\b/i,
         /\b(?:delete|deletion|removing|removal) is the only\b/i,
+        /\bpermanently delete\b/i,
         /\bsole (?:available )?correction\b/i,
     ].some((pattern) => hasUnprohibitedMatch(text, pattern));
 }

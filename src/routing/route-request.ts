@@ -28,8 +28,9 @@ import {
   type RequestRouteMode,
 } from "./intent-classifier.js";
 import {
-  CORRECTION_ASSISTANT_GUIDANCE,
-  CORRECTION_CUSTOMER_LANGUAGE_RULES,
+  assembleCorrectionGuidance,
+  CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+  isCashPaymentCorrectionMessage,
   isCorrectionIntent,
 } from "./correction-intent.js";
 import {
@@ -79,6 +80,11 @@ export type RouteRequestResult = {
   /** Present in help mode — output of the unified help pipeline. */
   help?: ReturnType<typeof buildUnifiedFindHelpResourcesResponse>;
   guidance: string;
+  /**
+   * Verified actions on the existing record for this correction request.
+   * Assistant-facing only. Not a write permission and not a routeToken.
+   */
+  supportedExistingRecordActions?: readonly string[];
 };
 
 function guidanceFor(classification: IntentClassification): string {
@@ -119,9 +125,7 @@ function guidanceFor(classification: IntentClassification): string {
         "Do not clear or replace an active routeToken from a prior action preview.",
       ].join(" ");
     case "correction":
-      return [CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES].join(
-        " "
-      );
+      return assembleCorrectionGuidance(classification.originalMessage);
     default:
       return [
         "Mode unknown: ask a brief clarifying question — whether they want Red to perform the action or want manual Big Red Cloud steps.",
@@ -414,6 +418,14 @@ export async function routeRequest(
     preferredTools: classification.preferredTools,
     allowCompanyConnectionTool: classification.allowCompanyConnectionTool,
     guidance: guidanceFor(classification),
+    ...(classification.mode === "correction" &&
+    isCashPaymentCorrectionMessage(classification.originalMessage)
+      ? {
+          supportedExistingRecordActions: [
+            ...CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+          ],
+        }
+      : {}),
   };
 
   if (classification.mode === "unsupported_action" || classification.mode === "correction") {

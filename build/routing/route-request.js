@@ -12,7 +12,7 @@ import { getActiveConnectionRef, resolveActiveMcpSessionId, resolveHttpClientKey
 import { getRedTelemetryContext } from "../telemetry/identity.js";
 import { getStoredSessionPlatform } from "../telemetry/platform.js";
 import { classifyRequestIntent, } from "./intent-classifier.js";
-import { CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES, isCorrectionIntent, } from "./correction-intent.js";
+import { assembleCorrectionGuidance, CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS, isCashPaymentCorrectionMessage, isCorrectionIntent, } from "./correction-intent.js";
 import { hashRouteMessage, issueActionRouteToken, isIssuedRouteTokenConsumed, logRouteTokenIssued, resolveConnectionIdForRouteToken, validateRouteToken, } from "./route-token.js";
 import { clearPendingAction, getPendingAction, isAffirmativeConfirmation, logPendingActionLookup, logPendingActionRejected, resolvePendingActionScopeKey, savePendingAction, } from "./pending-action.js";
 function guidanceFor(classification) {
@@ -53,7 +53,7 @@ function guidanceFor(classification) {
                 "Do not clear or replace an active routeToken from a prior action preview.",
             ].join(" ");
         case "correction":
-            return [CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES].join(" ");
+            return assembleCorrectionGuidance(classification.originalMessage);
         default:
             return [
                 "Mode unknown: ask a brief clarifying question — whether they want Red to perform the action or want manual Big Red Cloud steps.",
@@ -282,6 +282,14 @@ export async function routeRequest(message, options) {
         preferredTools: classification.preferredTools,
         allowCompanyConnectionTool: classification.allowCompanyConnectionTool,
         guidance: guidanceFor(classification),
+        ...(classification.mode === "correction" &&
+            isCashPaymentCorrectionMessage(classification.originalMessage)
+            ? {
+                supportedExistingRecordActions: [
+                    ...CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+                ],
+            }
+            : {}),
     };
     if (classification.mode === "unsupported_action" || classification.mode === "correction") {
         logRouteRequestResolved({

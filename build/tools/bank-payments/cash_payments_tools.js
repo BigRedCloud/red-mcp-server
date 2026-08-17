@@ -61,7 +61,7 @@ export function registerCashPaymentTools(server) {
             });
         }
     });
-    registerRawUpdateTool(server, "brc_update_cash_payment", "Updates a BRC cash payment using merged fields.", "/v1/cashPayments", "Cash payment");
+    registerRawUpdateTool(server, "brc_update_cash_payment", "Updates an existing Cash Payment by merging supplied fields onto the current record. Fields that can be merged include total, entryDate, procDate, supplierId, acCode, note, ledger, discount, bankAccountId, bankAccountCode, lodgement, analysisCategoryId, accountCode, and description. This update flow is a verified action on the existing record.", "/v1/cashPayments", "Cash payment");
     registerRawDeleteTool(server, "brc_delete_cash_payment", "Deletes a BRC cash payment by id.", "/v1/cashPayments", "cash payment");
     registerRawBatchTool(server, "brc_batch_cash_payments", "Processes a batch of BRC cash payments.", "/v1/cashPayments");
     // Cash Receipts
