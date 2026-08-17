@@ -125,6 +125,10 @@ test("MCP server instructions include correction/undo planning before another wr
     instructions,
     /Deleting is not automatically the safest or correct accounting treatment/i
   );
+  assert.match(
+    instructions,
+    /Never mention internal tool names in customer-facing correction or reversal explanations/i
+  );
 });
 
 test("routing instructions forbid paraphrasing the original request", () => {

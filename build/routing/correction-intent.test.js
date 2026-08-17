@@ -169,6 +169,29 @@ test("9. reversal language is not write confirmation and cannot bypass confirmWr
     assert.equal(isAffirmativeConfirmation("change it back"), false);
     assert.equal(isAffirmativeConfirmation("cancel what you just did"), false);
 });
+test("customer-facing correction and reversal guidance does not expose internal tool names", async () => {
+    const explanation = explainFinancialReverse("cash payment");
+    const customerFacing = [
+        CORRECTION_CUSTOMER_LANGUAGE_RULES,
+        explanation,
+        explainQuoteReferenceUndo({ fromReference: "QT0001", toReference: "QT0002" }),
+        explainDeletedRecordUndo("quote"),
+        explainLinkedQuoteInvoice(),
+    ];
+    for (const sample of customerFacing) {
+        assert.equal(/\bbrc_/i.test(sample), false, sample);
+        assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
+    }
+    assert.match(explanation, /removing the cash payment/i);
+    assert.match(explanation, /will not automatically remove/i);
+    assert.equal(/\bbrc_delete_cash_payment\b/i.test(explanation), false);
+    assert.equal(/\bbrc_update_cash_payment\b/i.test(explanation), false);
+    const routed = await routeRequest("Reverse Cash Payment id 581729508");
+    assert.equal(routed.mode, "correction");
+    assert.equal(/\bbrc_/i.test(routed.guidance), false);
+    assert.match(routed.guidance, /Never quote internal tool identifiers/i);
+    assert.match(routed.guidance, /plain business language/i);
+});
 test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", () => {
     const samples = [
         CORRECTION_CUSTOMER_LANGUAGE_RULES,

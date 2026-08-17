@@ -72,6 +72,7 @@ test("MCP server instructions include correction/undo planning before another wr
     assert.match(instructions, /Do not claim what the resulting customer or supplier outstanding balance/i);
     assert.match(instructions, /Do not say deletion makes a transaction look like it never existed/i);
     assert.match(instructions, /Deleting is not automatically the safest or correct accounting treatment/i);
+    assert.match(instructions, /Never mention internal tool names in customer-facing correction or reversal explanations/i);
 });
 test("routing instructions forbid paraphrasing the original request", () => {
     assert.match(MANDATORY_ROUTING_INSTRUCTION, /complete original message verbatim/i);

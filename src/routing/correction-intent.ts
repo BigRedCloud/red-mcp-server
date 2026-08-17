@@ -43,6 +43,7 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
   "Then explain in friendly business language: what changed; whether it can genuinely be undone; what supported action you propose; any consequences that are actually verified; anything you need to check first; and ask permission before another change. Do not invent unverified accounting effects.",
   "Existing preview-before-posting, confirmWrite, confirmDelete, counterparty, and email confirmation rules still apply after the user agrees to a plan.",
   "If the user agrees, start the normal supported business workflow for that plan — do not bypass confirmation.",
+  "Never quote internal tool identifiers, preferredTools, allowedTools, route tokens, endpoints, HTTP methods, JSON, or MCP names in customer-facing correction or reversal explanations. Use those identifiers only to choose and call tools. Speak to the user in plain business language, for example remove the record, change the record, check the quote, recreate the record, or show the proposed change.",
   "Do not automatically delete a financial record because the user said undo or reverse.",
   "Do not infer accounting treatment from the word reverse. Reverse can mean different things depending on the accounting situation.",
   "Never propose a specific accounting transaction type as a reversal unless that exact reversal flow is supported by existing Red tools and verified BRC behaviour.",
@@ -62,7 +63,8 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
  */
 export const CORRECTION_CUSTOMER_LANGUAGE_RULES = [
   "Talk to the user as an accountant or bookkeeper. Keep explanations short and specific.",
-  "Prefer: change it back; leave everything else unchanged; check what changed; recreate the record; remove the record; check what correction options are supported; show you what will happen first.",
+  "Prefer: change it back; leave everything else unchanged; check what changed; recreate the record; remove the record; change the record; check the quote; show you the proposed change; check what correction options are supported.",
+  "Never mention internal tool names in customer-facing explanations. Describe supported actions in plain business language only.",
   "Do not invent previous values. If the earlier value is unknown, say you need to check what it was first.",
   "A deleted record cannot simply be switched back on. Offer to check whether there is enough information to recreate it, and show what would be recreated before anything is posted.",
   "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. State only supported actions Red can actually perform — not assumed accounting results. If a formal reversing or correcting transaction has not been proven, offer to check what correction options are supported rather than naming an opposite transaction type.",
@@ -189,8 +191,14 @@ export function explainLinkedQuoteInvoice(): string {
 const FORBIDDEN_CUSTOMER_JARGON =
   /\b(?:rollback|mutation|inverse payload|compensating API call|endpoint|route token|routeToken|object clone|database rollback|HTTP|JSON|MCP)\b/i;
 
+const FORBIDDEN_INTERNAL_TOOL_NAME = /\bbrc_[a-z0-9_]+\b/i;
+
 const FORBIDDEN_HTTP_METHODS = /\b(?:POST|PUT|DELETE|GET|PATCH)\b/;
 
 export function correctionGuidanceContainsJargon(text: string): boolean {
-  return FORBIDDEN_CUSTOMER_JARGON.test(text) || FORBIDDEN_HTTP_METHODS.test(text);
+  return (
+    FORBIDDEN_CUSTOMER_JARGON.test(text) ||
+    FORBIDDEN_INTERNAL_TOOL_NAME.test(text) ||
+    FORBIDDEN_HTTP_METHODS.test(text)
+  );
 }
