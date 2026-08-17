@@ -65,6 +65,7 @@ test("undo/reversal language is not write confirmation in MCP instructions", () 
     assert.match(instructions, /first request is not write confirmation/i);
     assert.match(instructions, /does not bypass confirmWrite, confirmDelete, counterparty confirmation, or email confirmation/i);
     assert.match(instructions, /Undo, reverse, put it back, change it back, restore, and cancel-what-you-just-did are not confirmation of a pending preview/i);
+    assert.match(instructions, /Never propose a specific accounting transaction type as a reversal/i);
 });
 test("3. analysed cash receipt still requires ordinary preview confirmWrite", async () => {
     let handlerCalled = false;

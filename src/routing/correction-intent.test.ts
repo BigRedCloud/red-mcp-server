@@ -12,6 +12,7 @@ import { isAffirmativeConfirmation } from "./pending-action.js";
 import {
   CORRECTION_CUSTOMER_LANGUAGE_RULES,
   correctionGuidanceContainsJargon,
+  correctionGuidanceProposesUnverifiedOpposite,
   explainDeletedRecordUndo,
   explainFinancialReverse,
   explainLinkedQuoteInvoice,
@@ -73,14 +74,50 @@ test("3. reverse that cash payment does not automatically delete it", async () =
   const routed = await routeRequest(message);
   assert.equal(routed.mode, "correction");
   assert.equal(routed.routeToken, undefined);
+  assert.equal(routed.blockTransactionalTools, true);
   assert.match(routed.guidance, /Do not automatically delete a financial record/i);
+  assert.match(
+    routed.guidance,
+    /Never propose a specific accounting transaction type as a reversal/i,
+  );
+  assert.equal(/\bequal-and-opposite\b/i.test(routed.guidance), false);
+  assert.equal(/\boffsetting\b/i.test(routed.guidance), false);
 
   const explanation = explainFinancialReverse("cash payment");
   assert.match(explanation, /will not automatically remove/i);
-  assert.match(explanation, /safest supported correction/i);
+  assert.match(explanation, /can mean different things/i);
+  assert.match(explanation, /will not create an opposite transaction/i);
   assert.match(explanation, /Would you like me to check/);
   assert.equal(/\bdelete\s+it\s+now\b/i.test(explanation), false);
   assert.equal(correctionGuidanceContainsJargon(explanation), false);
+  assert.equal(correctionGuidanceProposesUnverifiedOpposite(explanation), false);
+});
+
+test("reverse Cash Payment does not suggest creating a Cash Receipt", async () => {
+  const message = "Reverse Cash Payment id 581729508";
+  assertCorrectionPlan(message);
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+  assert.equal(routed.blockTransactionalTools, true);
+
+  const explanation = explainFinancialReverse("cash payment");
+  assert.equal(/\bcash receipt\b/i.test(explanation), false);
+  assert.equal(/\bsales credit note\b/i.test(explanation), false);
+  assert.equal(correctionGuidanceProposesUnverifiedOpposite(explanation), false);
+  assert.equal(
+    correctionGuidanceProposesUnverifiedOpposite(CORRECTION_CUSTOMER_LANGUAGE_RULES),
+    false,
+  );
+  assert.match(
+    routed.guidance,
+    /Do not assume Cash Payment is reversed with a Cash Receipt/i,
+  );
+  assert.match(
+    routed.guidance,
+    /Do not invent negative or opposite transactions/i,
+  );
 });
 
 test("4. change the quote reference to QT0003 remains a normal quote update", async () => {
@@ -161,7 +198,34 @@ test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", (
 
   for (const sample of samples) {
     assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
+    assert.equal(
+      correctionGuidanceProposesUnverifiedOpposite(sample),
+      false,
+      sample,
+    );
   }
+});
+
+test("explicit cash payment delete and update remain normal action workflows", async () => {
+  const deleted = classifyRequestIntent("Delete cash payment 581729508");
+  assert.equal(deleted.mode, "action");
+  assert.equal(deleted.workflow?.name, "delete_cash_payment");
+  assert.ok(deleted.preferredTools.includes("brc_delete_cash_payment"));
+
+  const deletedRoute = await routeRequest("Delete cash payment 581729508");
+  assert.equal(deletedRoute.mode, "action");
+  assert.ok(deletedRoute.routeToken);
+  assert.equal(deletedRoute.workflow, "delete_cash_payment");
+
+  const updated = classifyRequestIntent("Update cash payment 581729508");
+  assert.equal(updated.mode, "action");
+  assert.equal(updated.workflow?.name, "update_cash_payment");
+  assert.ok(updated.preferredTools.includes("brc_update_cash_payment"));
+
+  const updatedRoute = await routeRequest("Update cash payment 581729508");
+  assert.equal(updatedRoute.mode, "action");
+  assert.ok(updatedRoute.routeToken);
+  assert.equal(updatedRoute.workflow, "update_cash_payment");
 });
 
 test("other reversal phrases classify as correction", () => {

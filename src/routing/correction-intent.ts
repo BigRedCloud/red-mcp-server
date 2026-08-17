@@ -44,6 +44,10 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
   "Existing preview-before-posting, confirmWrite, confirmDelete, counterparty, and email confirmation rules still apply after the user agrees to a plan.",
   "If the user agrees, start the normal supported business workflow for that plan — do not bypass confirmation.",
   "Do not automatically delete a financial record because the user said undo or reverse.",
+  "Do not infer accounting treatment from the word reverse. Reverse can mean different things depending on the accounting situation.",
+  "Never propose a specific accounting transaction type as a reversal unless that exact reversal flow is supported by existing Red tools and verified BRC behaviour.",
+  "Do not assume Cash Payment is reversed with a Cash Receipt, Sales Invoice with a Sales Credit Note, or Purchase with an opposite purchase or credit. Do not invent negative or opposite transactions.",
+  "For financial records: read the current record first; state only supported options Red actually knows are safe; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask permission.",
   "Do not claim an action is reversible unless Red can actually do it. If it cannot, say what Red can and cannot do and that the rest must be completed in Big Red Cloud.",
 ].join(" ");
 
@@ -53,10 +57,10 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
  */
 export const CORRECTION_CUSTOMER_LANGUAGE_RULES = [
   "Talk to the user as an accountant or bookkeeper. Keep explanations short and specific.",
-  "Prefer: change it back; leave everything else unchanged; check what changed; create a reversing entry; recreate the record; remove the record; show you what will happen first.",
+  "Prefer: change it back; leave everything else unchanged; check what changed; recreate the record; remove the record; check what correction options are supported; show you what will happen first.",
   "Do not invent previous values. If the earlier value is unknown, say you need to check what it was first.",
   "A deleted record cannot simply be switched back on. Offer to check whether there is enough information to recreate it, and show what would be recreated before anything is posted.",
-  "Do not automatically delete a payment or other financial record because the user asked to reverse it. First explain the safest supported correction: edit, remove, create a reversing entry, or complete the correction in Big Red Cloud.",
+  "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. State only supported options Red knows are safe for that record. If a formal reversing or correcting transaction has not been proven, offer to check what correction options are supported rather than naming an opposite transaction type.",
   "If a quote has generated a sales invoice, those are linked records. Changing or reopening the quote does not automatically remove the invoice. Explain what Red can safely do, then ask permission.",
   "Wait for explicit permission before making another change.",
 ].join(" ");
@@ -85,8 +89,40 @@ export function explainDeletedRecordUndo(recordLabel = "record"): string {
 export function explainFinancialReverse(recordLabel = "payment"): string {
   return (
     `I will not automatically remove that ${recordLabel}. ` +
-    "I need to check what happened first and then explain the safest supported correction — for example changing the original, removing it, creating a reversing entry, or completing the correction in Big Red Cloud. Would you like me to check?"
+    `"Reverse" can mean different things depending on the accounting situation. ` +
+    `Red can remove it if deleting it is the appropriate correction, or I can check what other supported correction options are available for this type of ${recordLabel}. ` +
+    "I will not create an opposite transaction unless that is a confirmed supported method. Would you like me to check?"
   );
+}
+
+/**
+ * True when customer-facing text invents an unverified opposite transaction
+ * type — for example reversing a Cash Payment by creating a Cash Receipt.
+ * Prohibitions such as "I will not create an opposite transaction" are allowed.
+ */
+export function correctionGuidanceProposesUnverifiedOpposite(text: string): boolean {
+  if (/\bequal-and-opposite\b/i.test(text)) {
+    return true;
+  }
+  if (/\boffsetting\b/i.test(text)) {
+    return true;
+  }
+  if (/\bmatching reversal\b/i.test(text)) {
+    return true;
+  }
+  if (/\bnegative (?:amount|transaction|entry)\b/i.test(text)) {
+    return true;
+  }
+  if (/\bcreate(?:ing)? a reversing entry\b/i.test(text)) {
+    return true;
+  }
+  if (/\bcash receipt\b/i.test(text)) {
+    return true;
+  }
+  if (/\bsales credit note\b/i.test(text)) {
+    return true;
+  }
+  return false;
 }
 
 export function explainLinkedQuoteInvoice(): string {
