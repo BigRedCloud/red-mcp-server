@@ -69,6 +69,7 @@ test("undo/reversal language is not write confirmation in MCP instructions", () 
     assert.match(instructions, /Do not claim what the resulting customer or supplier outstanding balance/i);
     assert.match(instructions, /Never mention internal tool names in customer-facing correction or reversal explanations/i);
     assert.match(instructions, /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i);
+    assert.match(instructions, /Do not say deletion or removal is the only supported correction/i);
 });
 test("3. analysed cash receipt still requires ordinary preview confirmWrite", async () => {
     let handlerCalled = false;

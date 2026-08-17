@@ -53,10 +53,11 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
   "Do not present deletion and an invented offsetting transaction as two equally verified options. Do not recommend one accounting treatment based on generic claims such as most businesses prefer.",
   "Distinguish clearly: (1) actions Red knows it can perform; (2) accounting or business consequences that have been verified from available data or a proven BRC workflow; (3) assumptions, which must not be stated as fact.",
   "Red may say it can remove a financial record when an existing delete action supports that, or change supported details on the existing record when that fits the user's intent. Neither is automatically the correct accounting treatment.",
+  "For Cash Payment, both removing the existing record and changing supported details on it are verified correction actions. Do not say deletion or removal is the only supported correction. Example Cash Payment fields that the current update flow can change include amount, date, and supplier. Do not name a field unless the current Cash Payment update can merge it onto the existing record.",
   "Do not claim what the resulting customer or supplier outstanding balance, allocation state, ledger balance, VAT position, audit history, or outstanding amount will become unless that effect is directly supported by available data or a verified BRC workflow.",
   "Do not say deletion makes a transaction look like it never existed or never happened unless Big Red Cloud's retained-history behaviour is verified. Do not claim there will be no audit trail.",
   "If the downstream accounting effect is uncertain, say so clearly in non-technical language and do not invent it.",
-  "For financial records: read the current record first; state only supported actions Red can actually perform; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask what the user is trying to correct.",
+  "For financial records: read the current record first; state the supported actions Red can actually perform; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask what the user is trying to correct.",
   "Do not claim an action is reversible unless Red can actually do it. If it cannot, say what Red can and cannot do and that the rest must be completed in Big Red Cloud.",
 ].join(" ");
 
@@ -71,8 +72,8 @@ export const CORRECTION_CUSTOMER_LANGUAGE_RULES = [
   "Do not invent previous values. If the earlier value is unknown, say you need to check what it was first.",
   "A deleted record cannot simply be switched back on. Offer to check whether there is enough information to recreate it, and show what would be recreated before anything is posted.",
   "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. Ask what they are trying to correct before choosing an accounting treatment.",
-  "State only supported actions Red can actually perform on the existing record, such as removing it or changing supported details. Do not invent a new record that supposedly cancels the original. If a formal reversing process has not been proven, offer to check what correction options are supported.",
-  "Do not call deletion the safest option just because Red can remove the record. One supported action may be removing it, and another may be changing the existing record, but whether either is the correct accounting treatment depends on why the user wants to reverse it.",
+  "State supported actions Red can actually perform on the existing record. For a Cash Payment those include removing it and changing supported details such as amount, date, or supplier. Do not present removal as the sole available correction. Do not invent a new record that supposedly cancels the original. If a formal reversing process has not been proven, offer to check what correction options are supported.",
+  "Do not call deletion the safest option just because Red can remove the record. Removing it and changing the existing record are both available when supported, but whether either is the correct accounting treatment depends on why the user wants to reverse it.",
   "Do not claim unverified effects on customer or supplier outstanding balances, allocations, ledger balances, VAT, or whether the transaction will still appear in accounting history. If those effects are uncertain, say so.",
   "If a quote has generated a sales invoice, those are linked records. Changing or reopening the quote does not automatically remove the invoice. Explain what Red can safely do, then ask permission.",
   "Wait for explicit permission before making another change.",
@@ -100,10 +101,21 @@ export function explainDeletedRecordUndo(recordLabel = "record"): string {
 }
 
 export function explainFinancialReverse(recordLabel = "payment"): string {
+  if (/cash payment/i.test(recordLabel)) {
+    return (
+      "I have checked the Cash Payment and have not changed anything. " +
+      `"Reverse" can mean different things depending on what needs correcting. ` +
+      "I can remove this Cash Payment, or change supported details on it if something such as the amount, date, supplier or another supported field is wrong. " +
+      "Which action is appropriate depends on what you're trying to correct. " +
+      "I haven't verified a separate formal reversal process for this type of payment, so I won't invent one. " +
+      "What are you trying to correct?"
+    );
+  }
+
   return (
     `I have checked the ${recordLabel} and have not changed anything. ` +
     `"Reverse" can mean different things depending on what needs correcting. ` +
-    `Red can remove the ${recordLabel} or change supported details on it, but whether either is the right accounting treatment depends on why you want to reverse it. ` +
+    `I can remove the ${recordLabel} or change supported details on it, but which action is appropriate depends on what you're trying to correct. ` +
     "I have not verified a separate reversing process for this type of record, so I will not invent one. " +
     "If you need a formal accounting reversal, I can first check what supported correction options are available. What are you trying to correct?"
   );
@@ -252,4 +264,19 @@ export function customerFacingReversalContainsInventedMethod(text: string): bool
   return CUSTOMER_FACING_INVENTED_REVERSAL_PATTERNS.some((pattern) =>
     pattern.test(text),
   );
+}
+
+/**
+ * True when customer-facing text claims deletion/removal is the only
+ * supported Cash Payment (or similar) correction. Assistant phrasing such as
+ * "state supported actions Red can actually perform" is allowed.
+ */
+export function correctionGuidanceClaimsDeleteIsOnlyCorrection(text: string): boolean {
+  return [
+    /\bthe only supported\b/i,
+    /\bonly supported correction\b/i,
+    /\bonly (?:available )?correction (?:action|option)\b/i,
+    /\b(?:delete|deletion|removing|removal) is the only\b/i,
+    /\bsole (?:available )?correction\b/i,
+  ].some((pattern) => hasUnprohibitedMatch(text, pattern));
 }

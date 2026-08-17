@@ -7,7 +7,7 @@ process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET =
 import { classifyRequestIntent } from "./intent-classifier.js";
 import { routeRequest } from "./route-request.js";
 import { isAffirmativeConfirmation } from "./pending-action.js";
-import { CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES, correctionGuidanceContainsJargon, correctionGuidanceMakesUnverifiedAccountingEffectClaim, correctionGuidanceProposesUnverifiedOpposite, customerFacingReversalContainsInventedMethod, explainDeletedRecordUndo, explainFinancialReverse, explainLinkedQuoteInvoice, explainQuoteReferenceUndo, isCorrectionIntent, } from "./correction-intent.js";
+import { CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES, correctionGuidanceClaimsDeleteIsOnlyCorrection, correctionGuidanceContainsJargon, correctionGuidanceMakesUnverifiedAccountingEffectClaim, correctionGuidanceProposesUnverifiedOpposite, customerFacingReversalContainsInventedMethod, explainDeletedRecordUndo, explainFinancialReverse, explainLinkedQuoteInvoice, explainQuoteReferenceUndo, isCorrectionIntent, } from "./correction-intent.js";
 const STAGING_FAILURE_REVERSAL_WORDING = [
     "Delete it outright — removes the payment from the books completely, as if it never happened.",
     "Create an offsetting entry — leave the original payment in place, and add a new record for the same supplier and amount that cancels it out.",
@@ -17,6 +17,7 @@ function assertSafeCustomerFacingReversal(text) {
     assert.equal(customerFacingReversalContainsInventedMethod(text), false, text);
     assert.equal(correctionGuidanceProposesUnverifiedOpposite(text), false, text);
     assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(text), false, text);
+    assert.equal(correctionGuidanceClaimsDeleteIsOnlyCorrection(text), false, text);
     assert.equal(correctionGuidanceContainsJargon(text), false, text);
     assert.equal(/\bbrc_/i.test(text), false, text);
 }
@@ -77,13 +78,14 @@ test("3. reverse that cash payment does not automatically delete it", async () =
     const explanation = explainFinancialReverse("cash payment");
     assert.match(explanation, /have not changed anything/i);
     assert.match(explanation, /can mean different things/i);
-    assert.match(explanation, /Red can remove the cash payment/i);
+    assert.match(explanation, /remove this Cash Payment/i);
     assert.match(explanation, /change supported details/i);
-    assert.match(explanation, /whether either is the right accounting treatment depends/i);
-    assert.match(explanation, /have not verified a separate reversing process/i);
-    assert.match(explanation, /will not invent one/i);
-    assert.match(explanation, /check what supported correction options/i);
+    assert.match(explanation, /amount, date, supplier/i);
+    assert.match(explanation, /Which action is appropriate depends/i);
+    assert.match(explanation, /haven't verified a separate formal reversal process/i);
+    assert.match(explanation, /won't invent one/i);
     assert.match(explanation, /What are you trying to correct/);
+    assert.equal(/\bthe only supported\b/i.test(explanation), false);
     assert.equal(/\bdelete\s+it\s+now\b/i.test(explanation), false);
     assert.equal(/\bsafest (?:concrete )?option\b/i.test(explanation), false);
     assertSafeCustomerFacingReversal(explanation);
@@ -196,7 +198,7 @@ test("customer-facing correction and reversal guidance does not expose internal 
         assert.equal(/\bbrc_/i.test(sample), false, sample);
         assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
     }
-    assert.match(explanation, /remove the cash payment/i);
+    assert.match(explanation, /remove this Cash Payment/i);
     assert.match(explanation, /change supported details/i);
     assert.match(explanation, /have not changed anything/i);
     assert.equal(/\bbrc_delete_cash_payment\b/i.test(explanation), false);
@@ -221,12 +223,14 @@ test("staging: Reverse Cash Payment id 581729508 does not invent a reversal meth
     const explanation = explainFinancialReverse("cash payment");
     assertSafeCustomerFacingReversal(explanation);
     assertSafeCustomerFacingReversal(CORRECTION_CUSTOMER_LANGUAGE_RULES);
-    assert.match(explanation, /Red can remove the cash payment/i);
-    assert.match(explanation, /right accounting treatment depends/i);
+    assert.match(explanation, /remove this Cash Payment/i);
     assert.match(explanation, /change supported details/i);
+    assert.match(explanation, /amount, date, supplier/i);
+    assert.match(explanation, /Which action is appropriate depends/i);
     assert.match(explanation, /What are you trying to correct/);
-    assert.match(explanation, /check what supported correction options/i);
+    assert.match(explanation, /won't invent one/i);
     assert.equal(/\boption 2\b/i.test(explanation), false);
+    assert.equal(/\bthe only supported\b/i.test(explanation), false);
     assert.equal(/\bbrc_delete_cash_payment\b/i.test(explanation), false);
     assert.equal(/\bbrc_update_cash_payment\b/i.test(explanation), false);
     assert.equal(customerFacingReversalContainsInventedMethod(STAGING_FAILURE_REVERSAL_WORDING), true);
@@ -234,6 +238,30 @@ test("staging: Reverse Cash Payment id 581729508 does not invent a reversal meth
     assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(STAGING_FAILURE_REVERSAL_WORDING), true);
     assert.equal(customerFacingReversalContainsInventedMethod(CORRECTION_ASSISTANT_GUIDANCE), true);
     assert.equal(correctionGuidanceProposesUnverifiedOpposite(CORRECTION_ASSISTANT_GUIDANCE), false);
+});
+test("staging: Reverse Cash Payment does not say delete is the only supported correction", async () => {
+    const message = "Reverse Cash Payment id 581729508";
+    const routed = await routeRequest(message);
+    assert.equal(routed.mode, "correction");
+    assert.equal(routed.routeToken, undefined);
+    assert.equal(routed.blockTransactionalTools, true);
+    assert.match(routed.guidance, /Do not say deletion or removal is the only supported correction/i);
+    assert.match(routed.guidance, /both removing the existing record and changing supported details/i);
+    assert.equal(correctionGuidanceClaimsDeleteIsOnlyCorrection(routed.guidance), false);
+    const explanation = explainFinancialReverse("cash payment");
+    assert.match(explanation, /remove this Cash Payment/i);
+    assert.match(explanation, /change supported details/i);
+    assert.match(explanation, /amount, date, supplier/i);
+    assert.match(explanation, /What are you trying to correct/);
+    assert.equal(correctionGuidanceClaimsDeleteIsOnlyCorrection(explanation), false);
+    assert.equal(/\bthe only supported\b/i.test(explanation), false);
+    assert.equal(/\bonly supported correction action\b/i.test(explanation), false);
+    assertSafeCustomerFacingReversal(explanation);
+    assert.equal(correctionGuidanceProposesUnverifiedOpposite(explanation), false);
+    assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(explanation), false);
+    assert.equal(/\bbrc_/i.test(explanation), false);
+    const stagingDeleteOnly = "Red can delete this cash payment record. That's the only supported correction action available for a cash payment.";
+    assert.equal(correctionGuidanceClaimsDeleteIsOnlyCorrection(stagingDeleteOnly), true);
 });
 test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", () => {
     const samples = [

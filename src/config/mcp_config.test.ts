@@ -141,6 +141,14 @@ test("MCP server instructions include correction/undo planning before another wr
     instructions,
     /Never mention internal tool names in customer-facing correction or reversal explanations/i
   );
+  assert.match(
+    instructions,
+    /Do not say deletion or removal is the only supported correction/i
+  );
+  assert.match(
+    instructions,
+    /Example fields the current Cash Payment update can change include amount, date, and supplier/i
+  );
 });
 
 test("routing instructions forbid paraphrasing the original request", () => {
