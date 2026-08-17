@@ -45,7 +45,7 @@ function verbNoun(
 }
 
 const CREATE_VERBS = "add|create|set\\s+up|setup|new|raise|prepare|record";
-const UPDATE_VERBS = "update|change|edit|amend|modify";
+const UPDATE_VERBS = "update|change|edit|amend|modify|correct";
 const DELETE_VERBS = "delete|remove|erase";
 const POST_VERBS = "post|raise|create|add|prepare";
 const BATCH_VERBS = "batch|bulk|import";
@@ -874,7 +874,7 @@ function detectPrimaryAction(
   index: number;
 } | null {
   const regex =
-    /\b(add|create|set\s+up|setup|new|raise|prepare|record|post|update|change|edit|amend|modify|delete|remove|erase|batch|bulk|import|email|send|mail)\b/i;
+    /\b(add|create|set\s+up|setup|new|raise|prepare|record|post|update|change|edit|amend|modify|correct|delete|remove|erase|batch|bulk|import|email|send|mail)\b/i;
 
   const match = regex.exec(text);
 
@@ -891,7 +891,7 @@ function detectPrimaryAction(
     | "batch"
     | "email";
 
-  if (/^(update|change|edit|amend|modify)$/.test(verb)) {
+  if (/^(update|change|edit|amend|modify|correct)$/.test(verb)) {
     action = "update";
   } else if (/^(delete|remove|erase)$/.test(verb)) {
     action = "delete";

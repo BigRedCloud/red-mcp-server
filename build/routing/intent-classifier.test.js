@@ -88,6 +88,17 @@ test("classify: list customers → read", () => {
 test("classify: empty → unknown", () => {
     assert.equal(classifyRequestIntent("").mode, "unknown");
 });
+test("classify: undo that quote reference change → correction", () => {
+    const result = classifyRequestIntent("Undo that quote reference change");
+    assert.equal(result.mode, "correction");
+    assert.equal(result.blockTransactionalTools, true);
+    assert.equal(result.reason, "correction_request");
+});
+test("classify: change the quote reference to QT0003 → action", () => {
+    const result = classifyRequestIntent("Change the quote reference to QT0003");
+    assert.equal(result.mode, "action");
+    assert.equal(result.workflow?.name, "update_quote");
+});
 test("classify: explicit cash receipt update routes correctly", () => {
     const result = classifyRequestIntent("In Company C, update Cash Receipt id 550078131. Change only the note to CASH RECEIPT MERGE TEST.");
     assert.equal(result.mode, "action");

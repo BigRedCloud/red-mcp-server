@@ -5,7 +5,7 @@
  * - action — Red should perform the accounting workflow
  * - help — manual Big Red Cloud instructions via the unified help pipeline
  *
- * Also returns connection / read / unsupported_action / unknown.
+ * Also returns connection / read / correction / unsupported_action / unknown.
  *
  * Deterministic how-to phrase detection runs before action-verb matching so
  * words like "add" / "create" never force action mode on how-to questions.
@@ -26,12 +26,14 @@ import {
   resolveWorkflowFromMessage,
   type ActionWorkflow,
 } from "./action-workflow-registry.js";
+import { isCorrectionIntent } from "./correction-intent.js";
 
 export type RequestRouteMode =
   | "action"
   | "help"
   | "connection"
   | "read"
+  | "correction"
   | "unsupported_action"
   | "unknown";
 
@@ -63,10 +65,10 @@ const READ_PATTERNS: RegExp[] = [
 
 /** Explicit perform-action wording (checked only after how-to / connection / read). */
 const ACTION_PATTERNS: RegExp[] = [
-  /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
-  /^\s*(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
-  /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|change|delete|remove)\b/i,
-  /\b(?:post|update|change|delete|remove)\s+this\b/i,
+  /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|change|edit|correct|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+  /^\s*(?:please\s+)?(?:add|create|post|update|change|edit|correct|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+  /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|change|correct|delete|remove)\b/i,
+  /\b(?:post|update|change|correct|delete|remove)\s+this\b/i,
 ];
 
 export type { ActionWorkflow };
@@ -152,6 +154,18 @@ export function classifyRequestIntent(
         "brc_confirm_company_connection",
       ],
       allowCompanyConnectionTool: true,
+    };
+  }
+
+  if (isCorrectionIntent(trimmed)) {
+    return {
+      mode: "correction",
+      cleanedQuery: trimmed,
+      originalMessage: trimmed,
+      reason: "correction_request",
+      blockTransactionalTools: true,
+      preferredTools: ["brc_list_audit_log"],
+      allowCompanyConnectionTool: false,
     };
   }
 

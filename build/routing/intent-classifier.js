@@ -5,7 +5,7 @@
  * - action — Red should perform the accounting workflow
  * - help — manual Big Red Cloud instructions via the unified help pipeline
  *
- * Also returns connection / read / unsupported_action / unknown.
+ * Also returns connection / read / correction / unsupported_action / unknown.
  *
  * Deterministic how-to phrase detection runs before action-verb matching so
  * words like "add" / "create" never force action mode on how-to questions.
@@ -16,6 +16,7 @@
  */
 import { detectRedHelpCommand, isHowToHelpPhrase, isRedHelpCompanyConnectionQuery, HELP_MODE_PREFERRED_TOOLS, } from "../brc-edu/help/help-mode.js";
 import { resolveActionWorkflow, resolveWorkflowFromMessage, } from "./action-workflow-registry.js";
+import { isCorrectionIntent } from "./correction-intent.js";
 const CONNECTION_PATTERNS = [
     /^\s*(?:please\s+)?(?:connect|reconnect)\b.{0,60}\bcompan(?:y|ies)\b/i,
     /^\s*(?:please\s+)?(?:connect|reconnect)\s+(?:my|a|the)\s+compan(?:y|ies)\b/i,
@@ -29,10 +30,10 @@ const READ_PATTERNS = [
 ];
 /** Explicit perform-action wording (checked only after how-to / connection / read). */
 const ACTION_PATTERNS = [
-    /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
-    /^\s*(?:please\s+)?(?:add|create|post|update|change|edit|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
-    /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|change|delete|remove)\b/i,
-    /\b(?:post|update|change|delete|remove)\s+this\b/i,
+    /^\s*(?:please\s+)?(?:can\s+you|could\s+you|would\s+you)\s+(?:please\s+)?(?:add|create|post|update|change|edit|correct|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+    /^\s*(?:please\s+)?(?:add|create|post|update|change|edit|correct|delete|remove|send|email|raise|prepare|record|batch|bulk|import|allocate|process|close|reopen)\b/i,
+    /^\s*(?:please\s+)?(?:help\s+me\s+)?(?:add|create|post|update|change|correct|delete|remove)\b/i,
+    /\b(?:post|update|change|correct|delete|remove)\s+this\b/i,
 ];
 /** Re-export registry resolver for call sites that imported from this module. */
 export { resolveActionWorkflow } from "./action-workflow-registry.js";
@@ -104,6 +105,17 @@ export function classifyRequestIntent(userMessage) {
                 "brc_confirm_company_connection",
             ],
             allowCompanyConnectionTool: true,
+        };
+    }
+    if (isCorrectionIntent(trimmed)) {
+        return {
+            mode: "correction",
+            cleanedQuery: trimmed,
+            originalMessage: trimmed,
+            reason: "correction_request",
+            blockTransactionalTools: true,
+            preferredTools: ["brc_list_audit_log"],
+            allowCompanyConnectionTool: false,
         };
     }
     if (isReadIntent(trimmed)) {

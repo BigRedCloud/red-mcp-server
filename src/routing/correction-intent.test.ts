@@ -1,0 +1,179 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+process.env.RED_CONNECT_CONNECTION_STORE = "memory";
+process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET =
+  process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET ||
+  "test-route-token-signing-secret-correction";
+
+import { classifyRequestIntent } from "./intent-classifier.js";
+import { routeRequest } from "./route-request.js";
+import { isAffirmativeConfirmation } from "./pending-action.js";
+import {
+  CORRECTION_CUSTOMER_LANGUAGE_RULES,
+  correctionGuidanceContainsJargon,
+  explainDeletedRecordUndo,
+  explainFinancialReverse,
+  explainLinkedQuoteInvoice,
+  explainQuoteReferenceUndo,
+  isCorrectionIntent,
+} from "./correction-intent.js";
+
+function assertCorrectionPlan(message: string): void {
+  const classified = classifyRequestIntent(message);
+  assert.equal(classified.mode, "correction", message);
+  assert.equal(classified.blockTransactionalTools, true, message);
+  assert.equal(classified.reason, "correction_request", message);
+  assert.ok(classified.preferredTools.includes("brc_list_audit_log"), message);
+}
+
+test("1. undo that quote reference change is correction planning, not a write", async () => {
+  const message = "Undo that quote reference change";
+  assert.equal(isCorrectionIntent(message), true);
+  assertCorrectionPlan(message);
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+  assert.equal(routed.blockTransactionalTools, true);
+  assert.equal(routed.confirmationContinuation, undefined);
+  assert.match(routed.guidance, /not write confirmation/i);
+  assert.match(routed.guidance, /ask permission/i);
+
+  const explanation = explainQuoteReferenceUndo({
+    fromReference: "QT0001",
+    toReference: "QT0002",
+  });
+  assert.match(explanation, /change that back/i);
+  assert.match(explanation, /QT0001/);
+  assert.match(explanation, /QT0002/);
+  assert.match(explanation, /leave the rest of the quote unchanged/i);
+  assert.match(explanation, /Would you like me to do that/);
+  assert.equal(correctionGuidanceContainsJargon(explanation), false);
+});
+
+test("2. undo that deleted quote does not claim a simple restore", () => {
+  const message = "Undo that deleted quote";
+  assertCorrectionPlan(message);
+
+  const explanation = explainDeletedRecordUndo("quote");
+  assert.match(explanation, /can't simply switch the deletion off/i);
+  assert.match(explanation, /check whether we still have enough information to recreate/i);
+  assert.match(explanation, /show you what would be recreated/i);
+  assert.match(explanation, /Would you like me to check/);
+  assert.equal(/simply (be )?restored|switch the deletion off and it will reappear/i.test(explanation), false);
+  assert.equal(correctionGuidanceContainsJargon(explanation), false);
+});
+
+test("3. reverse that cash payment does not automatically delete it", async () => {
+  const message = "Reverse that cash payment";
+  assert.equal(isCorrectionIntent(message), true);
+  assertCorrectionPlan(message);
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+  assert.match(routed.guidance, /Do not automatically delete a financial record/i);
+
+  const explanation = explainFinancialReverse("cash payment");
+  assert.match(explanation, /will not automatically remove/i);
+  assert.match(explanation, /safest supported correction/i);
+  assert.match(explanation, /Would you like me to check/);
+  assert.equal(/\bdelete\s+it\s+now\b/i.test(explanation), false);
+  assert.equal(correctionGuidanceContainsJargon(explanation), false);
+});
+
+test("4. change the quote reference to QT0003 remains a normal quote update", async () => {
+  const message = "Change the quote reference to QT0003";
+  assert.equal(isCorrectionIntent(message), false);
+
+  const classified = classifyRequestIntent(message);
+  assert.equal(classified.mode, "action");
+  assert.equal(classified.workflow?.name, "update_quote");
+  assert.ok(classified.preferredTools.includes("brc_update_quote"));
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "action");
+  assert.ok(routed.routeToken);
+  assert.equal(routed.workflow, "update_quote");
+});
+
+test("5. correct invoice 123 amount to €20 remains a normal explicit update", async () => {
+  const message = "Correct invoice 123 amount to €20";
+  assert.equal(isCorrectionIntent(message), false);
+
+  const classified = classifyRequestIntent(message);
+  assert.equal(classified.mode, "action");
+  assert.equal(classified.workflow?.name, "update_sales_invoice");
+  assert.ok(classified.preferredTools.includes("brc_update_sales_invoice"));
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "action");
+  assert.ok(routed.routeToken);
+  assert.equal(routed.workflow, "update_sales_invoice");
+});
+
+test("6. put it back how it was is reversal/correction intent", async () => {
+  const message = "Put it back how it was";
+  assert.equal(isCorrectionIntent(message), true);
+  assertCorrectionPlan(message);
+
+  const routed = await routeRequest(message);
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+});
+
+test("7. previous value unknown — Red does not invent it", () => {
+  const explanation = explainQuoteReferenceUndo({});
+  assert.match(explanation, /will not guess/i);
+  assert.match(explanation, /Would you like me to check/);
+  assert.equal(/QT0001|QT0002|QT0003/.test(explanation), false);
+  assert.equal(correctionGuidanceContainsJargon(explanation), false);
+});
+
+test("8. quote generated sales invoice explains linked records", () => {
+  const explanation = explainLinkedQuoteInvoice();
+  assert.match(explanation, /linked/i);
+  assert.match(explanation, /does not automatically remove the invoice/i);
+  assert.equal(/one-click undo|I'll undo the generated invoice/i.test(explanation), false);
+  assert.match(explanation, /Would you like me to check/);
+  assert.equal(correctionGuidanceContainsJargon(explanation), false);
+});
+
+test("9. reversal language is not write confirmation and cannot bypass confirmWrite", () => {
+  assert.equal(isAffirmativeConfirmation("undo that"), false);
+  assert.equal(isAffirmativeConfirmation("undo that quote reference change"), false);
+  assert.equal(isAffirmativeConfirmation("reverse that"), false);
+  assert.equal(isAffirmativeConfirmation("put it back"), false);
+  assert.equal(isAffirmativeConfirmation("change it back"), false);
+  assert.equal(isAffirmativeConfirmation("cancel what you just did"), false);
+});
+
+test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", () => {
+  const samples = [
+    CORRECTION_CUSTOMER_LANGUAGE_RULES,
+    explainQuoteReferenceUndo({ fromReference: "QT0001", toReference: "QT0002" }),
+    explainDeletedRecordUndo("quote"),
+    explainFinancialReverse("cash payment"),
+    explainLinkedQuoteInvoice(),
+    explainQuoteReferenceUndo({}),
+  ];
+
+  for (const sample of samples) {
+    assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
+  }
+});
+
+test("other reversal phrases classify as correction", () => {
+  for (const message of [
+    "undo the last change",
+    "restore that",
+    "cancel what you just did",
+    "I made a mistake",
+    "correct the last transaction",
+    "change it back",
+  ]) {
+    assert.equal(isCorrectionIntent(message), true, message);
+    assertCorrectionPlan(message);
+  }
+});

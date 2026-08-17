@@ -850,22 +850,43 @@ function parseRequestBody(init: RequestInit): unknown {
   }
 }
 
+export type RedAuditOperation =
+  | "create"
+  | "update"
+  | "delete"
+  | "batch"
+  | "close"
+  | "reopen"
+  | "email"
+  | "change";
+
+export type RedAuditOutcome = "success" | "failure";
+
 export type RedAuditEntry = {
   id: number;
+  /** Server-generated ISO UTC time. Same instant as timestampUtc. */
   timestamp: string;
+  /** Authoritative server-generated ISO UTC timestamp, e.g. 2026-08-17T10:30:15.123Z. */
+  timestampUtc: string;
   companyName: string;
   method: string;
   path: string;
   action: string;
+  operation: RedAuditOperation;
+  outcome: RedAuditOutcome;
   recordType: string;
   recordId?: string | number;
   summary: string;
+  /** Short failure summary. Never a credential or full sensitive payload. */
+  errorSummary?: string;
   requestBody?: unknown;
   responseBody?: unknown;
   /**
    * Session/connection/company scope captured when the entry was recorded.
    * Never returned to the user — used only to keep audit answers scoped to the
    * current MCP session, connection, and currently connected companies.
+   *
+   * No authenticated BRC userId is available at runtime today. Do not invent one.
    */
   mcpSessionId?: string;
   connectionId?: string;
@@ -1140,6 +1161,34 @@ function resolveAuditAction(method: string, parsed: ParsedAuditPath): string {
   return "Changed";
 }
 
+function resolveAuditOperation(
+  action: string,
+  parsed: ParsedAuditPath
+): RedAuditOperation {
+  if (parsed.resourceKey === "email") {
+    return "email";
+  }
+  if (action === "Closed") return "close";
+  if (action === "Reopened") return "reopen";
+  if (action === "Batch processed") return "batch";
+  if (action === "Created") return "create";
+  if (action === "Deleted") return "delete";
+  if (action === "Updated") return "update";
+  return "change";
+}
+
+function sanitizeAuditErrorSummary(status: number, statusText: string, bodyText: string): string {
+  const compact = bodyText.replace(/\s+/g, " ").trim().slice(0, 280);
+  const withoutSecrets = compact
+    .replace(/Bearer\s+\S+/gi, "<REDACTED>")
+    .replace(/api[_-]?key["']?\s*[:=]\s*["']?\S+/gi, "apiKey=<REDACTED>");
+  const statusBit = `${status}${statusText ? ` ${statusText}` : ""}`.trim();
+  if (!withoutSecrets) {
+    return `Write did not complete (${statusBit}).`;
+  }
+  return `Write did not complete (${statusBit}). ${withoutSecrets}`;
+}
+
 function buildAuditSummary(args: {
   companyName: string;
   method: string;
@@ -1222,22 +1271,31 @@ export function recordRedAuditEntry(args: {
   mcpSessionId?: string;
   connectionId?: string;
   companyId?: string | number;
+  outcome?: RedAuditOutcome;
+  errorSummary?: string;
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
+  const parsed = parseAuditPath(pathname);
+  const timestampUtc = new Date().toISOString();
+  const outcome: RedAuditOutcome = args.outcome ?? "success";
 
   const scope = resolveCurrentAuditScope();
 
   const entry: RedAuditEntry = {
     id: redAuditCounter++,
-    timestamp: new Date().toISOString(),
+    timestamp: timestampUtc,
+    timestampUtc,
     companyName: args.companyName,
     method: args.method,
     path: pathname,
     action: meta.action,
+    operation: resolveAuditOperation(meta.action, parsed),
+    outcome,
     recordType: meta.recordType,
     recordId: meta.recordId,
     summary: meta.summary,
+    ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
     requestBody: args.requestBody,
     responseBody: args.responseBody,
     mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1313,6 +1371,25 @@ export async function brcFetch(
       return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
     }
 
+    if (isWriteHttpMethod(method)) {
+      recordRedAuditEntry({
+        companyName,
+        method,
+        path: safePath,
+        requestBody,
+        responseBody: {
+          statusCode: response.status,
+          statusText: response.statusText,
+        },
+        outcome: "failure",
+        errorSummary: sanitizeAuditErrorSummary(
+          response.status,
+          response.statusText,
+          text
+        ),
+      });
+    }
+
     throw new Error(
       `BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`
     );
@@ -1341,6 +1418,7 @@ export async function brcFetch(
       path: safePath,
       requestBody,
       responseBody: parsedBody,
+      outcome: "success",
     });
 
     return enrichToolResponseData(parsedBody, { companyName });
@@ -1460,6 +1538,24 @@ function logAuditScopeDiagnostic(details: {
   );
 }
 
+function toCustomerFacingAuditEntry(entry: RedAuditEntry): RedAuditEntry {
+  return {
+    id: entry.id,
+    timestamp: entry.timestamp,
+    timestampUtc: entry.timestampUtc,
+    companyName: entry.companyName,
+    method: entry.method,
+    path: entry.path,
+    action: entry.action,
+    operation: entry.operation,
+    outcome: entry.outcome,
+    recordType: entry.recordType,
+    recordId: entry.recordId,
+    summary: entry.summary,
+    ...(entry.errorSummary ? { errorSummary: entry.errorSummary } : {}),
+  };
+}
+
 /**
  * Returns audit entries for the current MCP session/connection scope, further
  * restricted to companies currently connected in this session.
@@ -1469,6 +1565,9 @@ function logAuditScopeDiagnostic(details: {
  * - If no companies are currently connected, returns no entries.
  * - Entries from other sessions/connections, or for companies not currently
  *   connected (including disconnected/cleared companies), are never returned.
+ *
+ * Customer-facing results never include userId, session ids, connection ids,
+ * or request/response bodies. Technical details remain scoped the same way.
  */
 export function getRedAuditLog(options?: {
   includeTechnicalDetails?: boolean;
@@ -1511,17 +1610,7 @@ export function getRedAuditLog(options?: {
     }));
   }
 
-  return scoped.map((entry) => ({
-    id: entry.id,
-    timestamp: entry.timestamp,
-    companyName: entry.companyName,
-    method: entry.method,
-    action: entry.action,
-    recordType: entry.recordType,
-    recordId: entry.recordId,
-    summary: entry.summary,
-    path: entry.path,
-  }));
+  return scoped.map(toCustomerFacingAuditEntry);
 }
 
 /**

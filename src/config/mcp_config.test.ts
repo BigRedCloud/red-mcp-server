@@ -88,6 +88,24 @@ test("MCP server instructions define red-help mode and block auto transactional 
   );
 });
 
+test("MCP server instructions include correction/undo planning before another write", () => {
+  const instructions = getBrcMcpServerInstructions(50, false);
+
+  assert.match(instructions, /Red correction, undo, and reversal rules/i);
+  assert.match(instructions, /first request is not write confirmation/i);
+  assert.match(instructions, /Never invent previous values/i);
+  assert.match(
+    instructions,
+    /Undo \/ reverse \/ put it back \/ change it back \/ restore \/ cancel what you just did/i
+  );
+  assert.match(
+    instructions,
+    /Undo, reverse, put it back, change it back, restore, and cancel-what-you-just-did are not confirmation/i
+  );
+  assert.match(instructions, /change the quote reference to QT0003/i);
+  assert.match(instructions, /correct invoice 123 amount to €20/i);
+});
+
 test("routing instructions forbid paraphrasing the original request", () => {
   assert.match(
     MANDATORY_ROUTING_INSTRUCTION,

@@ -28,6 +28,11 @@ import {
   type RequestRouteMode,
 } from "./intent-classifier.js";
 import {
+  CORRECTION_ASSISTANT_GUIDANCE,
+  CORRECTION_CUSTOMER_LANGUAGE_RULES,
+  isCorrectionIntent,
+} from "./correction-intent.js";
+import {
   hashRouteMessage,
   issueActionRouteToken,
   isIssuedRouteTokenConsumed,
@@ -65,7 +70,7 @@ export type RouteRequestResult = {
   allowedTools?: string[];
   /**
    * Opaque short-lived action routeToken. Only present for action mode.
-   * Never issued for help or unsupported_action.
+   * Never issued for help, correction, or unsupported_action.
    */
   routeToken?: string;
   routeTokenExpiresAt?: number;
@@ -113,6 +118,10 @@ function guidanceFor(classification: IntentClassification): string {
         "Do not create, update, or delete records for this request.",
         "Do not clear or replace an active routeToken from a prior action preview.",
       ].join(" ");
+    case "correction":
+      return [CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES].join(
+        " "
+      );
     default:
       return [
         "Mode unknown: ask a brief clarifying question — whether they want Red to perform the action or want manual Big Red Cloud steps.",
@@ -211,7 +220,9 @@ async function tryConfirmationContinuation(args: {
   connectionId?: string | null;
   clientKey?: string | null;
 }): Promise<RouteRequestResult | null> {
-  if (!isAffirmativeConfirmation(args.message)) {
+  // Undo / reverse / put it back is planning, not permission to complete a
+  // pending write — even if a preview is waiting.
+  if (isCorrectionIntent(args.message) || !isAffirmativeConfirmation(args.message)) {
     return null;
   }
 
@@ -405,10 +416,10 @@ export async function routeRequest(
     guidance: guidanceFor(classification),
   };
 
-  if (classification.mode === "unsupported_action") {
+  if (classification.mode === "unsupported_action" || classification.mode === "correction") {
     logRouteRequestResolved({
-      mode: "unsupported_action",
-      allowedToolCount: 0,
+      mode: classification.mode,
+      allowedToolCount: classification.preferredTools.length,
       tokenIssued: false,
       pendingSaved: false,
       confirmationContinuation: false,

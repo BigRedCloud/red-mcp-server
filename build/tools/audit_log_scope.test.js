@@ -123,6 +123,102 @@ test("company-name matching is case/whitespace-insensitive against connected com
     });
     assert.equal(entries.length, 1);
 });
+test("successful write audit events include server timestampUtc and operation/outcome", () => {
+    __resetRedAuditLogForTests();
+    const first = recordForScope({ ...SESSION_A, companyName: "Test3" });
+    const second = recordRedAuditEntry({
+        companyName: "Test3",
+        method: "PUT",
+        path: "/v1/quotes/42",
+        mcpSessionId: SESSION_A.mcpSessionId,
+        connectionId: SESSION_A.connectionId,
+        requestBody: { reference: "QT0002" },
+        responseBody: { id: 42, reference: "QT0002" },
+    });
+    const isoUtc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    const beforeMs = Date.now() - 5_000;
+    assert.match(first.timestampUtc, isoUtc);
+    assert.equal(first.timestampUtc, first.timestamp);
+    assert.ok(Date.parse(first.timestampUtc) >= beforeMs);
+    assert.ok(Date.parse(first.timestampUtc) <= Date.now() + 1_000);
+    const ignoredClientStamp = recordRedAuditEntry({
+        companyName: "Test3",
+        method: "POST",
+        path: "/v1/quotes",
+        mcpSessionId: SESSION_A.mcpSessionId,
+        connectionId: SESSION_A.connectionId,
+        timestampUtc: "1999-01-01T00:00:00.000Z",
+        timestamp: "1999-01-01T00:00:00.000Z",
+    });
+    assert.notEqual(ignoredClientStamp.timestampUtc, "1999-01-01T00:00:00.000Z");
+    assert.match(ignoredClientStamp.timestampUtc, isoUtc);
+    assert.equal(first.outcome, "success");
+    assert.equal(first.operation, "create");
+    assert.equal(second.outcome, "success");
+    assert.equal(second.operation, "update");
+    assert.equal(first.mcpSessionId, second.mcpSessionId);
+    assert.equal("userId" in first, false);
+    assert.equal("userId" in second, false);
+    const customerFacing = getRedAuditLog({
+        scope: SESSION_A,
+        connectedCompanyNames: ["Test3"],
+    });
+    assert.equal(customerFacing.length, 3);
+    for (const entry of customerFacing) {
+        assert.match(entry.timestampUtc, isoUtc);
+        assert.equal("userId" in entry, false);
+        assert.equal("mcpSessionId" in entry, false);
+        assert.equal("connectionId" in entry, false);
+        assert.equal("requestBody" in entry, false);
+        assert.equal("responseBody" in entry, false);
+    }
+});
+test("failed writes record outcome metadata without credentials", () => {
+    __resetRedAuditLogForTests();
+    const entry = recordRedAuditEntry({
+        companyName: "Test3",
+        method: "PUT",
+        path: "/v1/salesInvoices/123",
+        mcpSessionId: SESSION_A.mcpSessionId,
+        connectionId: SESSION_A.connectionId,
+        requestBody: {
+            amount: 20,
+            apiKey: "super-secret-company-key",
+            token: "access-token-value",
+        },
+        responseBody: { statusCode: 422, statusText: "Unprocessable Entity" },
+        outcome: "failure",
+        errorSummary: "Write did not complete (422 Unprocessable Entity). Invoice is closed.",
+    });
+    assert.equal(entry.outcome, "failure");
+    assert.equal(entry.operation, "update");
+    assert.match(entry.timestampUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.match(entry.errorSummary ?? "", /Invoice is closed/);
+    assert.equal("userId" in entry, false);
+    const customerFacing = getRedAuditLog({
+        scope: SESSION_A,
+        connectedCompanyNames: ["Test3"],
+    });
+    assert.equal(customerFacing.length, 1);
+    assert.equal(customerFacing[0].outcome, "failure");
+    assert.equal(customerFacing[0].errorSummary, entry.errorSummary);
+    assert.equal("userId" in customerFacing[0], false);
+    assert.equal("requestBody" in customerFacing[0], false);
+    assert.equal(JSON.stringify(customerFacing[0]).includes("super-secret-company-key"), false);
+    assert.equal(JSON.stringify(customerFacing[0]).includes("access-token-value"), false);
+    const technical = getRedAuditLog({
+        scope: SESSION_A,
+        connectedCompanyNames: ["Test3"],
+        includeTechnicalDetails: true,
+    });
+    assert.equal(technical.length, 1);
+    assert.equal(technical[0].mcpSessionId, SESSION_A.mcpSessionId);
+    assert.equal("userId" in technical[0], false);
+    const technicalJson = JSON.stringify(technical[0]);
+    assert.equal(technicalJson.includes("super-secret-company-key"), false);
+    assert.equal(technicalJson.includes("access-token-value"), false);
+    assert.match(technicalJson, /<REDACTED>/);
+});
 test("includeTechnicalDetails path is also scoped and company-filtered", () => {
     __resetRedAuditLogForTests();
     recordForScope({ ...SESSION_A, companyName: "Test3" });
