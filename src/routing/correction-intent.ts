@@ -44,16 +44,19 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
   "Existing preview-before-posting, confirmWrite, confirmDelete, counterparty, and email confirmation rules still apply after the user agrees to a plan.",
   "If the user agrees, start the normal supported business workflow for that plan — do not bypass confirmation.",
   "Never quote internal tool identifiers, preferredTools, allowedTools, route tokens, endpoints, HTTP methods, JSON, or MCP names in customer-facing correction or reversal explanations. Use those identifiers only to choose and call tools. Speak to the user in plain business language, for example remove the record, change the record, check the quote, recreate the record, or show the proposed change.",
+  "Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction in business language. The safety rule is semantic: do not suggest an accounting reversal method unless that exact flow is supported and verified.",
   "Do not automatically delete a financial record because the user said undo or reverse.",
-  "Do not infer accounting treatment from the word reverse. Reverse can mean different things depending on the accounting situation.",
+  "Do not infer accounting treatment from the word reverse. Reverse can mean different things depending on the accounting situation. Ask what the user is trying to correct before choosing an accounting treatment.",
   "Never propose a specific accounting transaction type as a reversal unless that exact reversal flow is supported by existing Red tools and verified BRC behaviour.",
   "Do not assume Cash Payment is reversed with a Cash Receipt, Sales Invoice with a Sales Credit Note, or Purchase with an opposite purchase or credit. Do not invent negative or opposite transactions.",
+  "Do not invent an offsetting entry, opposite entry, matching entry that cancels the original, or a new record for the same supplier and amount that supposedly cancels the accounting effect.",
+  "Do not present deletion and an invented offsetting transaction as two equally verified options. Do not recommend one accounting treatment based on generic claims such as most businesses prefer.",
   "Distinguish clearly: (1) actions Red knows it can perform; (2) accounting or business consequences that have been verified from available data or a proven BRC workflow; (3) assumptions, which must not be stated as fact.",
-  "Red may say it can delete a financial record when an existing delete action supports that. Deleting is not automatically the safest or correct accounting treatment just because Red can remove the record.",
+  "Red may say it can remove a financial record when an existing delete action supports that, or change supported details on the existing record when that fits the user's intent. Neither is automatically the correct accounting treatment.",
   "Do not claim what the resulting customer or supplier outstanding balance, allocation state, ledger balance, VAT position, audit history, or outstanding amount will become unless that effect is directly supported by available data or a verified BRC workflow.",
-  "Do not say deletion makes a transaction look like it never existed unless Big Red Cloud's retained-history behaviour is verified.",
+  "Do not say deletion makes a transaction look like it never existed or never happened unless Big Red Cloud's retained-history behaviour is verified. Do not claim there will be no audit trail.",
   "If the downstream accounting effect is uncertain, say so clearly in non-technical language and do not invent it.",
-  "For financial records: read the current record first; state only supported actions Red can actually perform; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask permission.",
+  "For financial records: read the current record first; state only supported actions Red can actually perform; if a formal reversing or correcting transaction has not been proven, say Red can check what correction options are supported rather than naming one; then ask what the user is trying to correct.",
   "Do not claim an action is reversible unless Red can actually do it. If it cannot, say what Red can and cannot do and that the rest must be completed in Big Red Cloud.",
 ].join(" ");
 
@@ -64,11 +67,12 @@ export const CORRECTION_ASSISTANT_GUIDANCE = [
 export const CORRECTION_CUSTOMER_LANGUAGE_RULES = [
   "Talk to the user as an accountant or bookkeeper. Keep explanations short and specific.",
   "Prefer: change it back; leave everything else unchanged; check what changed; recreate the record; remove the record; change the record; check the quote; show you the proposed change; check what correction options are supported.",
-  "Never mention internal tool names in customer-facing explanations. Describe supported actions in plain business language only.",
+  "Never mention internal tool names in customer-facing explanations. Describe supported actions in plain business language only. Plain wording is not permission to invent a reversal method.",
   "Do not invent previous values. If the earlier value is unknown, say you need to check what it was first.",
   "A deleted record cannot simply be switched back on. Offer to check whether there is enough information to recreate it, and show what would be recreated before anything is posted.",
-  "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. State only supported actions Red can actually perform — not assumed accounting results. If a formal reversing or correcting transaction has not been proven, offer to check what correction options are supported rather than naming an opposite transaction type.",
-  "Do not call deletion the safest option just because Red can remove the record. One supported action may be removing it, but whether that is the correct accounting treatment depends on why the user wants to reverse it.",
+  "Do not automatically delete a payment or other financial record because the user asked to reverse it. Explain that reverse can mean different things. Ask what they are trying to correct before choosing an accounting treatment.",
+  "State only supported actions Red can actually perform on the existing record, such as removing it or changing supported details. Do not invent a new record that supposedly cancels the original. If a formal reversing process has not been proven, offer to check what correction options are supported.",
+  "Do not call deletion the safest option just because Red can remove the record. One supported action may be removing it, and another may be changing the existing record, but whether either is the correct accounting treatment depends on why the user wants to reverse it.",
   "Do not claim unverified effects on customer or supplier outstanding balances, allocations, ledger balances, VAT, or whether the transaction will still appear in accounting history. If those effects are uncertain, say so.",
   "If a quote has generated a sales invoice, those are linked records. Changing or reopening the quote does not automatically remove the invoice. Explain what Red can safely do, then ask permission.",
   "Wait for explicit permission before making another change.",
@@ -97,43 +101,55 @@ export function explainDeletedRecordUndo(recordLabel = "record"): string {
 
 export function explainFinancialReverse(recordLabel = "payment"): string {
   return (
-    `I will not automatically remove that ${recordLabel}. ` +
-    `"Reverse" can mean different things depending on the accounting situation. ` +
-    `One supported action available to Red is removing the ${recordLabel}, but whether that is the correct accounting treatment depends on why you want to reverse it. ` +
-    "I have not verified how Big Red Cloud will reflect that removal in outstanding balances or accounting history, so I will not assume the downstream effect. " +
-    "If you need a formal accounting reversal rather than removal, I should first check the supported correction process. " +
-    "I will not create an opposite transaction unless that is a confirmed supported method. Would you like me to check?"
+    `I have checked the ${recordLabel} and have not changed anything. ` +
+    `"Reverse" can mean different things depending on what needs correcting. ` +
+    `Red can remove the ${recordLabel} or change supported details on it, but whether either is the right accounting treatment depends on why you want to reverse it. ` +
+    "I have not verified a separate reversing process for this type of record, so I will not invent one. " +
+    "If you need a formal accounting reversal, I can first check what supported correction options are available. What are you trying to correct?"
   );
+}
+
+function clauseLooksLikeProhibition(text: string, matchIndex: number): boolean {
+  const start = text.lastIndexOf(".", matchIndex);
+  const clause = text.slice(start === -1 ? 0 : start + 1, matchIndex).trimStart();
+  return /^(?:do not|don't|never|will not|won't|i will not|i have not|i haven't)\b/i.test(
+    clause,
+  );
+}
+
+function hasUnprohibitedMatch(text: string, pattern: RegExp): boolean {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const global = new RegExp(pattern.source, flags);
+  for (const match of text.matchAll(global)) {
+    if (match.index === undefined) {
+      continue;
+    }
+    if (!clauseLooksLikeProhibition(text, match.index)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
  * True when customer-facing text invents an unverified opposite transaction
  * type — for example reversing a Cash Payment by creating a Cash Receipt.
- * Prohibitions such as "I will not create an opposite transaction" are allowed.
+ * Prohibitions such as "Do not invent an offsetting entry" are allowed in
+ * assistant guidance. Customer-facing text should still avoid these concepts.
  */
 export function correctionGuidanceProposesUnverifiedOpposite(text: string): boolean {
-  if (/\bequal-and-opposite\b/i.test(text)) {
-    return true;
-  }
-  if (/\boffsetting\b/i.test(text)) {
-    return true;
-  }
-  if (/\bmatching reversal\b/i.test(text)) {
-    return true;
-  }
-  if (/\bnegative (?:amount|transaction|entry)\b/i.test(text)) {
-    return true;
-  }
-  if (/\bcreate(?:ing)? a reversing entry\b/i.test(text)) {
-    return true;
-  }
-  if (/\bcash receipt\b/i.test(text)) {
-    return true;
-  }
-  if (/\bsales credit note\b/i.test(text)) {
-    return true;
-  }
-  return false;
+  return [
+    /\bequal-and-opposite\b/i,
+    /\boffsetting\b/i,
+    /\bopposite (?:entry|transaction|record)\b/i,
+    /\bmatching (?:reversal|entry)\b/i,
+    /\bcancels? (?:it|the (?:payment|transaction|amount)) out\b/i,
+    /\bsame supplier and amount\b/i,
+    /\bnegative (?:amount|transaction|entry)\b/i,
+    /\bcreate(?:ing)? a reversing entry\b/i,
+    /\bcash receipt\b/i,
+    /\bsales credit note\b/i,
+  ].some((pattern) => hasUnprohibitedMatch(text, pattern));
 }
 
 /**
@@ -144,7 +160,19 @@ export function correctionGuidanceProposesUnverifiedOpposite(text: string): bool
 export function correctionGuidanceMakesUnverifiedAccountingEffectClaim(
   text: string,
 ): boolean {
-  if (/\bnever existed\b/i.test(text)) {
+  if (hasUnprohibitedMatch(text, /\bnever existed\b/i)) {
+    return true;
+  }
+  if (hasUnprohibitedMatch(text, /\bas if it never happened\b/i)) {
+    return true;
+  }
+  if (hasUnprohibitedMatch(text, /\bnever happened\b/i)) {
+    return true;
+  }
+  if (hasUnprohibitedMatch(text, /\bno audit trail\b/i)) {
+    return true;
+  }
+  if (hasUnprohibitedMatch(text, /\bmost businesses\b.{0,40}\bprefer\b/i)) {
     return true;
   }
   if (/\bstill owed\b/i.test(text)) {
@@ -200,5 +228,28 @@ export function correctionGuidanceContainsJargon(text: string): boolean {
     FORBIDDEN_CUSTOMER_JARGON.test(text) ||
     FORBIDDEN_INTERNAL_TOOL_NAME.test(text) ||
     FORBIDDEN_HTTP_METHODS.test(text)
+  );
+}
+
+/** Phrases from the staging reversal regression; must stay out of customer-facing text. */
+const CUSTOMER_FACING_INVENTED_REVERSAL_PATTERNS = [
+  /\boffsetting (?:entry|transaction|record)\b/i,
+  /\bopposite entry\b/i,
+  /\bmatching entry\b/i,
+  /\bcancels? (?:it|the (?:payment|transaction|amount)) out\b/i,
+  /\bsame supplier and amount\b/i,
+  /\bas if it never happened\b/i,
+  /\bno audit trail\b/i,
+  /\bmost businesses\b.{0,60}\bprefer\b/i,
+];
+
+/**
+ * True when customer-facing reversal text uses invented-method wording,
+ * including the exact staging-failure phrases. Unlike the proposal detector,
+ * prohibitions that still name those methods also fail this check.
+ */
+export function customerFacingReversalContainsInventedMethod(text: string): boolean {
+  return CUSTOMER_FACING_INVENTED_REVERSAL_PATTERNS.some((pattern) =>
+    pattern.test(text),
   );
 }

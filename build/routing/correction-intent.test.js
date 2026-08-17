@@ -7,7 +7,19 @@ process.env.BRC_ROUTE_TOKEN_SIGNING_SECRET =
 import { classifyRequestIntent } from "./intent-classifier.js";
 import { routeRequest } from "./route-request.js";
 import { isAffirmativeConfirmation } from "./pending-action.js";
-import { CORRECTION_CUSTOMER_LANGUAGE_RULES, correctionGuidanceContainsJargon, correctionGuidanceMakesUnverifiedAccountingEffectClaim, correctionGuidanceProposesUnverifiedOpposite, explainDeletedRecordUndo, explainFinancialReverse, explainLinkedQuoteInvoice, explainQuoteReferenceUndo, isCorrectionIntent, } from "./correction-intent.js";
+import { CORRECTION_ASSISTANT_GUIDANCE, CORRECTION_CUSTOMER_LANGUAGE_RULES, correctionGuidanceContainsJargon, correctionGuidanceMakesUnverifiedAccountingEffectClaim, correctionGuidanceProposesUnverifiedOpposite, customerFacingReversalContainsInventedMethod, explainDeletedRecordUndo, explainFinancialReverse, explainLinkedQuoteInvoice, explainQuoteReferenceUndo, isCorrectionIntent, } from "./correction-intent.js";
+const STAGING_FAILURE_REVERSAL_WORDING = [
+    "Delete it outright — removes the payment from the books completely, as if it never happened.",
+    "Create an offsetting entry — leave the original payment in place, and add a new record for the same supplier and amount that cancels it out.",
+    "Most businesses that need an audit trail prefer option 2.",
+].join(" ");
+function assertSafeCustomerFacingReversal(text) {
+    assert.equal(customerFacingReversalContainsInventedMethod(text), false, text);
+    assert.equal(correctionGuidanceProposesUnverifiedOpposite(text), false, text);
+    assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(text), false, text);
+    assert.equal(correctionGuidanceContainsJargon(text), false, text);
+    assert.equal(/\bbrc_/i.test(text), false, text);
+}
 function assertCorrectionPlan(message) {
     const classified = classifyRequestIntent(message);
     assert.equal(classified.mode, "correction", message);
@@ -58,22 +70,23 @@ test("3. reverse that cash payment does not automatically delete it", async () =
     assert.equal(routed.blockTransactionalTools, true);
     assert.match(routed.guidance, /Do not automatically delete a financial record/i);
     assert.match(routed.guidance, /Never propose a specific accounting transaction type as a reversal/i);
+    assert.match(routed.guidance, /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i);
+    assert.match(routed.guidance, /Do not invent an offsetting entry/i);
     assert.equal(/\bequal-and-opposite\b/i.test(routed.guidance), false);
-    assert.equal(/\boffsetting\b/i.test(routed.guidance), false);
+    assert.equal(correctionGuidanceProposesUnverifiedOpposite(routed.guidance), false);
     const explanation = explainFinancialReverse("cash payment");
-    assert.match(explanation, /will not automatically remove/i);
+    assert.match(explanation, /have not changed anything/i);
     assert.match(explanation, /can mean different things/i);
-    assert.match(explanation, /One supported action available to Red is removing/i);
-    assert.match(explanation, /whether that is the correct accounting treatment depends/i);
-    assert.match(explanation, /have not verified/i);
-    assert.match(explanation, /will not assume the downstream effect/i);
-    assert.match(explanation, /will not create an opposite transaction/i);
-    assert.match(explanation, /Would you like me to check/);
+    assert.match(explanation, /Red can remove the cash payment/i);
+    assert.match(explanation, /change supported details/i);
+    assert.match(explanation, /whether either is the right accounting treatment depends/i);
+    assert.match(explanation, /have not verified a separate reversing process/i);
+    assert.match(explanation, /will not invent one/i);
+    assert.match(explanation, /check what supported correction options/i);
+    assert.match(explanation, /What are you trying to correct/);
     assert.equal(/\bdelete\s+it\s+now\b/i.test(explanation), false);
     assert.equal(/\bsafest (?:concrete )?option\b/i.test(explanation), false);
-    assert.equal(correctionGuidanceContainsJargon(explanation), false);
-    assert.equal(correctionGuidanceProposesUnverifiedOpposite(explanation), false);
-    assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(explanation), false);
+    assertSafeCustomerFacingReversal(explanation);
 });
 test("reverse Cash Payment does not suggest creating a Cash Receipt", async () => {
     const message = "Reverse Cash Payment id 581729508";
@@ -96,7 +109,8 @@ test("reverse Cash Payment does not claim unverified accounting effects", async 
     assert.equal(routed.routeToken, undefined);
     assert.match(routed.guidance, /Do not claim what the resulting customer or supplier outstanding balance/i);
     assert.match(routed.guidance, /Do not say deletion makes a transaction look like it never existed/i);
-    assert.match(routed.guidance, /Deleting is not automatically the safest or correct accounting treatment/i);
+    assert.match(routed.guidance, /Neither is automatically the correct accounting treatment/i);
+    assert.match(routed.guidance, /Do not present deletion and an invented offsetting transaction as two equally verified options/i);
     const explanation = explainFinancialReverse("cash payment");
     assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(explanation), false);
     assert.equal(/\bstill owed\b/i.test(explanation), false);
@@ -182,8 +196,9 @@ test("customer-facing correction and reversal guidance does not expose internal 
         assert.equal(/\bbrc_/i.test(sample), false, sample);
         assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
     }
-    assert.match(explanation, /removing the cash payment/i);
-    assert.match(explanation, /will not automatically remove/i);
+    assert.match(explanation, /remove the cash payment/i);
+    assert.match(explanation, /change supported details/i);
+    assert.match(explanation, /have not changed anything/i);
     assert.equal(/\bbrc_delete_cash_payment\b/i.test(explanation), false);
     assert.equal(/\bbrc_update_cash_payment\b/i.test(explanation), false);
     const routed = await routeRequest("Reverse Cash Payment id 581729508");
@@ -191,6 +206,34 @@ test("customer-facing correction and reversal guidance does not expose internal 
     assert.equal(/\bbrc_/i.test(routed.guidance), false);
     assert.match(routed.guidance, /Never quote internal tool identifiers/i);
     assert.match(routed.guidance, /plain business language/i);
+});
+test("staging: Reverse Cash Payment id 581729508 does not invent a reversal method", async () => {
+    const message = "Reverse Cash Payment id 581729508";
+    assertCorrectionPlan(message);
+    const routed = await routeRequest(message);
+    assert.equal(routed.mode, "correction");
+    assert.equal(routed.routeToken, undefined);
+    assert.equal(routed.blockTransactionalTools, true);
+    assert.equal(routed.confirmationContinuation, undefined);
+    assert.match(routed.guidance, /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i);
+    assert.match(routed.guidance, /do not suggest an accounting reversal method unless that exact flow is supported and verified/i);
+    assert.equal(/\bbrc_/i.test(routed.guidance), false);
+    const explanation = explainFinancialReverse("cash payment");
+    assertSafeCustomerFacingReversal(explanation);
+    assertSafeCustomerFacingReversal(CORRECTION_CUSTOMER_LANGUAGE_RULES);
+    assert.match(explanation, /Red can remove the cash payment/i);
+    assert.match(explanation, /right accounting treatment depends/i);
+    assert.match(explanation, /change supported details/i);
+    assert.match(explanation, /What are you trying to correct/);
+    assert.match(explanation, /check what supported correction options/i);
+    assert.equal(/\boption 2\b/i.test(explanation), false);
+    assert.equal(/\bbrc_delete_cash_payment\b/i.test(explanation), false);
+    assert.equal(/\bbrc_update_cash_payment\b/i.test(explanation), false);
+    assert.equal(customerFacingReversalContainsInventedMethod(STAGING_FAILURE_REVERSAL_WORDING), true);
+    assert.equal(correctionGuidanceProposesUnverifiedOpposite(STAGING_FAILURE_REVERSAL_WORDING), true);
+    assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(STAGING_FAILURE_REVERSAL_WORDING), true);
+    assert.equal(customerFacingReversalContainsInventedMethod(CORRECTION_ASSISTANT_GUIDANCE), true);
+    assert.equal(correctionGuidanceProposesUnverifiedOpposite(CORRECTION_ASSISTANT_GUIDANCE), false);
 });
 test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", () => {
     const samples = [
@@ -202,9 +245,7 @@ test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", (
         explainQuoteReferenceUndo({}),
     ];
     for (const sample of samples) {
-        assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
-        assert.equal(correctionGuidanceProposesUnverifiedOpposite(sample), false, sample);
-        assert.equal(correctionGuidanceMakesUnverifiedAccountingEffectClaim(sample), false, sample);
+        assertSafeCustomerFacingReversal(sample);
     }
 });
 test("explicit cash payment delete and update remain normal action workflows", async () => {

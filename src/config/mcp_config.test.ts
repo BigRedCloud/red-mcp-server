@@ -123,7 +123,19 @@ test("MCP server instructions include correction/undo planning before another wr
   );
   assert.match(
     instructions,
-    /Deleting is not automatically the safest or correct accounting treatment/i
+    /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i
+  );
+  assert.match(
+    instructions,
+    /Neither is automatically the safest or correct accounting treatment/i
+  );
+  assert.match(
+    instructions,
+    /Do not invent an offsetting entry, opposite entry, matching entry that cancels the original/i
+  );
+  assert.match(
+    instructions,
+    /Do not recommend one accounting treatment based on generic claims such as most businesses prefer/i
   );
   assert.match(
     instructions,

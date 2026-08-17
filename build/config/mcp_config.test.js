@@ -71,7 +71,10 @@ test("MCP server instructions include correction/undo planning before another wr
     assert.equal(/create a reversing entry/i.test(instructions), false);
     assert.match(instructions, /Do not claim what the resulting customer or supplier outstanding balance/i);
     assert.match(instructions, /Do not say deletion makes a transaction look like it never existed/i);
-    assert.match(instructions, /Deleting is not automatically the safest or correct accounting treatment/i);
+    assert.match(instructions, /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i);
+    assert.match(instructions, /Neither is automatically the safest or correct accounting treatment/i);
+    assert.match(instructions, /Do not invent an offsetting entry, opposite entry, matching entry that cancels the original/i);
+    assert.match(instructions, /Do not recommend one accounting treatment based on generic claims such as most businesses prefer/i);
     assert.match(instructions, /Never mention internal tool names in customer-facing correction or reversal explanations/i);
 });
 test("routing instructions forbid paraphrasing the original request", () => {
