@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isToolEnabled } from "./config/server_config.js";
+import { isToolEnabled, getToolSkillGroup } from "./config/server_config.js";
 import { CONNECTION_REF_SCHEMA_EXEMPT_TOOLS, registerAllTools, } from "./register_all_tools.js";
 function captureRegisteredTools() {
     const tools = new Map();
@@ -66,6 +66,17 @@ test("register_all_tools includes brc_route_request", () => {
     assert.match(tool.description, /routeToken/i);
     assert.ok(tool.schema.message);
     assert.equal(schemaHasOptionalConnectionRef(tool.schema), true);
+});
+test("register_all_tools includes read-only brc_generate_support_report", () => {
+    assert.ok(registeredTools.has("brc_generate_support_report"));
+    assert.equal(isToolEnabled("brc_generate_support_report"), true);
+    assert.equal(getToolSkillGroup("brc_generate_support_report"), "session");
+    const tool = registeredTools.get("brc_generate_support_report");
+    assert.ok(tool);
+    assert.equal(tool.schema.routeToken, undefined);
+    assert.ok(tool.schema.companyName);
+    assert.match(tool.description, /downloadable|diagnostic/i);
+    assert.equal(CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has("brc_generate_support_report"), false);
 });
 test("transactional tools require routeToken in registered schema", () => {
     const createCustomer = registeredTools.get("brc_create_customer");

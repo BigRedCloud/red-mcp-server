@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { getActiveInitiatingRequest } from "./audit/initiating_request.js";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import { clearAllCompaniesFromConnectionStore, clearCompanyFromConnectionStore, hydrateSessionKeyStoreFromConnectionStore, persistCompanyCredentialToConnectionStore, } from "./auth/connection_persistence.js";
 import { FRESH_CONNECTION_ASSISTANT_GUIDANCE } from "./auth/connection_wording.js";
@@ -940,12 +941,24 @@ function sanitizeConfirmedWriteError(error) {
         ? `Write did not complete. ${withoutSecrets}`
         : "Write did not complete.";
 }
+function parseHttpStatusFromUnknown(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const match = /\b(\d{3})\s+([A-Za-z][A-Za-z ]+?)(?:\.|$)/.exec(message);
+    if (!match) {
+        return {};
+    }
+    return {
+        statusCode: Number(match[1]),
+        statusText: match[2].trim(),
+    };
+}
 function recordConfirmedWriteFailureIfNeeded(error, options) {
     const store = confirmedWriteAuditAls.getStore();
     if (!store || store.audited || !store.companyName) {
         return;
     }
     const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
+    const parsedStatus = parseHttpStatusFromUnknown(error);
     store.audited = true;
     recordRedAuditEntry({
         companyName: store.companyName,
@@ -954,6 +967,8 @@ function recordConfirmedWriteFailureIfNeeded(error, options) {
         outcome: "failure",
         errorSummary: options?.errorSummary ?? sanitizeConfirmedWriteError(error),
         stage: options?.stage ?? inferConfirmedWriteFailureStage(error),
+        statusCode: options?.statusCode ?? parsedStatus.statusCode,
+        statusText: options?.statusText ?? parsedStatus.statusText,
     });
 }
 /**
@@ -994,6 +1009,13 @@ export function recordRedAuditEntry(args) {
     if (confirmedWrite) {
         confirmedWrite.audited = true;
     }
+    const initiatingRequest = args.initiatingRequest ?? getActiveInitiatingRequest();
+    const toolName = args.toolName ?? confirmedWrite?.toolName;
+    const statusFromBody = args.responseBody &&
+        typeof args.responseBody === "object" &&
+        !Array.isArray(args.responseBody)
+        ? args.responseBody
+        : undefined;
     const entry = {
         id: redAuditCounter++,
         timestamp: timestampUtc,
@@ -1009,6 +1031,18 @@ export function recordRedAuditEntry(args) {
         summary,
         ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
         ...(args.stage ? { stage: args.stage } : {}),
+        ...(initiatingRequest ? { initiatingRequest } : {}),
+        ...(toolName ? { toolName } : {}),
+        ...(args.statusCode !== undefined
+            ? { statusCode: args.statusCode }
+            : typeof statusFromBody?.statusCode === "number"
+                ? { statusCode: statusFromBody.statusCode }
+                : {}),
+        ...(args.statusText
+            ? { statusText: args.statusText }
+            : typeof statusFromBody?.statusText === "string"
+                ? { statusText: statusFromBody.statusText }
+                : {}),
         requestBody: args.requestBody,
         responseBody: args.responseBody,
         mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1079,12 +1113,16 @@ export async function brcFetch(companyName, path, init = {}) {
                 outcome: "failure",
                 errorSummary: sanitizeAuditErrorSummary(response.status, response.statusText, text),
                 stage: "write",
+                statusCode: response.status,
+                statusText: response.statusText,
             });
         }
         else if (confirmedWriteAuditAls.getStore()) {
             recordConfirmedWriteFailureIfNeeded(new Error(`${response.status} ${response.statusText}`), {
                 stage: "preflight",
                 errorSummary: sanitizeAuditErrorSummary(response.status, response.statusText, text),
+                statusCode: response.status,
+                statusText: response.statusText,
             });
         }
         throw new Error(`BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`);

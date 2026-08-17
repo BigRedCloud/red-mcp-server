@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
+import { getActiveInitiatingRequest } from "./audit/initiating_request.js";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import {
   clearAllCompaniesFromConnectionStore,
@@ -881,6 +882,13 @@ export type RedAuditEntry = {
   errorSummary?: string;
   /** Technical-only: where a confirmed write failed. Omitted from customer-facing audit. */
   stage?: "preflight" | "write";
+  /** Technical-only: sanitized instruction received by brc_route_request. Never invented. */
+  initiatingRequest?: string;
+  /** Technical-only: write tool name when recorded inside a confirmed write. */
+  toolName?: string;
+  /** Technical-only: BRC HTTP status when known. */
+  statusCode?: number;
+  statusText?: string;
   requestBody?: unknown;
   responseBody?: unknown;
   /**
@@ -1365,9 +1373,29 @@ function sanitizeConfirmedWriteError(error: unknown): string {
     : "Write did not complete.";
 }
 
+function parseHttpStatusFromUnknown(error: unknown): {
+  statusCode?: number;
+  statusText?: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = /\b(\d{3})\s+([A-Za-z][A-Za-z ]+?)(?:\.|$)/.exec(message);
+  if (!match) {
+    return {};
+  }
+  return {
+    statusCode: Number(match[1]),
+    statusText: match[2]!.trim(),
+  };
+}
+
 function recordConfirmedWriteFailureIfNeeded(
   error: unknown,
-  options?: { stage?: "preflight" | "write"; errorSummary?: string }
+  options?: {
+    stage?: "preflight" | "write";
+    errorSummary?: string;
+    statusCode?: number;
+    statusText?: string;
+  }
 ): void {
   const store = confirmedWriteAuditAls.getStore();
   if (!store || store.audited || !store.companyName) {
@@ -1375,6 +1403,7 @@ function recordConfirmedWriteFailureIfNeeded(
   }
 
   const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
+  const parsedStatus = parseHttpStatusFromUnknown(error);
   store.audited = true;
   recordRedAuditEntry({
     companyName: store.companyName,
@@ -1383,6 +1412,8 @@ function recordConfirmedWriteFailureIfNeeded(
     outcome: "failure",
     errorSummary: options?.errorSummary ?? sanitizeConfirmedWriteError(error),
     stage: options?.stage ?? inferConfirmedWriteFailureStage(error),
+    statusCode: options?.statusCode ?? parsedStatus.statusCode,
+    statusText: options?.statusText ?? parsedStatus.statusText,
   });
 }
 
@@ -1426,6 +1457,10 @@ export function recordRedAuditEntry(args: {
   outcome?: RedAuditOutcome;
   errorSummary?: string;
   stage?: "preflight" | "write";
+  initiatingRequest?: string;
+  toolName?: string;
+  statusCode?: number;
+  statusText?: string;
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
@@ -1446,6 +1481,16 @@ export function recordRedAuditEntry(args: {
     confirmedWrite.audited = true;
   }
 
+  const initiatingRequest =
+    args.initiatingRequest ?? getActiveInitiatingRequest();
+  const toolName = args.toolName ?? confirmedWrite?.toolName;
+  const statusFromBody =
+    args.responseBody &&
+    typeof args.responseBody === "object" &&
+    !Array.isArray(args.responseBody)
+      ? (args.responseBody as JsonRecord)
+      : undefined;
+
   const entry: RedAuditEntry = {
     id: redAuditCounter++,
     timestamp: timestampUtc,
@@ -1461,6 +1506,18 @@ export function recordRedAuditEntry(args: {
     summary,
     ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
     ...(args.stage ? { stage: args.stage } : {}),
+    ...(initiatingRequest ? { initiatingRequest } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(args.statusCode !== undefined
+      ? { statusCode: args.statusCode }
+      : typeof statusFromBody?.statusCode === "number"
+        ? { statusCode: statusFromBody.statusCode }
+        : {}),
+    ...(args.statusText
+      ? { statusText: args.statusText }
+      : typeof statusFromBody?.statusText === "string"
+        ? { statusText: statusFromBody.statusText }
+        : {}),
     requestBody: args.requestBody,
     responseBody: args.responseBody,
     mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1553,6 +1610,8 @@ export async function brcFetch(
           text
         ),
         stage: "write",
+        statusCode: response.status,
+        statusText: response.statusText,
       });
     } else if (confirmedWriteAuditAls.getStore()) {
       recordConfirmedWriteFailureIfNeeded(
@@ -1564,6 +1623,8 @@ export async function brcFetch(
             response.statusText,
             text
           ),
+          statusCode: response.status,
+          statusText: response.statusText,
         }
       );
     }

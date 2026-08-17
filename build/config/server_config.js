@@ -179,6 +179,7 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_find_help_resources",
     "brc_get_help_resource_details",
     "brc_open_edu_admin",
+    "brc_generate_support_report",
 ]);
 const DEV_TOOL_NAMES = new Set([
     "brc_set_company_api_key",
