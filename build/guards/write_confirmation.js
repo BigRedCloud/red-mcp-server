@@ -494,6 +494,18 @@ function draftFieldsForTool(toolName) {
             "record counts within the batch limit",
         ];
     }
+    if (toolName === "brc_delete_quote") {
+        return [
+            "company",
+            "quote id",
+            "reference",
+            "customer",
+            "total",
+            "open or closed",
+            "linked sales invoice if any",
+            "timestamp",
+        ];
+    }
     if (toolName.startsWith("brc_delete_") || toolName.startsWith("brc_update_")) {
         return [
             "company",
@@ -630,6 +642,9 @@ function writeToolEndpoint(toolName) {
     if (toolName === "brc_batch_quotes") {
         return "PUT /v1/quotes/batch";
     }
+    if (toolName === "brc_delete_quote") {
+        return "DELETE /v1/quotes/{id}";
+    }
     return undefined;
 }
 /**
@@ -721,11 +736,12 @@ export function wrapWriteToolHandler(toolName, handler) {
         if (counterpartyBlock) {
             return counterpartyBlock;
         }
-        if (isWriteActionConfirmed(args)) {
+        if (isWriteActionConfirmed(args) || toolName === "brc_delete_quote") {
             // Re-run counterparty validation so customer-ledger tools still require
             // confirmCounterpartyExplicit on post. Analysed cash receipts that do not
             // use a customer return null here and may proceed with confirmWrite alone.
-            if (requiresCounterpartyConfirmation(toolName)) {
+            // brc_delete_quote loads the Quote first, then confirms from that record.
+            if (isWriteActionConfirmed(args) && requiresCounterpartyConfirmation(toolName)) {
                 const postCounterpartyBlock = await validateCounterpartyForWrite({
                     toolName,
                     companyName,

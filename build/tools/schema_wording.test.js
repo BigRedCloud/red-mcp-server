@@ -6,6 +6,8 @@ import { registerQuoteTools } from "./sales-emails/quotes_tools.js";
 import { registerBatchTools } from "./general/batch_tools.js";
 import { registerCompanyContextTools } from "./setup/company_context_tools.js";
 import { registerNominalReportTools } from "./journals/nominal_report_tools.js";
+import { registerTools as registerListTools } from "./general/list_tools.js";
+import { registerCashPaymentTools } from "./bank-payments/cash_payments_tools.js";
 import { SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION, } from "./general/payloads_tools.js";
 /**
  * Registers the given tool modules against a recording server and returns a map
@@ -27,6 +29,8 @@ function captureRegisteredTools() {
         registerBatchTools,
         registerCompanyContextTools,
         registerNominalReportTools,
+        registerListTools,
+        registerCashPaymentTools,
     ]) {
         register(recorder);
     }
@@ -169,6 +173,49 @@ test("brc_update_quote advertises reference-only updates and does not expose not
     assert.match(description, /manual reference only/i);
     assert.match(description, /note is not persisted/i);
     assert.equal(/update quote note/i.test(description), false, "description must not advertise updating quote notes");
+    assert.equal(/staging has proven/i.test(description), false, "description must not use staging-test wording");
+});
+test("brc_delete_quote describes preview details and inconclusive post-delete lookups", () => {
+    const { description } = getTool("brc_delete_quote");
+    assert.match(description, /reference/i);
+    assert.match(description, /customer/i);
+    assert.match(description, /total/i);
+    assert.match(description, /open or closed/i);
+    assert.match(description, /inconclusive/i);
+    assert.match(description, /quote id/i);
+    assert.match(description, /not necessarily unique/i);
+});
+test("quote list and get wording does not treat field differences as failures", () => {
+    const list = getTool("brc_list_quotes");
+    const get = getTool("brc_get_quote");
+    for (const tool of [list, get]) {
+        assert.match(tool.description, /representation differences/i);
+        assert.equal(/list and get return the same fields/i.test(tool.description), false);
+    }
+});
+test("Quote and cash tool descriptions have no leftover staging or diagnostic wording", () => {
+    const names = [
+        "brc_create_quote",
+        "brc_create_quote_gen_ref",
+        "brc_update_quote",
+        "brc_delete_quote",
+        "brc_list_quotes",
+        "brc_get_quote",
+        "brc_create_cash_receipt",
+        "brc_update_cash_receipt",
+        "brc_delete_cash_receipt",
+        "brc_list_cash_receipts",
+        "brc_get_cash_receipt",
+        "brc_create_cash_payment",
+        "brc_update_cash_payment",
+        "brc_delete_cash_payment",
+        "brc_list_cash_payments",
+        "brc_get_cash_payment",
+    ];
+    for (const name of names) {
+        const { description } = getTool(name);
+        assert.equal(/staging has proven|temporary diagnostic|staging test|requestedUpdateKeys|currentRecordLedger/i.test(description), false, `${name} description must not contain leftover staging or diagnostic wording`);
+    }
 });
 test("nominal report tools state monthly values are period movements", () => {
     for (const name of [

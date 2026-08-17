@@ -35,8 +35,8 @@ import {
 
   /**
    * Builds the PUT body for brc_update_quote: clone the current Quote from GET,
-   * then apply only an explicit manual reference change. Staging proved Quote.note
-   * is not persisted by PUT /v1/quotes/{id}; do not advertise or patch note here.
+   * then apply only an explicit manual reference change. Quote.note is not
+   * persisted by PUT /v1/quotes/{id}; do not advertise or patch note here.
    */
   export function buildQuoteReferenceUpdatePayload(
     current: JsonRecord,
@@ -72,6 +72,195 @@ import {
     }
 
     return payload;
+  }
+
+  const SENSITIVE_QUOTE_PREVIEW_KEYS = new Set([
+    "companyName",
+    "routeToken",
+    "connectionRef",
+    "apiKey",
+    "api_key",
+    "credentials",
+    "credential",
+    "password",
+    "authorization",
+    "Authorization",
+    "auth",
+    "session",
+    "sessionId",
+    "mcpSessionId",
+    "mcp_session_id",
+  ]);
+
+  function quoteRecordValue(
+    quote: JsonRecord,
+    ...keys: string[]
+  ): unknown {
+    for (const key of keys) {
+      if (quote[key] !== undefined) {
+        return quote[key];
+      }
+    }
+    return undefined;
+  }
+
+  function isQuoteClosed(closedDate: unknown): boolean {
+    if (closedDate === undefined || closedDate === null) {
+      return false;
+    }
+    if (typeof closedDate === "string" && closedDate.trim() === "") {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Non-technical Quote delete preview built from the record already fetched
+   * to obtain the delete timestamp. Does not copy auth/routing/session fields.
+   */
+  export function buildQuoteDeletePreview(
+    quote: JsonRecord,
+    timestamp: string
+  ): Record<string, unknown> {
+    const closedDate = quoteRecordValue(quote, "closedDate", "ClosedDate") ?? null;
+    const preview: Record<string, unknown> = {
+      id: quoteRecordValue(quote, "id", "Id") ?? null,
+      reference: quoteRecordValue(quote, "reference", "Reference") ?? null,
+      customer:
+        quoteRecordValue(quote, "customerOwnerName", "CustomerOwnerName", "customer") ??
+        null,
+      customerOwnerName:
+        quoteRecordValue(quote, "customerOwnerName", "CustomerOwnerName") ?? null,
+      total: quoteRecordValue(quote, "total", "Total") ?? null,
+      closedDate,
+      state: isQuoteClosed(closedDate) ? "closed" : "open",
+      saleInvoiceId: quoteRecordValue(quote, "saleInvoiceId", "SaleInvoiceId") ?? null,
+      timestamp,
+    };
+
+    for (const key of SENSITIVE_QUOTE_PREVIEW_KEYS) {
+      delete preview[key];
+    }
+
+    return preview;
+  }
+
+  /**
+   * Surfaces a created Quote id only when BRC returned one directly.
+   * Does not infer from references, payload fields, or HTTP status.
+   */
+  export function extractCreatedQuoteId(
+    response: unknown
+  ): number | string | undefined {
+    if (typeof response === "number" && Number.isInteger(response) && response > 0) {
+      return response;
+    }
+
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      return undefined;
+    }
+
+    const record = response as JsonRecord;
+    const id = record.id ?? record.Id;
+    if (typeof id === "number" && Number.isInteger(id) && id > 0) {
+      return id;
+    }
+    if (typeof id === "string") {
+      const trimmed = id.trim();
+      if (/^\d+$/.test(trimmed)) {
+        const parsed = Number(trimmed);
+        if (Number.isInteger(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  function quoteCreateStatus(response: unknown): unknown {
+    if (response && typeof response === "object" && !Array.isArray(response)) {
+      const record = response as JsonRecord;
+      if (typeof record.statusCode === "number") {
+        return record.statusCode;
+      }
+      if (typeof record.status === "number" || typeof record.status === "string") {
+        return record.status;
+      }
+    }
+    return "created";
+  }
+
+  export function buildQuoteCreateSuccessBody(args: {
+    message: string;
+    companyName: string;
+    endpoint: string;
+    payloadSent: unknown;
+    response: unknown;
+    referenceWarnings?: string[];
+  }): Record<string, unknown> {
+    const createdQuoteId = extractCreatedQuoteId(args.response);
+    const body: Record<string, unknown> = {
+      message: args.message,
+      companyName: args.companyName,
+      endpoint: args.endpoint,
+      payloadSent: args.payloadSent,
+      response: args.response,
+      status: quoteCreateStatus(args.response),
+    };
+
+    if (createdQuoteId !== undefined) {
+      body.createdQuoteId = createdQuoteId;
+    }
+
+    if (args.referenceWarnings && args.referenceWarnings.length > 0) {
+      body.referenceWarnings = args.referenceWarnings;
+    }
+
+    return body;
+  }
+
+  export function describeQuotePostDeleteVerification(args: {
+    deleteSucceeded: boolean;
+    lookupOutcome:
+      | "not_attempted"
+      | "not_found"
+      | "unexpected_error"
+      | "still_present";
+  }): string {
+    if (!args.deleteSucceeded) {
+      return "The quote was not deleted.";
+    }
+
+    switch (args.lookupOutcome) {
+      case "not_found":
+        return "The quote was deleted successfully and no longer appears when looked up by quote id.";
+      case "still_present":
+        return "The quote delete succeeded, but the quote still appears when looked up by quote id. Check the quote list by quote id.";
+      case "unexpected_error":
+        return "The quote was deleted successfully. A follow-up lookup returned an unexpected error, so that check is inconclusive. Confirm by listing quotes and looking for this quote id. Do not use the quote reference alone, because references are not necessarily unique.";
+      case "not_attempted":
+      default:
+        return "The quote was deleted successfully. If you need to double-check, look for this quote id in the quote list. A later lookup error is not proof that deletion failed. Do not use the quote reference alone, because references are not necessarily unique.";
+    }
+  }
+
+  const QUOTE_DELETE_PREVIEW_MESSAGE = [
+    "Red stopped before deleting this quote because explicit confirmation is required.",
+    "",
+    "This is a preview only. Nothing has been deleted.",
+    "",
+    "Show the user the quote details from the preview: id, reference, customer, total, whether it is open or closed, any linked sales invoice, and timestamp.",
+    "Do not look the quote up again just to describe it — these details already come from the quote loaded for deletion.",
+    "",
+    "Only call this tool again with confirmWrite: true after the user explicitly confirms, for example: \"yes, delete it\".",
+  ].join("\n");
+
+  function isQuoteDeleteConfirmed(args: {
+    confirmDelete?: boolean;
+    confirmWrite?: boolean;
+  }): boolean {
+    return args.confirmDelete === true || args.confirmWrite === true;
   }
 
   export function registerQuoteTools(server:ServerType){
@@ -145,7 +334,16 @@ const quoteSchemaBase = {
           confirmCrAnalysisCategory,
         });
         const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes", payload);
-        return jsonResponse({ message: "Quote created using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
+        return jsonResponse(
+          buildQuoteCreateSuccessBody({
+            message: "Quote created using structured MCP fields.",
+            companyName,
+            endpoint: "POST /v1/quotes",
+            payloadSent: payload,
+            response: createResponse,
+            referenceWarnings,
+          })
+        );
       } catch (error) {
         return jsonResponse({ message: "Error creating quote.", companyName, endpoint: "POST /v1/quotes", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
       }
@@ -175,7 +373,16 @@ const quoteSchemaBase = {
           confirmCrAnalysisCategory,
         });
         const createResponse = await brcJsonRequest(companyName, "POST", "/v1/quotes/createQuoteWithGeneratingReference", payload);
-        return jsonResponse({ message: "Quote created with a generated reference using structured MCP fields.", companyName, payloadSent: payload, referenceWarnings: referenceWarnings.length > 0 ? referenceWarnings : undefined, createResponse });
+        return jsonResponse(
+          buildQuoteCreateSuccessBody({
+            message: "Quote created with a generated reference using structured MCP fields.",
+            companyName,
+            endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference",
+            payloadSent: payload,
+            response: createResponse,
+            referenceWarnings,
+          })
+        );
       } catch (error) {
         return jsonResponse({ message: "Error creating quote with a generated reference.", companyName, endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference", payloadSent: payload ?? null, error: error instanceof Error ? error.message : String(error) });
       }
@@ -184,7 +391,7 @@ const quoteSchemaBase = {
   
   server.tool(
     "brc_update_quote",
-    "Updates a BRC quote's manual reference only. Staging has proven Quote.reference is writable via PUT /v1/quotes/{id}; Quote.note is not persisted by this endpoint and is not accepted here. Loads the current quote, preserves all other fields (including timestamp, product lines, analysis entries, totals, customer, sales rep, dates, comments, and closed state), applies the new reference, then PUTs the full record. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.",
+    "Updates a BRC quote's manual reference only. Quote.note is not persisted by this update and is not accepted here. Loads the current quote, preserves all other fields (including timestamp, product lines, analysis entries, totals, customer, sales rep, dates, comments, and closed state), applies the new reference, then PUTs the full record. Manual quote references must be 6 characters or fewer because Big Red Cloud truncates longer references.",
     {
       companyName: companyNameSchema,
       id: z.union([z.string(), z.number()]).describe("Quote id."),
@@ -228,19 +435,60 @@ const quoteSchemaBase = {
   
   server.tool(
     "brc_delete_quote",
-    "Deletes a BRC quote by id using timestamp confirmation.",
+    "Deletes a BRC quote by id using timestamp confirmation. Loads the quote once to obtain its timestamp and to preview id, reference, customer, total, open or closed state, any linked sales invoice, and timestamp before asking for confirmation. A successful delete is the result; if a later lookup by quote id returns an unexpected error, treat that check as inconclusive rather than as a failed delete. Confirm remaining quotes from the quote list by quote id — quote references are not necessarily unique.",
     {
       companyName: companyNameSchema,
       id: z.union([z.string(), z.number()]).describe("Quote id."),
       confirmDelete: z.boolean().default(false),
     },
-    async ({ companyName, id, confirmDelete }) => {
-      if (!confirmDelete) throw new Error("Deletion not confirmed. Re-run with confirmDelete=true.");
+    async ({ companyName, id, confirmDelete, ...rest }) => {
       const quote = await brcFetch(companyName, `/v1/quotes/${encodeURIComponent(id)}`);
       if (!quote || typeof quote !== "object" || Array.isArray(quote)) throw new Error(`Could not read quote ${id} before deletion.`);
       const timestamp = getTimestampFromRecord(quote as JsonRecord, `quote ${id}`);
+      const payloadPreview = buildQuoteDeletePreview(quote as JsonRecord, timestamp);
+
+      if (
+        !isQuoteDeleteConfirmed({
+          confirmDelete,
+          confirmWrite: (rest as { confirmWrite?: boolean }).confirmWrite,
+        })
+      ) {
+        return jsonResponse({
+          status: "confirmation_required",
+          confirmationRequired: true,
+          message: QUOTE_DELETE_PREVIEW_MESSAGE,
+          toolName: "brc_delete_quote",
+          companyName,
+          proposedAction: "deleting this record",
+          draftFieldsToShow: [
+            "company",
+            "quote id",
+            "reference",
+            "customer",
+            "total",
+            "open or closed",
+            "linked sales invoice if any",
+            "timestamp",
+          ],
+          endpoint: `DELETE /v1/quotes/${id}`,
+          payloadPreview,
+          confirmationField: "confirmWrite",
+          preflightPassedIsNotConfirmation: true,
+        });
+      }
+
       const deleteResponse = await brcJsonRequest(companyName, "DELETE", `/v1/quotes/${encodeURIComponent(id)}?timestamp=${encodeURIComponent(timestamp)}`);
-      return jsonResponse({ deleted: true, companyName, id, timestampUsed: timestamp, deleteResponse });
+      return jsonResponse({
+        deleted: true,
+        companyName,
+        id,
+        timestampUsed: timestamp,
+        deleteResponse,
+        message: describeQuotePostDeleteVerification({
+          deleteSucceeded: true,
+          lookupOutcome: "not_attempted",
+        }),
+      });
     }
   );
   server.tool(

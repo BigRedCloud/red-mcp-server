@@ -106,8 +106,8 @@ export function registerTools(server) {
     registerListTool(server, "brc_list_nominal_accounts", `Lists BRC nominal accounts. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`, "/v1/nominalAccounts");
     registerGetTool(server, "brc_get_nominal_account_ledger_by_id", `Gets one BRC nominal account by id. ${NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION}`, "/v1/nominalAccounts", "Nominal account");
     // Quotes
-    registerListTool(server, "brc_list_quotes", "Lists BRC quotes.", "/v1/quotes");
-    registerGetTool(server, "brc_get_quote", "Gets one BRC quote by id.", "/v1/quotes", "Quote");
+    registerListTool(server, "brc_list_quotes", "Lists BRC quotes. List and get may not return the same fields (for example note or analysis account codes); treat those as representation differences, not as create or update failures. Quote references are not necessarily unique — identify a quote by id.", "/v1/quotes");
+    registerGetTool(server, "brc_get_quote", "Gets one BRC quote by id. List and get may not return the same fields (for example note or analysis account codes); treat those as representation differences, not as create or update failures.", "/v1/quotes", "Quote");
     // Sales Credit Notes
     registerListTool(server, "brc_list_sales_credit_notes", "Lists BRC sales credit notes.", "/v1/salesCreditNotes");
     registerGetTool(server, "brc_get_sales_credit_note", "Gets one BRC sales credit note by id.", "/v1/salesCreditNotes", "Sales credit note");

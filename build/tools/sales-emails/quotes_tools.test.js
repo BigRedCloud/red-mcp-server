@@ -3,7 +3,7 @@ import test from "node:test";
 import { wrapWriteToolHandler } from "../../guards/write_confirmation.js";
 import { enforceReferenceSettingsOrThrow, } from "../../guards/company_reference_settings.js";
 import { assertQuoteManualReferenceLengthOrThrow, buildQuoteCreatePayloadFromToolArgs, buildQuotePayload, normalizeBatchItems, QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE, } from "../general/payloads_tools.js";
-import { buildGenerateSalesInvoiceFromQuotePayload, buildQuoteReferenceUpdatePayload, quoteManualReferenceSchema, } from "./quotes_tools.js";
+import { buildGenerateSalesInvoiceFromQuotePayload, buildQuoteCreateSuccessBody, buildQuoteDeletePreview, buildQuoteReferenceUpdatePayload, describeQuotePostDeleteVerification, extractCreatedQuoteId, quoteManualReferenceSchema, } from "./quotes_tools.js";
 function parseBody(result) {
     const text = result.content[0].text;
     return JSON.parse(text);
@@ -539,4 +539,170 @@ test("brc_generate_sales_invoice_from_quote confirmed payload matches preview", 
     assert.deepEqual(postBody.payloadSent, previewBody.payloadPreview);
     assert.equal("routeToken" in postBody.payloadSent, false);
     assert.equal("companyName" in postBody.payloadSent, false);
+});
+const FETCHED_QUOTE = {
+    id: 2892396,
+    reference: "QT0001",
+    customerOwnerName: "Paul Conroy Ltd",
+    total: 12.3,
+    closedDate: null,
+    saleInvoiceId: null,
+    timeStamp: "ABC123timestamp=",
+    routeToken: "should-not-appear",
+    connectionRef: "should-not-appear",
+    apiKey: "should-not-appear",
+    session: "should-not-appear",
+};
+test("Quote delete preview uses the already-fetched record without an extra GET", async () => {
+    let getCount = 0;
+    let deleteCount = 0;
+    const wrapped = wrapWriteToolHandler("brc_delete_quote", async (args) => {
+        getCount += 1;
+        const timestamp = String(FETCHED_QUOTE.timeStamp);
+        const payloadPreview = buildQuoteDeletePreview(FETCHED_QUOTE, timestamp);
+        const record = args;
+        if (record.confirmWrite !== true && record.confirmDelete !== true) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "confirmation_required",
+                            confirmationRequired: true,
+                            endpoint: "DELETE /v1/quotes/2892396",
+                            payloadPreview,
+                        }),
+                    },
+                ],
+            };
+        }
+        deleteCount += 1;
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({ deleted: true, timestampUsed: timestamp }),
+                },
+            ],
+        };
+    });
+    const previewBody = parseBody(await wrapped({
+        companyName: "Company C",
+        id: 2892396,
+        confirmWrite: false,
+        routeToken: "should-not-appear",
+        connectionRef: "should-not-appear",
+        apiKey: "should-not-appear",
+    }));
+    assert.equal(getCount, 1, "preview must use the single Quote GET already needed for timestamp");
+    assert.equal(deleteCount, 0);
+    assert.equal(previewBody.status, "confirmation_required");
+    const preview = previewBody.payloadPreview;
+    assert.equal(preview.id, 2892396);
+    assert.equal(preview.reference, "QT0001");
+    assert.equal(preview.customer, "Paul Conroy Ltd");
+    assert.equal(preview.customerOwnerName, "Paul Conroy Ltd");
+    assert.equal(preview.total, 12.3);
+    assert.equal(preview.closedDate, null);
+    assert.equal(preview.state, "open");
+    assert.equal(preview.saleInvoiceId, null);
+    assert.equal(preview.timestamp, "ABC123timestamp=");
+    assert.equal("routeToken" in preview, false);
+    assert.equal("connectionRef" in preview, false);
+    assert.equal("apiKey" in preview, false);
+    assert.equal("session" in preview, false);
+    const postBody = parseBody(await wrapped({
+        companyName: "Company C",
+        id: 2892396,
+        confirmWrite: true,
+    }));
+    assert.equal(getCount, 2, "confirmed delete still uses one GET of its own for timestamp");
+    assert.equal(deleteCount, 1);
+    assert.equal(postBody.deleted, true);
+});
+test("buildQuoteDeletePreview includes reference, customer, total, state, and timestamp", () => {
+    const closedPreview = buildQuoteDeletePreview({
+        ...FETCHED_QUOTE,
+        closedDate: "2026-08-13T00:00:00",
+        saleInvoiceId: 1001,
+    }, "ABC123timestamp=");
+    assert.equal(closedPreview.id, 2892396);
+    assert.equal(closedPreview.reference, "QT0001");
+    assert.equal(closedPreview.customer, "Paul Conroy Ltd");
+    assert.equal(closedPreview.total, 12.3);
+    assert.equal(closedPreview.state, "closed");
+    assert.equal(closedPreview.closedDate, "2026-08-13T00:00:00");
+    assert.equal(closedPreview.saleInvoiceId, 1001);
+    assert.equal(closedPreview.timestamp, "ABC123timestamp=");
+    assert.equal("routeToken" in closedPreview, false);
+    assert.equal("connectionRef" in closedPreview, false);
+    assert.equal("apiKey" in closedPreview, false);
+    assert.equal("session" in closedPreview, false);
+});
+test("Quote create success includes endpoint, payloadSent, and status", () => {
+    const body = buildQuoteCreateSuccessBody({
+        message: "Quote created using structured MCP fields.",
+        companyName: "Company C",
+        endpoint: "POST /v1/quotes",
+        payloadSent: { reference: "BQ1234", companyId: 806559 },
+        response: { id: 2892396, reference: "BQ1234" },
+    });
+    assert.equal(body.endpoint, "POST /v1/quotes");
+    assert.deepEqual(body.payloadSent, { reference: "BQ1234", companyId: 806559 });
+    assert.equal(body.status, "created");
+    assert.deepEqual(body.response, { id: 2892396, reference: "BQ1234" });
+    assert.equal(body.createdQuoteId, 2892396);
+    assert.equal("routeToken" in body, false);
+    assert.equal("connectionRef" in body, false);
+    assert.equal("apiKey" in body, false);
+});
+test("createdQuoteId is surfaced only when BRC returns a Quote id", () => {
+    const withId = buildQuoteCreateSuccessBody({
+        message: "Quote created.",
+        companyName: "Company C",
+        endpoint: "POST /v1/quotes",
+        payloadSent: { reference: "BQ1234" },
+        response: { id: 2892396 },
+    });
+    assert.equal(withId.createdQuoteId, 2892396);
+    const numericId = extractCreatedQuoteId(2892396);
+    assert.equal(numericId, 2892396);
+    const emptyBody = buildQuoteCreateSuccessBody({
+        message: "Quote created.",
+        companyName: "Company C",
+        endpoint: "POST /v1/quotes/createQuoteWithGeneratingReference",
+        payloadSent: { companyId: 806559 },
+        response: { message: "created successfully", statusCode: 201 },
+    });
+    assert.equal("createdQuoteId" in emptyBody, false);
+    assert.equal(emptyBody.status, 201);
+    assert.equal(emptyBody.endpoint, "POST /v1/quotes/createQuoteWithGeneratingReference");
+    assert.equal(extractCreatedQuoteId({}), undefined);
+    assert.equal(extractCreatedQuoteId({ companyId: 806559 }), undefined);
+    assert.equal(extractCreatedQuoteId({ reference: "BQ1234" }), undefined);
+    assert.equal(extractCreatedQuoteId({ statusCode: 201 }), undefined);
+    assert.equal(extractCreatedQuoteId(null), undefined);
+});
+test("post-delete verification wording does not treat an unexpected lookup error as delete failure", () => {
+    const unexpected = describeQuotePostDeleteVerification({
+        deleteSucceeded: true,
+        lookupOutcome: "unexpected_error",
+    });
+    assert.match(unexpected, /deleted successfully/i);
+    assert.match(unexpected, /inconclusive/i);
+    assert.match(unexpected, /quote id/i);
+    assert.match(unexpected, /not necessarily unique/i);
+    assert.equal(/deletion failed|was not deleted|failed to delete/i.test(unexpected), false);
+    const success = describeQuotePostDeleteVerification({
+        deleteSucceeded: true,
+        lookupOutcome: "not_attempted",
+    });
+    assert.match(success, /deleted successfully/i);
+    assert.match(success, /quote list/i);
+    assert.equal(/every 500|HTTP 500 means deleted/i.test(success), false);
+    const failed = describeQuotePostDeleteVerification({
+        deleteSucceeded: false,
+        lookupOutcome: "unexpected_error",
+    });
+    assert.match(failed, /was not deleted/i);
 });
