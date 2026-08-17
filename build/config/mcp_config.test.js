@@ -69,6 +69,9 @@ test("MCP server instructions include correction/undo planning before another wr
     assert.match(instructions, /Never propose a specific accounting transaction type as a reversal/i);
     assert.match(instructions, /Do not assume Cash Payment is reversed with a Cash Receipt/i);
     assert.equal(/create a reversing entry/i.test(instructions), false);
+    assert.match(instructions, /Do not claim what the resulting customer or supplier outstanding balance/i);
+    assert.match(instructions, /Do not say deletion makes a transaction look like it never existed/i);
+    assert.match(instructions, /Deleting is not automatically the safest or correct accounting treatment/i);
 });
 test("routing instructions forbid paraphrasing the original request", () => {
     assert.match(MANDATORY_ROUTING_INSTRUCTION, /complete original message verbatim/i);

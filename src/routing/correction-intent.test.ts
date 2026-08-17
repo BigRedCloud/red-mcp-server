@@ -12,6 +12,7 @@ import { isAffirmativeConfirmation } from "./pending-action.js";
 import {
   CORRECTION_CUSTOMER_LANGUAGE_RULES,
   correctionGuidanceContainsJargon,
+  correctionGuidanceMakesUnverifiedAccountingEffectClaim,
   correctionGuidanceProposesUnverifiedOpposite,
   explainDeletedRecordUndo,
   explainFinancialReverse,
@@ -86,11 +87,23 @@ test("3. reverse that cash payment does not automatically delete it", async () =
   const explanation = explainFinancialReverse("cash payment");
   assert.match(explanation, /will not automatically remove/i);
   assert.match(explanation, /can mean different things/i);
+  assert.match(explanation, /One supported action available to Red is removing/i);
+  assert.match(
+    explanation,
+    /whether that is the correct accounting treatment depends/i,
+  );
+  assert.match(explanation, /have not verified/i);
+  assert.match(explanation, /will not assume the downstream effect/i);
   assert.match(explanation, /will not create an opposite transaction/i);
   assert.match(explanation, /Would you like me to check/);
   assert.equal(/\bdelete\s+it\s+now\b/i.test(explanation), false);
+  assert.equal(/\bsafest (?:concrete )?option\b/i.test(explanation), false);
   assert.equal(correctionGuidanceContainsJargon(explanation), false);
   assert.equal(correctionGuidanceProposesUnverifiedOpposite(explanation), false);
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(explanation),
+    false,
+  );
 });
 
 test("reverse Cash Payment does not suggest creating a Cash Receipt", async () => {
@@ -117,6 +130,80 @@ test("reverse Cash Payment does not suggest creating a Cash Receipt", async () =
   assert.match(
     routed.guidance,
     /Do not invent negative or opposite transactions/i,
+  );
+});
+
+test("reverse Cash Payment does not claim unverified accounting effects", async () => {
+  const routed = await routeRequest("Reverse Cash Payment id 581729508");
+  assert.equal(routed.mode, "correction");
+  assert.equal(routed.routeToken, undefined);
+  assert.match(
+    routed.guidance,
+    /Do not claim what the resulting customer or supplier outstanding balance/i,
+  );
+  assert.match(
+    routed.guidance,
+    /Do not say deletion makes a transaction look like it never existed/i,
+  );
+  assert.match(
+    routed.guidance,
+    /Deleting is not automatically the safest or correct accounting treatment/i,
+  );
+
+  const explanation = explainFinancialReverse("cash payment");
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(explanation),
+    false,
+  );
+  assert.equal(/\bstill owed\b/i.test(explanation), false);
+  assert.equal(/\bnever existed\b/i.test(explanation), false);
+  assert.equal(/\bputs?\b.{0,80}\boutstanding\b/i.test(explanation), false);
+  assert.equal(/\ballocation\b/i.test(explanation), false);
+  assert.equal(/\bledger\b/i.test(explanation), false);
+  assert.equal(/\bVAT\b/.test(explanation), false);
+  assert.equal(/\baudit history\b/i.test(explanation), false);
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      CORRECTION_CUSTOMER_LANGUAGE_RULES,
+    ),
+    false,
+  );
+
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "Deleting the payment puts €12.30 back as outstanding on the supplier's account.",
+    ),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "After deletion, the supplier will show €12.30 as still owed.",
+    ),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "It'll just look like the payment never existed.",
+    ),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "The safest concrete option I can actually execute is delete.",
+    ),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "Deletion will restore the supplier allocation and ledger balance.",
+    ),
+    true,
+  );
+  assert.equal(
+    correctionGuidanceMakesUnverifiedAccountingEffectClaim(
+      "Removing it will clear the VAT position.",
+    ),
+    true,
   );
 });
 
@@ -200,6 +287,11 @@ test("10. customer-facing reversal guidance contains no API/HTTP/tool jargon", (
     assert.equal(correctionGuidanceContainsJargon(sample), false, sample);
     assert.equal(
       correctionGuidanceProposesUnverifiedOpposite(sample),
+      false,
+      sample,
+    );
+    assert.equal(
+      correctionGuidanceMakesUnverifiedAccountingEffectClaim(sample),
       false,
       sample,
     );
