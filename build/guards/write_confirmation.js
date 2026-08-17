@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
-import { jsonResponse } from "../shared.js";
+import { jsonResponse, runConfirmedWriteWithFailureAudit } from "../shared.js";
 import { applySalesPriceBasisToRawPayload, buildQuoteCreatePayloadFromToolArgs, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, } from "../tools/general/payloads_tools.js";
 import { buildGenerateSalesInvoiceFromQuotePayload } from "../tools/sales-emails/quotes_tools.js";
 import { buildSalesInvoiceGenRefValidationFailureBody, validateGeneratedReferenceSalesInvoicePayload, } from "../tools/sales-emails/sales_invoice_payload_schemas.js";
@@ -720,46 +720,52 @@ export function wrapWriteToolHandler(toolName, handler) {
     return async (args) => {
         const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
         const rawArgs = args;
-        runSalesDocumentProductIdPreflight(toolName, rawArgs);
-        await runSalesDocumentSalesVatPreflight(toolName, companyName, rawArgs);
-        const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, rawArgs);
-        if (genRefValidationBlock) {
-            return genRefValidationBlock;
-        }
-        const displayPayload = buildToolWritePayloadPreview(toolName, rawArgs);
-        const counterpartyBlock = await validateCounterpartyForWrite({
-            toolName,
-            companyName,
-            payload: rawArgs,
-            displayPayload,
-        });
-        if (counterpartyBlock) {
-            return counterpartyBlock;
-        }
-        if (isWriteActionConfirmed(args) || toolName === "brc_delete_quote") {
-            // Re-run counterparty validation so customer-ledger tools still require
-            // confirmCounterpartyExplicit on post. Analysed cash receipts that do not
-            // use a customer return null here and may proceed with confirmWrite alone.
-            // brc_delete_quote loads the Quote first, then confirms from that record.
-            if (isWriteActionConfirmed(args) && requiresCounterpartyConfirmation(toolName)) {
-                const postCounterpartyBlock = await validateCounterpartyForWrite({
-                    toolName,
-                    companyName,
-                    payload: rawArgs,
-                    displayPayload,
-                });
-                if (postCounterpartyBlock) {
-                    return postCounterpartyBlock;
-                }
+        const runGuardsAndHandler = async () => {
+            runSalesDocumentProductIdPreflight(toolName, rawArgs);
+            await runSalesDocumentSalesVatPreflight(toolName, companyName, rawArgs);
+            const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, rawArgs);
+            if (genRefValidationBlock) {
+                return genRefValidationBlock;
             }
-            return handler(args);
+            const displayPayload = buildToolWritePayloadPreview(toolName, rawArgs);
+            const counterpartyBlock = await validateCounterpartyForWrite({
+                toolName,
+                companyName,
+                payload: rawArgs,
+                displayPayload,
+            });
+            if (counterpartyBlock) {
+                return counterpartyBlock;
+            }
+            if (isWriteActionConfirmed(args) || toolName === "brc_delete_quote") {
+                // Re-run counterparty validation so customer-ledger tools still require
+                // confirmCounterpartyExplicit on post. Analysed cash receipts that do not
+                // use a customer return null here and may proceed with confirmWrite alone.
+                // brc_delete_quote loads the Quote first, then confirms from that record.
+                if (isWriteActionConfirmed(args) && requiresCounterpartyConfirmation(toolName)) {
+                    const postCounterpartyBlock = await validateCounterpartyForWrite({
+                        toolName,
+                        companyName,
+                        payload: rawArgs,
+                        displayPayload,
+                    });
+                    if (postCounterpartyBlock) {
+                        return postCounterpartyBlock;
+                    }
+                }
+                return handler(args);
+            }
+            return requireWriteConfirmation({
+                toolName,
+                companyName,
+                payload: displayPayload,
+                endpoint: writeToolEndpoint(toolName),
+            });
+        };
+        if (isWriteActionConfirmed(args)) {
+            return runConfirmedWriteWithFailureAudit({ toolName, args: rawArgs }, runGuardsAndHandler);
         }
-        return requireWriteConfirmation({
-            toolName,
-            companyName,
-            payload: displayPayload,
-            endpoint: writeToolEndpoint(toolName),
-        });
+        return runGuardsAndHandler();
     };
 }
 export function appendWriteConfirmationDescription(description, toolName) {

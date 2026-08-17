@@ -879,6 +879,8 @@ export type RedAuditEntry = {
   summary: string;
   /** Short failure summary. Never a credential or full sensitive payload. */
   errorSummary?: string;
+  /** Technical-only: where a confirmed write failed. Omitted from customer-facing audit. */
+  stage?: "preflight" | "write";
   requestBody?: unknown;
   responseBody?: unknown;
   /**
@@ -1262,6 +1264,156 @@ function buildAuditSummary(args: {
   };
 }
 
+type ConfirmedWriteAuditState = {
+  toolName: string;
+  companyName: string;
+  args: Record<string, unknown>;
+  audited: boolean;
+};
+
+const confirmedWriteAuditAls = new AsyncLocalStorage<ConfirmedWriteAuditState>();
+
+const TOOL_NOUN_TO_RESOURCE: Record<string, string> = {
+  quote: "quotes",
+  cash_payment: "cashPayments",
+  cash_receipt: "cashReceipts",
+  sales_invoice: "salesInvoices",
+  sales_entry: "salesEntries",
+  sales_credit_note: "salesCreditNotes",
+  purchase: "purchases",
+  payment: "payments",
+  customer: "customers",
+  supplier: "suppliers",
+  product: "products",
+  bank_account: "bankAccounts",
+  accrual: "accruals",
+  prepayment: "prepayments",
+  nominal_journal_batch: "nominalJournalBatches",
+};
+
+function toolNounToResource(noun: string): string {
+  return TOOL_NOUN_TO_RESOURCE[noun] ?? `${noun.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())}s`;
+}
+
+function inferConfirmedWriteAuditTarget(
+  toolName: string,
+  args: Record<string, unknown>
+): { method: string; path: string } {
+  const id = args.id ?? args.quoteId;
+  const idPart =
+    id !== undefined && id !== null && String(id) !== ""
+      ? `/${encodeURIComponent(String(id))}`
+      : "";
+
+  if (toolName === "brc_close_quote") {
+    return { method: "PUT", path: `/v1/quotes/close${idPart}` };
+  }
+  if (toolName === "brc_reopen_quote") {
+    return { method: "PUT", path: `/v1/quotes/reopen${idPart}` };
+  }
+  if (toolName === "brc_generate_sales_invoice_from_quote") {
+    return { method: "POST", path: "/v1/quotes/generateSaleInvoice" };
+  }
+  if (toolName === "brc_create_quote_gen_ref") {
+    return { method: "POST", path: "/v1/quotes/createQuoteWithGeneratingReference" };
+  }
+
+  const batch = /^brc_batch_(.+)$/.exec(toolName);
+  if (batch) {
+    return { method: "PUT", path: `/v1/${toolNounToResource(batch[1]!)}/batch` };
+  }
+  const deleted = /^brc_delete_(.+)$/.exec(toolName);
+  if (deleted) {
+    return { method: "DELETE", path: `/v1/${toolNounToResource(deleted[1]!)}${idPart}` };
+  }
+  const updated = /^brc_update_(.+)$/.exec(toolName);
+  if (updated) {
+    return { method: "PUT", path: `/v1/${toolNounToResource(updated[1]!)}${idPart}` };
+  }
+  const created = /^brc_create_(.+)$/.exec(toolName);
+  if (created) {
+    const noun = created[1]!.replace(/_gen_ref$/, "");
+    return { method: "POST", path: `/v1/${toolNounToResource(noun)}` };
+  }
+
+  return { method: "PUT", path: idPart ? `/v1/records${idPart}` : "/v1/records" };
+}
+
+function inferConfirmedWriteFailureStage(error: unknown): "preflight" | "write" {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /\bGET\b/.test(message) ||
+    /could not read/i.test(message) ||
+    /before (?:update|deletion|delete)/i.test(message) ||
+    /timestamp/i.test(message)
+  ) {
+    return "preflight";
+  }
+  return "write";
+}
+
+function sanitizeConfirmedWriteError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const compact = raw.replace(/\s+/g, " ").trim().slice(0, 280);
+  const withoutSecrets = compact
+    .replace(/Bearer\s+\S+/gi, "<REDACTED>")
+    .replace(/api[_-]?key["']?\s*[:=]\s*["']?\S+/gi, "apiKey=<REDACTED>")
+    .replace(/redconn_[A-Za-z0-9]+/gi, "<REDACTED>")
+    .replace(/routeToken["']?\s*[:=]\s*["']?\S+/gi, "routeToken=<REDACTED>");
+  return withoutSecrets
+    ? `Write did not complete. ${withoutSecrets}`
+    : "Write did not complete.";
+}
+
+function recordConfirmedWriteFailureIfNeeded(
+  error: unknown,
+  options?: { stage?: "preflight" | "write"; errorSummary?: string }
+): void {
+  const store = confirmedWriteAuditAls.getStore();
+  if (!store || store.audited || !store.companyName) {
+    return;
+  }
+
+  const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
+  store.audited = true;
+  recordRedAuditEntry({
+    companyName: store.companyName,
+    method: target.method,
+    path: target.path,
+    outcome: "failure",
+    errorSummary: options?.errorSummary ?? sanitizeConfirmedWriteError(error),
+    stage: options?.stage ?? inferConfirmedWriteFailureStage(error),
+  });
+}
+
+/**
+ * Audits a user-confirmed write if it fails at any point, including required
+ * pre-write reads. Does not record a second entry when brcFetch already audited
+ * the POST/PUT/DELETE itself.
+ */
+export async function runConfirmedWriteWithFailureAudit<T>(
+  args: { toolName: string; args: Record<string, unknown> },
+  operation: () => Promise<T> | T
+): Promise<T> {
+  const companyName =
+    typeof args.args.companyName === "string" ? args.args.companyName : "";
+  const state: ConfirmedWriteAuditState = {
+    toolName: args.toolName,
+    companyName,
+    args: args.args,
+    audited: false,
+  };
+
+  return confirmedWriteAuditAls.run(state, async () => {
+    try {
+      return await operation();
+    } catch (error) {
+      recordConfirmedWriteFailureIfNeeded(error);
+      throw error;
+    }
+  });
+}
+
 export function recordRedAuditEntry(args: {
   companyName: string;
   method: string;
@@ -1273,14 +1425,26 @@ export function recordRedAuditEntry(args: {
   companyId?: string | number;
   outcome?: RedAuditOutcome;
   errorSummary?: string;
+  stage?: "preflight" | "write";
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
   const parsed = parseAuditPath(pathname);
   const timestampUtc = new Date().toISOString();
   const outcome: RedAuditOutcome = args.outcome ?? "success";
+  const operation = resolveAuditOperation(meta.action, parsed);
+  const summary =
+    outcome === "failure"
+      ? `Failed to ${operation} ${meta.recordType}${
+          meta.recordId !== undefined ? ` ${meta.recordId}` : ""
+        }`.trim()
+      : meta.summary;
 
   const scope = resolveCurrentAuditScope();
+  const confirmedWrite = confirmedWriteAuditAls.getStore();
+  if (confirmedWrite) {
+    confirmedWrite.audited = true;
+  }
 
   const entry: RedAuditEntry = {
     id: redAuditCounter++,
@@ -1290,12 +1454,13 @@ export function recordRedAuditEntry(args: {
     method: args.method,
     path: pathname,
     action: meta.action,
-    operation: resolveAuditOperation(meta.action, parsed),
+    operation,
     outcome,
     recordType: meta.recordType,
     recordId: meta.recordId,
-    summary: meta.summary,
+    summary,
     ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
+    ...(args.stage ? { stage: args.stage } : {}),
     requestBody: args.requestBody,
     responseBody: args.responseBody,
     mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1387,7 +1552,20 @@ export async function brcFetch(
           response.statusText,
           text
         ),
+        stage: "write",
       });
+    } else if (confirmedWriteAuditAls.getStore()) {
+      recordConfirmedWriteFailureIfNeeded(
+        new Error(`${response.status} ${response.statusText}`),
+        {
+          stage: "preflight",
+          errorSummary: sanitizeAuditErrorSummary(
+            response.status,
+            response.statusText,
+            text
+          ),
+        }
+      );
     }
 
     throw new Error(

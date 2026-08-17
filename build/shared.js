@@ -861,13 +861,139 @@ function buildAuditSummary(args) {
         summary,
     };
 }
+const confirmedWriteAuditAls = new AsyncLocalStorage();
+const TOOL_NOUN_TO_RESOURCE = {
+    quote: "quotes",
+    cash_payment: "cashPayments",
+    cash_receipt: "cashReceipts",
+    sales_invoice: "salesInvoices",
+    sales_entry: "salesEntries",
+    sales_credit_note: "salesCreditNotes",
+    purchase: "purchases",
+    payment: "payments",
+    customer: "customers",
+    supplier: "suppliers",
+    product: "products",
+    bank_account: "bankAccounts",
+    accrual: "accruals",
+    prepayment: "prepayments",
+    nominal_journal_batch: "nominalJournalBatches",
+};
+function toolNounToResource(noun) {
+    return TOOL_NOUN_TO_RESOURCE[noun] ?? `${noun.replace(/_([a-z])/g, (_, c) => c.toUpperCase())}s`;
+}
+function inferConfirmedWriteAuditTarget(toolName, args) {
+    const id = args.id ?? args.quoteId;
+    const idPart = id !== undefined && id !== null && String(id) !== ""
+        ? `/${encodeURIComponent(String(id))}`
+        : "";
+    if (toolName === "brc_close_quote") {
+        return { method: "PUT", path: `/v1/quotes/close${idPart}` };
+    }
+    if (toolName === "brc_reopen_quote") {
+        return { method: "PUT", path: `/v1/quotes/reopen${idPart}` };
+    }
+    if (toolName === "brc_generate_sales_invoice_from_quote") {
+        return { method: "POST", path: "/v1/quotes/generateSaleInvoice" };
+    }
+    if (toolName === "brc_create_quote_gen_ref") {
+        return { method: "POST", path: "/v1/quotes/createQuoteWithGeneratingReference" };
+    }
+    const batch = /^brc_batch_(.+)$/.exec(toolName);
+    if (batch) {
+        return { method: "PUT", path: `/v1/${toolNounToResource(batch[1])}/batch` };
+    }
+    const deleted = /^brc_delete_(.+)$/.exec(toolName);
+    if (deleted) {
+        return { method: "DELETE", path: `/v1/${toolNounToResource(deleted[1])}${idPart}` };
+    }
+    const updated = /^brc_update_(.+)$/.exec(toolName);
+    if (updated) {
+        return { method: "PUT", path: `/v1/${toolNounToResource(updated[1])}${idPart}` };
+    }
+    const created = /^brc_create_(.+)$/.exec(toolName);
+    if (created) {
+        const noun = created[1].replace(/_gen_ref$/, "");
+        return { method: "POST", path: `/v1/${toolNounToResource(noun)}` };
+    }
+    return { method: "PUT", path: idPart ? `/v1/records${idPart}` : "/v1/records" };
+}
+function inferConfirmedWriteFailureStage(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\bGET\b/.test(message) ||
+        /could not read/i.test(message) ||
+        /before (?:update|deletion|delete)/i.test(message) ||
+        /timestamp/i.test(message)) {
+        return "preflight";
+    }
+    return "write";
+}
+function sanitizeConfirmedWriteError(error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    const compact = raw.replace(/\s+/g, " ").trim().slice(0, 280);
+    const withoutSecrets = compact
+        .replace(/Bearer\s+\S+/gi, "<REDACTED>")
+        .replace(/api[_-]?key["']?\s*[:=]\s*["']?\S+/gi, "apiKey=<REDACTED>")
+        .replace(/redconn_[A-Za-z0-9]+/gi, "<REDACTED>")
+        .replace(/routeToken["']?\s*[:=]\s*["']?\S+/gi, "routeToken=<REDACTED>");
+    return withoutSecrets
+        ? `Write did not complete. ${withoutSecrets}`
+        : "Write did not complete.";
+}
+function recordConfirmedWriteFailureIfNeeded(error, options) {
+    const store = confirmedWriteAuditAls.getStore();
+    if (!store || store.audited || !store.companyName) {
+        return;
+    }
+    const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
+    store.audited = true;
+    recordRedAuditEntry({
+        companyName: store.companyName,
+        method: target.method,
+        path: target.path,
+        outcome: "failure",
+        errorSummary: options?.errorSummary ?? sanitizeConfirmedWriteError(error),
+        stage: options?.stage ?? inferConfirmedWriteFailureStage(error),
+    });
+}
+/**
+ * Audits a user-confirmed write if it fails at any point, including required
+ * pre-write reads. Does not record a second entry when brcFetch already audited
+ * the POST/PUT/DELETE itself.
+ */
+export async function runConfirmedWriteWithFailureAudit(args, operation) {
+    const companyName = typeof args.args.companyName === "string" ? args.args.companyName : "";
+    const state = {
+        toolName: args.toolName,
+        companyName,
+        args: args.args,
+        audited: false,
+    };
+    return confirmedWriteAuditAls.run(state, async () => {
+        try {
+            return await operation();
+        }
+        catch (error) {
+            recordConfirmedWriteFailureIfNeeded(error);
+            throw error;
+        }
+    });
+}
 export function recordRedAuditEntry(args) {
     const meta = buildAuditSummary(args);
     const pathname = args.path.split("?")[0] ?? args.path;
     const parsed = parseAuditPath(pathname);
     const timestampUtc = new Date().toISOString();
     const outcome = args.outcome ?? "success";
+    const operation = resolveAuditOperation(meta.action, parsed);
+    const summary = outcome === "failure"
+        ? `Failed to ${operation} ${meta.recordType}${meta.recordId !== undefined ? ` ${meta.recordId}` : ""}`.trim()
+        : meta.summary;
     const scope = resolveCurrentAuditScope();
+    const confirmedWrite = confirmedWriteAuditAls.getStore();
+    if (confirmedWrite) {
+        confirmedWrite.audited = true;
+    }
     const entry = {
         id: redAuditCounter++,
         timestamp: timestampUtc,
@@ -876,12 +1002,13 @@ export function recordRedAuditEntry(args) {
         method: args.method,
         path: pathname,
         action: meta.action,
-        operation: resolveAuditOperation(meta.action, parsed),
+        operation,
         outcome,
         recordType: meta.recordType,
         recordId: meta.recordId,
-        summary: meta.summary,
+        summary,
         ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
+        ...(args.stage ? { stage: args.stage } : {}),
         requestBody: args.requestBody,
         responseBody: args.responseBody,
         mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -950,6 +1077,13 @@ export async function brcFetch(companyName, path, init = {}) {
                     statusText: response.statusText,
                 },
                 outcome: "failure",
+                errorSummary: sanitizeAuditErrorSummary(response.status, response.statusText, text),
+                stage: "write",
+            });
+        }
+        else if (confirmedWriteAuditAls.getStore()) {
+            recordConfirmedWriteFailureIfNeeded(new Error(`${response.status} ${response.statusText}`), {
+                stage: "preflight",
                 errorSummary: sanitizeAuditErrorSummary(response.status, response.statusText, text),
             });
         }

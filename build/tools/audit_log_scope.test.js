@@ -192,6 +192,7 @@ test("failed writes record outcome metadata without credentials", () => {
     });
     assert.equal(entry.outcome, "failure");
     assert.equal(entry.operation, "update");
+    assert.match(entry.summary, /Failed to update Sales invoice 123/);
     assert.match(entry.timestampUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     assert.match(entry.errorSummary ?? "", /Invoice is closed/);
     assert.equal("userId" in entry, false);
