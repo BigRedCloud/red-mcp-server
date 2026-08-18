@@ -6,34 +6,51 @@ functions/*
 functions/brc-edu-resource-processor/node_modules/
 functions/brc-edu-resource-processor/local.settings.json
 
+# Environment and local secrets
 logs/
+*.log
+npm-debug.log*
 .env
 .env.*
 !.env.example
+local.settings.json
+**/local.settings.json
+!functions/brc-edu-resource-processor/local.settings.json.example
 
 # Local test output containing potentially sensitive data
 reports/
+test-results/
+coverage/
+.nyc_output/
 
-# OS and editor files
+# Azure / local deployment exports
+*.PublishSettings
+*.publishsettings
+*.pfx
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Generated BRC Edu sync / export artefacts
+data/brc_edu_synced_resources.json
+data/dev_only_video_routing_index_updated.csv
+scripts/exports/*.xlsx
+scripts/exports/*.xls
+scripts/exports/*.csv
+!scripts/exports/*.mjs
+
+# Temporary files and OS/editor junk
+tmp/
+temp/
+*.tmp
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Test and coverage output
-coverage/
-.nyc_output/
-
-# Local TypeScript build metadata
+# Local TypeScript build metadata (compiled build/ is intentionally committed)
 *.tsbuildinfo
-
-# Temporary files
-tmp/
-temp/
-
-# Generated financial exports
-scripts/exports/*.xlsx
-scripts/exports/*.csv
 
 # Local AI/developer configuration
 .cursor/
