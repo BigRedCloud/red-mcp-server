@@ -57,7 +57,7 @@ src/
     ├── accrual_tools.ts           Accruals
     ├── prepayment_tools.ts        Prepayments
     ├── alloc_tools.ts             Allocation resolvers
-    └── audit_session_tools.ts     Session audit log
+    └── audit_session_tools.ts     Session audit log and support diagnostic
 ```
 
 ---
@@ -80,7 +80,7 @@ src/
 - **`src/auth/credential_validation.ts`** — Validates each API key with the same class of BRC read access as live tools (`GET /v1/customers?page=1&pageSize=1`, plus financial year). Failed keys are not stored.
 - **`src/auth/connection_persistence.ts`** — `validateAndPersistConnectedCompanies()` used by `POST /connect`; clears stale per-company entries before re-validating on CSV resubmit.
 - **`src/auth/`** — The secure connection flow: connection page rendering, pending/connection stores (in-memory or Cosmos), connection codes, connectionRef, and credential handling. API keys are never returned to clients.
-- **`src/telemetry/`** — Anonymous `telemetry_client_id` / `connection_session_id`, platform detection (`claude` | `chatgpt` | `mistral` | `unknown`), and span enrichment for hosted Application Insights. See [TELEMETRY.md](TELEMETRY.md).
+- **`src/telemetry/`** — Anonymous `telemetry_client_id` / `connection_session_id`, platform detection (`claude` | `chatgpt` | `mistral` | `unknown`), span enrichment, and safe downstream BRC failure telemetry. See [TELEMETRY.md](TELEMETRY.md).
 - **`src/tools/sales-emails/sales_invoice_payload_schemas.ts`** — Multi-line generated-reference sales invoice payload schema and field-level reconciliation (`acEntries`, line totals, header totals).
 - **`src/brc-edu/help/`** — Unified search across Freshdesk articles, customer documentation, recorded webinars, and upcoming webinars.
 - **`src/brc-edu/freshdesk/`** — Freshdesk article processing, screenshot metadata, signed public image links, and help-answer formatting.
@@ -104,14 +104,14 @@ Registration details:
 
 - **Skill gating.** `registerAllTools` consults `isToolEnabled(toolName)`. If the tool's skill group is disabled by a deployment flag, registration is **skipped** (the tool is not exposed to MCP clients for that process).
 - **Route tokens.** For update/delete/batch/email skill tools, the wrapper adds a required `routeToken` argument. Callers obtain the token from `brc_route_request` for the matching action workflow. A route token is routing permission only — it does not replace preview-before-posting or user confirmation.
-- **Write confirmation.** For most write tools (update/delete/batch skill groups and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a preview-before-posting response. The underlying handler runs only after explicit confirmation. Email tools use their own `confirmSend` flow; bank-account create uses `confirmCreate`.
+- **Write confirmation.** For most write tools (update/delete/batch skill groups and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a preview-before-posting response. The underlying handler runs only after explicit confirmation. Email tools use their own `confirmSend` flow; bank-account create uses `confirmCreate`. Clearing the session activity log uses `confirmClear`. Support-report generation is read-only and requires no write confirmation.
 - **Generic helpers.** Most list/get/create/update/delete/batch tools are produced by helpers in `src/tools/general/` (`registerListTool`, `registerGetTool`, `registerSubresourceGetTool`, `registerRawCreateTool`, `registerRawUpdateTool`, `registerRawDeleteTool`, `registerRawBatchTool`). Payload normalisation lives in `payloads_tools.ts`.
 
 ### Skill groups and deployment flags
 
 | Skill group | Typical tools | Flag (default) |
 | ----------- | ------------- | -------------- |
-| session | connection, getting started, deployment policy, routing, help | always registered |
+| session | connection, deployment policy, routing, help, support report | always registered |
 | read | list/get/readiness/reports/audit list | `BRC_ALLOW_READ_SKILLS` (true) |
 | update | create/update/gen_ref/close/reopen/process | `BRC_ALLOW_UPDATE_SKILLS` (true) |
 | delete | delete tools | `BRC_ALLOW_DELETE_SKILLS` (true) |
@@ -179,11 +179,11 @@ Transactional create/update/delete/batch/email tools require an opaque short-liv
 - Call `brc_route_request` with the user's complete original message before transactional accounting tools.
 - Tokens are HMAC-signed, expire after a short TTL (about five minutes), and are consumed after a confirmed write.
 - A valid `routeToken` is **not** permission to post. Preview-before-posting and explicit confirmation still apply.
-- Read-only tools, connection/session helpers, and help tools do not require a route token.
+- Read-only tools, connection/session helpers, help tools and `brc_generate_support_report` do not require a route token.
 
 ### Preview before posting and confirmation
 
-Most write tools (skill groups update/delete/batch, plus `brc_clear_audit_log`) use the shared write-confirmation wrapper:
+Most write tools (skill groups update/delete/batch) use the shared write-confirmation wrapper:
 
 1. First call without `confirmWrite: true` returns `confirmation_required` and a payload preview.
 2. The assistant shows a plain-English preview in chat and waits for an explicit later-message yes.
@@ -199,6 +199,8 @@ Special cases:
 | `brc_create_bank_account` | `confirmCreate` | Own preview/confirm path (still requires `routeToken`) |
 | `brc_send_sales_invoice_email`, `brc_send_quote_email`, `brc_send_email_statement` | `confirmSend` | Email preview; not the shared `confirmWrite` wrapper |
 | `brc_process_vat_category_rates` | `confirmProcess` | Still behind write-confirmation wrapping / routing as classified |
+| `brc_clear_audit_log` | `confirmClear` | Own confirmation; not `confirmWrite`. Nothing is cleared until `confirmClear=true` |
+| `brc_generate_support_report` | none | Read-only diagnostic; does not write to Big Red Cloud |
 
 Guards in `src/guards/` run before preview-before-posting and before posting:
 
@@ -271,12 +273,13 @@ These tools are intended for product help and training questions, not for access
 | `brc_get_company_processing_settings` | read | Mapped processing settings (raw `/v1/companySetupConfig/getCompanyOptions` via `includeRaw`) |
 | `brc_get_company_reference_settings` | read | Reference auto-generation settings |
 | `brc_check_transaction_settings` | read | Combined transaction safety check for one VAT-sensitive workflow |
+| `brc_resolve_book_transaction_type` | read | Resolves a `bookTranTypeId` from customer or supplier account history against the company's live book transaction types |
 
 **`brc_company_readiness_check` overall statuses:** `ready`, `ready_with_warnings`, `not_ready`, `connection_problem`.
 
 Checks include connection status, financial year / transaction date position, customers, products, suppliers, sales reps, active Sales VAT rates, Sales Analysis categories, processing settings, and reference settings. Missing suppliers is a purchase-setup warning and does **not** block sales-invoice readiness. Manual reference modes are warnings / preflight considerations, not necessarily blockers.
 
-Use readiness for overall setup health. Use `brc_check_transaction_settings` (and the narrower date/processing/reference helpers) when preparing a specific workflow.
+Use readiness for overall setup health. Use `brc_check_transaction_settings` (and the narrower date/processing/reference helpers) when preparing a specific workflow. For customer or supplier `accountTrans` rows, call `brc_resolve_book_transaction_type` with the live `bookTranTypeId` before choosing a document-specific get, update or delete tool. Do not infer the document type from a description alone.
 
 ### Customers and suppliers
 
@@ -470,10 +473,24 @@ Endpoints are under `/v1/email/...` and depend on tenant email configuration. Th
 
 | MCP tool | Kind | Purpose |
 | -------- | ---- | ------- |
-| `brc_list_audit_log` | read | List create/update/delete/email/batch changes made through the session |
-| `brc_clear_audit_log` | write (confirmWrite) | Clear the session audit log |
+| `brc_list_audit_log` | read | List recorded Red write activity for the current session and currently connected companies |
+| `brc_generate_support_report` | read | Generate a downloadable plain-text diagnostic for one currently connected company |
+| `brc_clear_audit_log` | write with confirmation | Clear Red’s session activity log after `confirmClear=true` |
 
-Read-only API calls are not logged.
+Read-only lookups are not treated as completed changes and are not recorded as write activity.
+
+**Support-report behaviour (`brc_generate_support_report`):**
+
+- One report covers one currently connected company. Several companies require separate reports.
+- The report includes the company-scoped chronological activity recorded by Red and distinguishes successful and failed attempted writes.
+- It may include the routed initiating request when Red received one via `brc_route_request`. Red does not receive or reproduce the full host chat transcript.
+- If no routed instruction was available, the report uses an action summary and does not invent a request.
+- It includes anonymous Azure/Application Insights correlation identifiers where available (`telemetryConnectionSessionId`, `telemetryClientId`). It may also include MCP/session or connection diagnostic identifiers when available.
+- It excludes secrets, credentials, API keys, tokens, authorisation headers and connection references.
+- It is returned as a downloadable `text/plain` resource (`red://support-report/…`).
+- Generating the report does not write to Big Red Cloud.
+
+See [TELEMETRY.md](TELEMETRY.md) for correlation identifiers and failure telemetry.
 
 ### MCP resources and prompts
 
@@ -494,8 +511,17 @@ Several create tools have a `*_gen_ref` variant that posts to a Big Red Cloud en
 Considerations:
 
 - Whether references are auto-generated or manual depends on the company's reference settings; the reference guard (`company_reference_settings.ts`) chooses or blocks the appropriate workflow.
-- Some generated-document endpoints may apply the tenant's current transaction date, so the active financial year affects whether they succeed. Use `brc_validate_transaction_date` first where relevant.
+- Some generated-document endpoints may apply the tenant's current transaction date. A date outside the current financial year is a warning, not an automatic refusal. After preview and confirmation, Red attempts the supported action and reports the actual Big Red Cloud response if the date or action is rejected.
 - **`brc_create_sales_invoice_gen_ref` multi-line behaviour.** The raw BRC payload may contain multiple `productTrans` lines. Each line must include its own nested `acEntries` analysis allocation (at least one entry). Before preview-before-posting and before posting, Red validates line net/VAT/gross reconciliation, analysis allocation totals against line net, header totals, and required product/VAT/analysis fields. Validation failures return structured field-level errors (for example `productTrans.1.acEntries`) and do not call Big Red Cloud. Placeholder `productId` values `0` and `1` are blocked; Sales VAT category validation still applies. Write tools still require explicit confirmation after a successful preview — nothing is written until confirmed. Previews before posting are not drafts stored in Big Red Cloud.
+
+### Quote, cash and correction workflows
+
+- **Quote previews.** Create and generated-reference quote tools show a confirmation preview before posting, including missing customer phone or email as warnings only (values are not invented). Quote-to-invoice generation (`brc_generate_sales_invoice_from_quote`) previews the exact `POST /v1/quotes/generateSaleInvoice` body (`quoteId` and optional dates).
+- **Quote updates.** `brc_update_quote` changes the manual quote reference only. Other fields on the current record are preserved. Manual references must be 6 characters or fewer because Big Red Cloud truncates longer values. `Quote.note` is not persisted by this update.
+- **Cash receipts.** Create/update honour the company's VAT-on-cash-receipts setting. Partial updates merge requested fields onto the current record so ledger, VAT and related amounts are not wiped by a note-only change.
+- **Cash payments.** `brc_update_cash_payment` merges supplied fields onto the existing record. Supported merge fields include amount/total, dates, supplier, ledger, discount, bank/lodgement and analysis details. This is a change to the existing payment, not a new reversing entry.
+- **Account history.** Resolve `bookTranTypeId` with `brc_resolve_book_transaction_type` before using a document-specific get, update or delete tool.
+- **Correction language.** Undo, reverse and correct requests are planning first. Do not invent accounting consequences, offsetting entries or reversing transaction types. Preview and confirmation still apply after the user agrees a plan.
 
 ---
 

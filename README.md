@@ -40,7 +40,7 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 - Preview-before-posting confirmation flow for create, update, delete, and batch actions (email tools use an explicit send confirmation)
 - VAT and transaction safety checks
 - Sales invoice safeguards, including multi-line generated-reference validation, Gross Price Entry `priceBasis` handling, Sales VAT category validation, placeholder product ID blocking, and related preflight checks
-- Session audit log of writes made through the MCP session
+- Session audit log of writes made through the MCP session, plus a downloadable support diagnostic for one connected company
 - Official Big Red Cloud help answers from Freshdesk articles, customer documentation, screenshots, and webinars — no company connection required
 - Local stdio and hosted HTTP transports
 
@@ -61,7 +61,7 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 - **Explicit confirmation for writes.** Create, update, delete, and batch actions require an explicit confirmation flag after a preview before posting has been shown. Email tools require an explicit send confirmation after an email preview.
 - **Preview before posting.** The first call to a write tool returns a payload preview rather than performing the action. Nothing is written to Big Red Cloud until you confirm.
 - **Read and write are separated.** Read-only lookups are clearly distinct from actions that change data.
-- **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only calls are not logged.
+- **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only lookups are not treated as completed changes. Activity is scoped to currently connected companies. A downloadable support diagnostic can be generated for one connected company at a time; generating it is read-only and does not write to Big Red Cloud.
 - **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment. Disabled skill groups are **not registered** with the MCP client for that process, so those tools are hidden rather than callable.
 
 ### Sales invoice safety checks
@@ -311,7 +311,7 @@ Helper tools:
 
 On hosted deployments, Red may record anonymous operational telemetry so operators can understand approximate usage. Typical dimensions include anonymous client and connection-session identifiers, detected platform, deployment environment, tool name, and connected-company count.
 
-Telemetry does **not** include API keys, credentials, raw `connectionRef` values, authorisation headers, customer data, or invoice data. These metrics are not verified Big Red Cloud user identities (OAuth user identity is not implemented).
+Telemetry does **not** include API keys, credentials, raw `connectionRef` values, authorisation headers, request bodies, or invoice/customer/supplier payloads. Failed Big Red Cloud calls may include safe identifiers such as `company_id` or `record_id`. These metrics are not verified Big Red Cloud user identities (OAuth user identity is not implemented).
 
 Details for operators and developers: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
@@ -321,14 +321,14 @@ Details for operators and developers: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 Red exposes a focused set of MCP tools, grouped by domain. Exact tool names and their endpoint mappings live in the source code under `src/tools/` and are summarised for developers in [docs/TOOLS.md](docs/TOOLS.md).
 
-- **Company setup and readiness** — company setup configuration, financial year, options, readiness checks, transaction date validation, and getting-started guidance.
+- **Company setup and readiness** — company setup configuration, financial year, processing settings, readiness checks, transaction date validation, and account-history document-type resolution.
 - **Customers and suppliers** — list/get/create/update/delete plus opening balances and account transactions.
 - **Products and sales reps** — list/get/create/update/delete and product types.
 - **Sales documents** — quotes, sales invoices, sales credit notes, and sales entries, including generated-reference variants and generating an invoice from a quote.
 - **Purchases and payments** — purchases, payments, cash payments, cash receipts, and bank accounts.
 - **VAT and analysis lookups** — VAT rates, VAT categories, VAT types, analysis categories, accounts, and related reference data.
 - **Nominal reports** — nominal account listings and grouped/multi-company nominal reporting.
-- **Audit and session** — session connection management and the session audit log.
+- **Audit and session** — session connection management, the session audit log, and the downloadable support diagnostic.
 - **Help and training** — Freshdesk articles, customer documentation, recorded webinars, upcoming webinars, and screenshot links through read-only help tools. No company connection is required.
 
 Batch variants exist for the main create workflows and apply the same safety checks as the single-record tools.
@@ -345,6 +345,26 @@ Batch variants exist for the main create workflows and apply the same safety che
 It reviews connection status plus relevant setup such as financial year, transaction date position, active Sales VAT rates, Sales Analysis categories, products, and sales representatives. Missing suppliers is reported as a purchase-setup warning and does **not** block sales-invoice readiness. Manual reference settings are treated as a warning / preflight consideration, not necessarily a blocker.
 
 For a specific VAT-sensitive workflow (sales invoice, purchase, cash receipt, statement), use `brc_check_transaction_settings` instead — that tool checks one workflow’s processing settings, while readiness scores overall company readiness. Narrower helpers such as `brc_validate_transaction_date`, `brc_get_company_processing_settings`, and `brc_get_company_reference_settings` remain available for focused lookups.
+
+### Support diagnostics
+
+`brc_list_audit_log` shows Red write activity from the current session for currently connected companies. Read-only lookups are not treated as completed changes.
+
+`brc_generate_support_report` creates a downloadable plain-text diagnostic for **one connected company** at a time. If several companies were used, generate a separate report for each. Reports include success/failure and correlation information useful to support. They exclude credentials, API keys, tokens and connection references. Generating a report is read-only and does not write to Big Red Cloud.
+
+Developer details: [docs/TOOLS.md](docs/TOOLS.md) and [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
+### Previous-financial-year behaviour
+
+A transaction date outside the current financial year is a **warning**, not an automatic statement that the operation is impossible. After normal preview and confirmation, Red attempts only the supported action. If Big Red Cloud rejects the action or date, Red reports the actual response. Not every historical transaction can be changed.
+
+### Transaction improvements
+
+- Quote confirmation previews, validation and quote-to-invoice generation (`brc_generate_sales_invoice_from_quote`).
+- Cash-receipt VAT handling and ledger preservation on updates.
+- Supported cash-payment fields can be corrected on the existing record through the update workflow.
+- Account-history lines should be resolved to the correct document type (`brc_resolve_book_transaction_type`) before a document-specific lookup or change.
+- Undo, reverse and correct requests are treated as planning first — never as automatic permission to post another transaction.
 
 ---
 
@@ -374,7 +394,7 @@ Help-resource indexes are supplied by the deployment operator. The public reposi
 
 - Some features depend on how the company is configured in Big Red Cloud.
 - Email sending and some bank write operations may require additional tenant configuration and may be disabled by deployment flags.
-- Generated-reference behaviour can depend on Big Red Cloud tenant settings, and some generated-document endpoints may apply the tenant's current transaction date.
+- Generated-reference behaviour can depend on Big Red Cloud tenant settings, and some generated-document endpoints may apply the tenant's current transaction date. A date outside the current financial year is a warning, not an automatic refusal; the Big Red Cloud response is authoritative.
 - Tool availability may vary by deployment policy (disabled skill groups are not registered).
 - Anonymous telemetry counts approximate clients (for example browser/device cookies), not verified individual people.
 - Platform detection may be `unknown` when a client does not provide enough identifying information.
