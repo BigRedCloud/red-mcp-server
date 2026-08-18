@@ -159,7 +159,6 @@ Other non-2xx (403/404/422/500, timeouts, validation/permission failures)
 
 Tools that never need company credentials omit the `connectionRef` argument (`CONNECTION_REF_SCHEMA_EXEMPT_TOOLS`):
 
-- `brc_getting_started`
 - `brc_get_deployment_policy`
 - `brc_route_request`
 - `brc_red_help`
@@ -236,7 +235,6 @@ Endpoint paths are relative to the configured Big Red Cloud API base URL.
 | `brc_list_company_contexts` | setup | List companies connected in the session (`customerMessage` + `presentationHint`) |
 | `brc_clear_company_api_key` | setup | Clear one company connection |
 | `brc_clear_all_company_api_keys` | setup | Clear all company connections |
-| `brc_getting_started` | setup | Customer-friendly overview and connection/help guidance |
 | `brc_get_deployment_policy` | setup | Customer-facing capability summary for this deployment |
 | `brc_route_request` | setup / routing | Classify the user message; for action mode, issue a short-lived `routeToken` for the permitted workflow |
 
@@ -265,13 +263,12 @@ These tools are intended for product help and training questions, not for access
 | `brc_get_company_setup_config` | GET | `/v1/companySetupConfig` |
 | `brc_get_company_logo` | GET | `/v1/companySetupConfig/getCompanyLogo` |
 | `brc_get_financial_year` | GET | `/v1/companySetupConfig/getFinancialYear` |
-| `brc_get_company_options` | GET | `/v1/companySetupConfig/getCompanyOptions` |
 
 | MCP tool | Kind | Purpose |
 | -------- | ---- | ------- |
 | `brc_company_readiness_check` | read | Overall company health/readiness for a connected company |
 | `brc_validate_transaction_date` | read | Financial-year date validation |
-| `brc_get_company_processing_settings` | read | Mapped processing settings |
+| `brc_get_company_processing_settings` | read | Mapped processing settings (raw `/v1/companySetupConfig/getCompanyOptions` via `includeRaw`) |
 | `brc_get_company_reference_settings` | read | Reference auto-generation settings |
 | `brc_check_transaction_settings` | read | Combined transaction safety check for one VAT-sensitive workflow |
 
@@ -480,7 +477,7 @@ Read-only API calls are not logged.
 
 ### MCP resources and prompts
 
-- Resources: `brc://help`, `brc://examples`, `brc://safety`
+- Resources: `brc://help` (getting-started overview), `brc://examples`, `brc://safety`
 - Prompts: `brc_setup_company`, `brc_safe_company_review`, `brc_create_quote_workflow`
 
 ---

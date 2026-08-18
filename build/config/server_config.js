@@ -172,7 +172,6 @@ const SESSION_TOOL_NAMES = new Set([
     "brc_list_company_contexts",
     "brc_clear_company_api_key",
     "brc_clear_all_company_api_keys",
-    "brc_getting_started",
     "brc_get_deployment_policy",
     "brc_route_request",
     "brc_red_help",

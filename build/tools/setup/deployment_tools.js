@@ -442,12 +442,6 @@ export async function resolveBookTransactionType(companyName, bookTranTypeId, de
     };
 }
 export function registerDeploymentTools(server) {
-    server.tool("brc_getting_started", [
-        "Use this whenever the user asks how to start, says start or getting started, wants to connect or reconnect companies, or asks for a concise overview of Red.",
-        "Return the current customer-friendly overview, connection steps, help options, safe workflow, and example prompts.",
-        "For a specific tutorial, screenshot, article, YouTube video, or webinar question — or any red-help / /red-help command — use brc_red_help (or brc_find_help_resources for compatibility).",
-        "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
-    ].join(" "), {}, async () => textResponse(buildGettingStartedText()));
     server.tool("brc_get_deployment_policy", [
         "Authoritative customer-facing permission and output policy summary for this Red session.",
         "Use when the user asks what they can do, what tools they have, what permissions are enabled, or whether technical details/code should be shown.",

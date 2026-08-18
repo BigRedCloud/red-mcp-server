@@ -165,7 +165,20 @@ test("adding brc_find_help_resources does not reduce registered enabled tools un
     assert.ok(registeredTools.has("brc_get_help_resource_details"));
     assert.ok(registeredTools.has("brc_generate_support_report"));
     assert.ok(registeredTools.has("brc_resolve_book_transaction_type"));
-    assert.ok(enabledToolCount >= 161);
+    assert.equal(enabledToolCount, 159);
+});
+test("Claude catalogue omits redundant getting_started and company_options tools", () => {
+    assert.equal(registeredTools.has("brc_getting_started"), false);
+    assert.equal(registeredTools.has("brc_get_company_options"), false);
+    assert.ok(registeredTools.has("brc_start_company_connection"));
+    assert.ok(registeredTools.has("brc_confirm_company_connection"));
+    assert.ok(registeredTools.has("brc_list_company_contexts"));
+    assert.ok(registeredTools.has("brc_route_request"));
+    assert.ok(registeredTools.has("brc_red_help"));
+    assert.ok(registeredTools.has("brc_find_help_resources"));
+    assert.ok(registeredTools.has("brc_resolve_book_transaction_type"));
+    assert.ok(registeredTools.has("brc_generate_support_report"));
+    assert.equal(enabledToolCount, 159);
 });
 function deferredSearchScore(description, query) {
     const haystack = description.toLowerCase();
