@@ -1,26 +1,13 @@
-# Red 1.5.0 — 5 August 2026
+# Red release notes
 
-Customer-facing release notes for the public Red MCP server.
+RELEASE.md is the index for public Red releases. Each release has a separate Markdown file.
 
-## Highlights
+Customer-facing release information is also published through the Big Red Cloud Freshdesk knowledge base.
 
-- More reliable **create, update, delete, batch, and email** actions through persistent request routing across the full workflow.
-- Routing continuity through **lookup, preview, confirmation, and final write**, including short confirmations such as “yes” or “delete it” after a preview.
-- Improved **company connection continuity** across MCP session changes on supported hosted platforms, using the secure connection page and silent `connectionRef` handling by the client.
-- Clearer **connection flow**: credentials only on the secure page; success page **Copy message for chat** for confirmation.
-- Better distinction between **help questions** (how-to / manual steps) and **actions** (perform the accounting workflow).
-- Improved matching for **BRC Edu / Freshdesk / YouTube / webinar** help resources, with operator-managed synchronisation of supported content.
-- Refreshed customer guidance in the README and tool catalogue.
-- Listed on the public **MCP Register** for discovery (registration does not change connection behaviour or reliability).
+## Releases
 
-## Safety reminders
-
-- Company API keys are never entered in chat.
-- Write actions still require preview and explicit confirmation.
-- Email subject lines are controlled by **Big Red Cloud** where the API does not expose a subject override — Red does not set invoice email subjects.
-- Assistants and MCP clients obtain `routeToken` values; end users do not provide them.
-
-## Version
-
-- Package / MCP server version: **1.5.0**
-- Release date: **5 August 2026**
+- [Red 1.6.0 — 18 August 2026](releases/1.6.0.md)
+- [Red 1.5.0 — 5 August 2026](releases/1.5.0.md)
+- [Red 1.4.0 — 28 July 2026](releases/1.4.0.md)
+- [Red 1.3.0 — 21 July 2026](releases/1.3.0.md)
+- [Red 1.2.0 — 9 July 2026](releases/1.2.0.md)

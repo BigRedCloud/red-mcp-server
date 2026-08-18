@@ -37,7 +37,12 @@ export const FRESH_CONNECTION_ASSISTANT_GUIDANCE = [
 ].join(" ");
 
 export const START_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
-  "Starts the secure Red company connection flow and generates a fresh one-time secure Red connection link and confirmation code.",
+  "MANDATORY FIRST TOOL for company connection requests. This tool is brc_start_company_connection.",
+  "Use this FIRST when the user says connect my company, connect my companies, connect my companies to Red, connect Big Red Cloud, link a company, add another company, set up Red, authenticate a company, reconnect a company, or onboard one or multiple companies.",
+  "Call it immediately: it works before any company is connected and does not require companyName or connectionRef.",
+  "Do not tell the user to go manually to the Big Red Cloud website when this tool is available — start the secure Red / Big Red Cloud connection flow here instead.",
+  "Starts the secure Red / Big Red Cloud connection flow and generates a fresh one-time secure Red connection link and confirmation code.",
+  "Supports one or multiple companies in the same visit.",
   "Use only when there is no active company connection, no valid connectionRef, the user explicitly asks to connect or reconnect, try again after a failed connection, expired session credentials, or when an old, used, or stale secure connection link no longer works.",
   START_COMPANY_CONNECTION_DO_NOT_USE_WHEN,
   "Always call this tool again to generate a new link — never reuse a previous connection link.",
@@ -48,6 +53,8 @@ export const START_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
 ].join(" ");
 
 export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
+  "Confirm company connection, finish connection, or complete connection after the secure page. This tool is brc_confirm_company_connection.",
+  "Use when the user says confirm company connection, finish connection, complete connection after the secure page, or pastes a confirmation code from the success page.",
   "Claims a completed secure Red connection code for the current MCP session.",
   "Use after the user has submitted the secure connection page and returns to this chat with the confirmation code shown on the success page (for example when the MCP session changed after opening the browser).",
   "Returns an opaque connectionRef for later tool calls when the MCP client rotates session ids (for example Vibe/Mistral). Pass it silently in tool arguments — do not show connectionRef or redconn_ values to normal users.",
@@ -56,8 +63,10 @@ export const CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION = [
 ].join(" ");
 
 export const LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION = [
+  "Show connected companies and check existing Red company connections. This tool is brc_list_company_contexts.",
+  "Use this when the user asks which companies are connected, show connected companies, check existing Red company connections, list connected companies, or whether a company is already connected to Red.",
   "Lists company contexts currently connected in this MCP server session.",
-  "Use this when the user asks which companies are connected, how long the connection lasts, how much time is left, when companies disconnect, when the session expires, or what timezone the expiry is in.",
+  "Also use when the user asks how long the connection lasts, how much time is left, when companies disconnect, when the session expires, or what timezone the expiry is in.",
   "Present the result to the user with the customerMessage text, company names, and expiryMessage when connected.",
   "Answer duration and time-left questions using connectionDurationText, timeRemainingText, expiryTimeWithTimezoneText, expiryTimezoneName, expiryTimezoneAbbreviation, expiryUtcOffset, and expiryMessage from the response — do not say you do not know the current time or that you lack a live clock when timeRemainingText is present. Do not ask the user to check their device clock. Do not say local time on its own.",
   "Customer duration answers should explain how long the connection lasts, that a fresh secure link is needed after expiry, and that the one-time connection link itself cannot be reused.",

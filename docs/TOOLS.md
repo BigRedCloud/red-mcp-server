@@ -103,7 +103,7 @@ index.ts / remote.ts
 Registration details:
 
 - **Skill gating.** `registerAllTools` consults `isToolEnabled(toolName)`. If the tool's skill group is disabled by a deployment flag, registration is **skipped** (the tool is not exposed to MCP clients for that process).
-- **Route tokens.** For update/delete/batch/email skill tools (including creates, which use the update skill group), the wrapper adds a required `routeToken` argument. Assistants and MCP clients obtain the token from `brc_route_request` for the matching action workflow — end users never supply a route token. A route token is routing permission only — it does not replace preview-before-posting or user confirmation.
+- **Route tokens.** For update/delete/batch/email skill tools, the wrapper adds a required `routeToken` argument. Callers obtain the token from `brc_route_request` for the matching action workflow. A route token is routing permission only — it does not replace preview-before-posting or user confirmation.
 - **Write confirmation.** For most write tools (update/delete/batch skill groups and equivalents), the wrapper adds `confirmWrite` and, where relevant, `confirmCounterpartyExplicit` to the schema, and routes the first call through a preview-before-posting response. The underlying handler runs only after explicit confirmation. Email tools use their own `confirmSend` flow; bank-account create uses `confirmCreate`.
 - **Generic helpers.** Most list/get/create/update/delete/batch tools are produced by helpers in `src/tools/general/` (`registerListTool`, `registerGetTool`, `registerSubresourceGetTool`, `registerRawCreateTool`, `registerRawUpdateTool`, `registerRawDeleteTool`, `registerRawBatchTool`). Payload normalisation lives in `payloads_tools.ts`.
 
@@ -140,7 +140,6 @@ brc_confirm_company_connection(code)
        → re-validate only legacy unvalidated store entries
        → issue connectionRef (TTL = BRC_API_KEY_TTL_MINUTES)
   → JSON: connectionRef, connectedCompanies, failedCompanies, customerMessage
-  → Success page offers **Copy message for chat** (preferred) or paste `Confirm connection code …`
 Later tool calls (hosted HTTP)
   → optional connectionRef argument on credential-requiring tools
   → enrichToolResponseData() echoes activeConnectionRef + presentation hints
@@ -160,7 +159,6 @@ Other non-2xx (403/404/422/500, timeouts, validation/permission failures)
 
 Tools that never need company credentials omit the `connectionRef` argument (`CONNECTION_REF_SCHEMA_EXEMPT_TOOLS`):
 
-- `brc_getting_started`
 - `brc_get_deployment_policy`
 - `brc_route_request`
 - `brc_red_help`
@@ -178,11 +176,9 @@ Operator/developer telemetry identity (anonymous only) is documented in [TELEMET
 
 Transactional create/update/delete/batch/email tools require an opaque short-lived `routeToken` issued by `brc_route_request` for the matching action workflow.
 
-- Obtain the token via `brc_route_request` with the user's complete original action message (assistants/clients only — never ask the end user for a route token).
-- Retain the same token through lookup, preview, and confirmation.
+- Call `brc_route_request` with the user's complete original message before transactional accounting tools.
 - Tokens are HMAC-signed, expire after a short TTL (about five minutes), and are consumed after a confirmed write.
 - A valid `routeToken` is **not** permission to post. Preview-before-posting and explicit confirmation still apply.
-- After a preview, short confirmations such as “yes” or “delete it” should continue the pending workflow rather than starting a new incomplete route.
 - Read-only tools, connection/session helpers, and help tools do not require a route token.
 
 ### Preview before posting and confirmation
@@ -239,7 +235,6 @@ Endpoint paths are relative to the configured Big Red Cloud API base URL.
 | `brc_list_company_contexts` | setup | List companies connected in the session (`customerMessage` + `presentationHint`) |
 | `brc_clear_company_api_key` | setup | Clear one company connection |
 | `brc_clear_all_company_api_keys` | setup | Clear all company connections |
-| `brc_getting_started` | setup | Customer-friendly overview and connection/help guidance |
 | `brc_get_deployment_policy` | setup | Customer-facing capability summary for this deployment |
 | `brc_route_request` | setup / routing | Classify the user message; for action mode, issue a short-lived `routeToken` for the permitted workflow |
 
@@ -268,13 +263,12 @@ These tools are intended for product help and training questions, not for access
 | `brc_get_company_setup_config` | GET | `/v1/companySetupConfig` |
 | `brc_get_company_logo` | GET | `/v1/companySetupConfig/getCompanyLogo` |
 | `brc_get_financial_year` | GET | `/v1/companySetupConfig/getFinancialYear` |
-| `brc_get_company_options` | GET | `/v1/companySetupConfig/getCompanyOptions` |
 
 | MCP tool | Kind | Purpose |
 | -------- | ---- | ------- |
 | `brc_company_readiness_check` | read | Overall company health/readiness for a connected company |
 | `brc_validate_transaction_date` | read | Financial-year date validation |
-| `brc_get_company_processing_settings` | read | Mapped processing settings |
+| `brc_get_company_processing_settings` | read | Mapped processing settings (raw `/v1/companySetupConfig/getCompanyOptions` via `includeRaw`) |
 | `brc_get_company_reference_settings` | read | Reference auto-generation settings |
 | `brc_check_transaction_settings` | read | Combined transaction safety check for one VAT-sensitive workflow |
 
@@ -470,7 +464,7 @@ Batch tools use `PUT /v1/{resource}/batch` with normalised item payloads and app
 | `brc_send_quote_email` | email | `confirmSend` + `routeToken` |
 | `brc_send_email_statement` | email | `confirmSend` + `routeToken` |
 
-Endpoints are under `/v1/email/...` and depend on tenant email configuration. They may be omitted from the MCP tool list when `BRC_ALLOW_EMAIL_SKILLS` is false. Supported tool fields cover recipients, optional message body, and send confirmation — there is **no** subject-line argument; the email subject is controlled by Big Red Cloud.
+Endpoints are under `/v1/email/...` and depend on tenant email configuration. They may be omitted from the MCP tool list when `BRC_ALLOW_EMAIL_SKILLS` is false.
 
 ### Audit and session
 
@@ -483,7 +477,7 @@ Read-only API calls are not logged.
 
 ### MCP resources and prompts
 
-- Resources: `brc://help`, `brc://examples`, `brc://safety`
+- Resources: `brc://help` (getting-started overview), `brc://examples`, `brc://safety`
 - Prompts: `brc_setup_company`, `brc_safe_company_review`, `brc_create_quote_workflow`
 
 ---

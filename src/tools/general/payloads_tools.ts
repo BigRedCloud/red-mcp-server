@@ -578,6 +578,83 @@ function sanitizeCashReceiptInput(
   return next;
 }
 
+/**
+ * Cash Receipt acEntries use accountCode / analysisCategoryId / description /
+ * value only — never Sales Invoice-style netAmount / vatAmount / vatRateId /
+ * vatPercentage.
+ */
+function normalizeCashReceiptAcEntry(
+  entry: unknown,
+  fallbackDescription: string
+): Record<string, unknown> {
+  const source = isRecord(entry) ? entry : {};
+  const value =
+    source.value !== undefined
+      ? round2(asNumber(source.value))
+      : source.netAmount !== undefined
+        ? round2(asNumber(source.netAmount))
+        : 0;
+
+  const normalized: Record<string, unknown> = {
+    accountCode: asString(source.accountCode),
+    analysisCategoryId: asNumber(source.analysisCategoryId),
+    description: asString(source.description, fallbackDescription),
+    value,
+  };
+
+  if (source.id !== undefined) {
+    normalized.id = asNumber(source.id, 0);
+  }
+
+  return normalized;
+}
+
+/**
+ * Cash Receipt vatEntries use vatRateId / percentage / amount only.
+ * `amount` is the portion of the receipt TOTAL allocated to that VAT rate
+ * (not net, and not a separate vatAmount field).
+ */
+function normalizeCashReceiptVatEntry(entry: unknown): Record<string, unknown> {
+  const source = isRecord(entry) ? entry : {};
+  const amount =
+    source.amount !== undefined
+      ? round2(asNumber(source.amount))
+      : 0;
+
+  const normalized: Record<string, unknown> = {
+    vatRateId: asNumber(source.vatRateId),
+    percentage: asNumber(source.percentage ?? source.vatPercentage),
+    amount,
+  };
+
+  if (source.id !== undefined) {
+    normalized.id = asNumber(source.id, 0);
+  }
+
+  return normalized;
+}
+
+function applyExplicitCashReceiptOptionalTotals(
+  payload: Record<string, unknown>,
+  args: Record<string, unknown>
+): void {
+  if (args.vatTypeId !== undefined) {
+    payload.vatTypeId = asNumber(args.vatTypeId);
+  }
+
+  if (args.totalNet !== undefined) {
+    payload.totalNet = round2(asNumber(args.totalNet));
+  }
+
+  if (args.totalVat !== undefined) {
+    payload.totalVat = round2(asNumber(args.totalVat));
+  }
+
+  if (args.totalVAT !== undefined) {
+    payload.totalVAT = round2(asNumber(args.totalVAT));
+  }
+}
+
 export function buildCashReceiptPayload(
   args: Record<string, unknown>,
   options?: { vatOnCashEnabled?: boolean }
@@ -609,8 +686,9 @@ export function buildCashReceiptPayload(
 
   const hasRawVatSplit = rawAcEntries.length > 0 && rawVatEntries.length > 0;
 
-  // If a raw VAT-split payload was supplied, preserve it.
-  // This is needed for stricter/paid BRC companies that reject simple ledger-only receipts.
+  // If a raw VAT-split payload was supplied, normalise it to the Cash Receipt
+  // contract. This is needed for stricter/paid BRC companies that reject
+  // simple ledger-only receipts.
   if (hasRawVatSplit) {
     const { payload: _payload, ...cleanArgs } = argsForBuild;
     const payload: Record<string, unknown> = {
@@ -627,9 +705,19 @@ export function buildCashReceiptPayload(
       detailCollection: Array.isArray(argsForBuild.detailCollection)
         ? argsForBuild.detailCollection
         : [note],
-      acEntries: rawAcEntries,
-      vatEntries: rawVatEntries,
+      acEntries: rawAcEntries.map((entry) =>
+        normalizeCashReceiptAcEntry(entry, note)
+      ),
+      vatEntries: rawVatEntries.map((entry) =>
+        normalizeCashReceiptVatEntry(entry)
+      ),
     };
+
+    // Do not invent Sales Invoice-style header totals on Cash Receipts.
+    delete payload.totalNet;
+    delete payload.totalVat;
+    delete payload.totalVAT;
+    delete payload.vatTypeId;
 
     if (argsForBuild.unallocated !== undefined) {
       payload.unallocated = round2(asNumber(argsForBuild.unallocated, 0));
@@ -643,21 +731,7 @@ export function buildCashReceiptPayload(
       payload.ledger = 0;
     }
 
-    if (argsForBuild.vatTypeId !== undefined) {
-      payload.vatTypeId = asNumber(argsForBuild.vatTypeId, 1);
-    }
-
-    if (argsForBuild.totalNet !== undefined) {
-      payload.totalNet = round2(asNumber(argsForBuild.totalNet));
-    }
-
-    if (argsForBuild.totalVat !== undefined) {
-      payload.totalVat = round2(asNumber(argsForBuild.totalVat));
-    }
-
-    if (argsForBuild.totalVAT !== undefined) {
-      payload.totalVAT = round2(asNumber(argsForBuild.totalVAT));
-    }
+    applyExplicitCashReceiptOptionalTotals(payload, argsForBuild);
 
     return applyCashReceiptConcurrencyFields(payload, argsForBuild);
   }
@@ -691,12 +765,6 @@ export function buildCashReceiptPayload(
     vatRateId !== undefined &&
     vatPercentage !== undefined;
 
-  const net = hasFlatVatSplit
-    ? round2(total / (1 + vatPercentage / 100))
-    : total;
-
-  const vat = hasFlatVatSplit ? round2(total - net) : 0;
-
   const ledger = hasFlatVatSplit
     ? 0
     : round2(
@@ -723,20 +791,19 @@ export function buildCashReceiptPayload(
     vatEntries: [],
   };
 
-  if (!hasFlatVatSplit) {
-    if (argsForBuild.customerId !== undefined) {
-      payload.customerId = asNumber(argsForBuild.customerId);
-    }
+  // Preserve explicitly supplied customer-ledger fields; never invent them for
+  // analysed cash receipts.
+  if (argsForBuild.customerId !== undefined) {
+    payload.customerId = asNumber(argsForBuild.customerId);
+  }
 
-    if (argsForBuild.acCode !== undefined) {
-      payload.acCode = asString(argsForBuild.acCode);
-    }
+  if (argsForBuild.acCode !== undefined) {
+    payload.acCode = asString(argsForBuild.acCode);
   }
 
   if (hasFlatVatSplit) {
     payload.acEntries = [
       {
-        id: 0,
         accountCode,
         analysisCategoryId,
         description,
@@ -744,64 +811,63 @@ export function buildCashReceiptPayload(
       },
     ];
 
+    // Cash Receipt vatEntries[].amount is the portion of the receipt TOTAL
+    // allocated to this VAT rate (with one rate, that is the full total).
     payload.vatEntries = [
       {
-        id: 0,
         vatRateId,
         percentage: vatPercentage,
-        amount: net,
+        amount: total,
       },
     ];
 
-    payload.vatTypeId = asNumber(argsForBuild.vatTypeId, 1);
-    payload.totalNet = net;
-    payload.totalVAT = vat;
+    applyExplicitCashReceiptOptionalTotals(payload, argsForBuild);
   }
 
   return applyCashReceiptConcurrencyFields(payload, argsForBuild);
 }
 
-/** Re-applies BRC GET fields that buildCashReceiptPayload drops — required for PUT concurrency. */
+/**
+ * Builds the Cash Receipt PUT body as:
+ *   current BRC record + only explicitly requested update fields.
+ *
+ * `buildCashReceiptPayload` may default ledger/unallocated/etc. for CREATE; those
+ * defaults must not wipe existing values on note-only (or other partial) updates.
+ * Builder-normalized values are used for keys that were explicitly requested.
+ */
 export function mergeCashReceiptUpdateFromCurrent(
   built: Record<string, unknown>,
-  current: Record<string, unknown>
+  current: Record<string, unknown>,
+  requestedUpdates: Record<string, unknown>
 ): Record<string, unknown> {
   const id = asNumber(current.id, 0);
-  if (id <= 0) return built;
 
-  const merged: Record<string, unknown> = { ...built };
+  if (id <= 0) {
+    return built;
+  }
+
+  const merged: Record<string, unknown> = { ...current, id };
 
   if (typeof current.timestamp === "string" && current.timestamp) {
     merged.timestamp = current.timestamp;
   }
 
-  for (const key of [
-    "reference",
-    "plaidTransactionId",
-    "vatTypeId",
-    "ledger",
-    "unallocated",
-    "totalNet",
-    "totalVat",
-    "totalVAT",
-  ]) {
-    if (key in current) merged[key] = current[key];
-  }
+  for (const key of Object.keys(requestedUpdates)) {
+    if (key === "payload" || key === "id" || key === "timestamp") {
+      continue;
+    }
 
-  if (Array.isArray(current.customFields)) {
-    merged.customFields = current.customFields;
-  }
+    // Treat undefined as "not supplied" so optional schema keys cannot wipe
+    // existing monetary/allocation fields.
+    if (requestedUpdates[key] === undefined) {
+      continue;
+    }
 
-  if (Array.isArray(current.detailCollection) && current.detailCollection.length > 0) {
-    merged.detailCollection = current.detailCollection;
-  }
-
-  if (Array.isArray(current.acEntries)) {
-    merged.acEntries = current.acEntries;
-  }
-
-  if (Array.isArray(current.vatEntries)) {
-    merged.vatEntries = current.vatEntries;
+    if (key in built) {
+      merged[key] = built[key];
+    } else {
+      merged[key] = requestedUpdates[key];
+    }
   }
 
   return merged;
@@ -843,6 +909,7 @@ export function normalizeBatchItems(
     if (path === "/v1/salesInvoices") item = buildSalesInvoicePayload({ ...(raw as any), customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo as any, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
     if (path === "/v1/salesCreditNotes") item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
     if (path === "/v1/quotes") {
+      assertQuoteManualReferenceLengthOrThrow(raw.reference);
       if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
         item = raw;
       } else {
@@ -1174,6 +1241,73 @@ export function buildSalesCreditNotePayload(args: {
     };
   }
   
+  /**
+   * BRC Quote manual references are stored in a 6-character field.
+   * Evidence: official Quote sample uses "000032"; live Company C POST of a longer
+   * reference was accepted then returned truncated to 6 characters on GET; existing
+   * Company C quote references fit within 6 characters. Red rejects longer values
+   * rather than silently truncating.
+   */
+  export const QUOTE_MANUAL_REFERENCE_MAX_LENGTH = 6;
+
+  export const QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE =
+    "Quote reference must be 6 characters or fewer because Big Red Cloud truncates longer references.";
+
+  export const QUOTE_MANUAL_REFERENCE_DESCRIPTION =
+    `Optional manual quote reference, max ${QUOTE_MANUAL_REFERENCE_MAX_LENGTH} characters. Required when quote references are manual, or when the quote reference setting is unknown. ${QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE}`;
+
+  export function assertQuoteManualReferenceLengthOrThrow(
+    reference: unknown
+  ): void {
+    if (reference === undefined || reference === null) {
+      return;
+    }
+
+    const value = String(reference);
+    if (value.length > QUOTE_MANUAL_REFERENCE_MAX_LENGTH) {
+      throw new Error(QUOTE_MANUAL_REFERENCE_TOO_LONG_MESSAGE);
+    }
+  }
+
+  /**
+   * Quote-specific 2-decimal money rounding.
+   *
+   * Big Red Cloud Quote validation rejects half-up VAT rounding for observed
+   * midpoint values (for example 7.50 @ 23%: 1.73 rejected, 1.72 accepted). Quote
+   * calculations therefore use a Quote-specific rounding rule. Do not apply this
+   * globally; Sales Invoice accepts the half-up result.
+   *
+   * For the confirmed midpoint 1.725, this helper returns 1.72. The deterministic
+   * rule used here is round-half-to-even at two decimal places (via integer
+   * thousandths), which matches that observed Quote API case. This is not a claim
+   * that BRC uses banker's rounding for every document type.
+   */
+  export function roundQuoteMoney2(value: number): number {
+    if (!Number.isFinite(value)) {
+      return value;
+    }
+
+    const sign = value < 0 ? -1 : 1;
+    const abs = Math.abs(value);
+    // Scale to thousandths so .xx5 midpoints are exact integers (e.g. 1.725 → 1725).
+    const thousandths = Math.round(abs * 1000);
+    const remainder = thousandths % 10;
+    const centsTrunc = Math.trunc(thousandths / 10);
+
+    let cents: number;
+    if (remainder < 5) {
+      cents = centsTrunc;
+    } else if (remainder > 5) {
+      cents = centsTrunc + 1;
+    } else if (centsTrunc % 2 === 0) {
+      cents = centsTrunc;
+    } else {
+      cents = centsTrunc + 1;
+    }
+
+    return (sign * cents) / 100;
+  }
+
   export function buildQuotePayload(args: {
     companyId?: number;
     customerOwnerId: number;
@@ -1200,9 +1334,10 @@ export function buildSalesCreditNotePayload(args: {
     analysisCategoryId: number;
     accountCode: string;
   }) {
-    const net = round2(args.quantity * args.unitPrice);
-    const vat = round2(net * (args.vatPercentage / 100));
-    const total = round2(net + vat);
+    assertQuoteManualReferenceLengthOrThrow(args.reference);
+    const net = roundQuoteMoney2(args.quantity * args.unitPrice);
+    const vat = roundQuoteMoney2(net * (args.vatPercentage / 100));
+    const total = roundQuoteMoney2(net + vat);
     const companyId = requireQuoteCompanyId(args.companyId);
     const { saleRepId, saleRepCode } = requireSalesRepFields(args.saleRepId, args.saleRepCode);
     const deliveryTo = normaliseDeliveryTo(args.deliveryTo);
@@ -1270,6 +1405,64 @@ export function buildSalesCreditNotePayload(args: {
     }
 
     return payload;
+  }
+
+  /**
+   * Builds the nested BRC Quote POST body from flat MCP create-quote tool args.
+   * Shared by confirmation preview and confirmed POST so both use the same path.
+   */
+  export function buildQuoteCreatePayloadFromToolArgs(
+    args: Record<string, unknown>
+  ): Record<string, unknown> {
+    const companyIdRaw = args.companyId;
+    const companyId =
+      typeof companyIdRaw === "number"
+        ? companyIdRaw
+        : companyIdRaw !== undefined && companyIdRaw !== null && String(companyIdRaw).trim() !== ""
+          ? Number(companyIdRaw)
+          : undefined;
+
+    return buildQuotePayload({
+      companyId: Number.isFinite(companyId as number) ? (companyId as number) : undefined,
+      customerOwnerId: Number(args.customerOwnerId),
+      acCode: String(args.acCode ?? ""),
+      customerOwnerName: String(args.customerOwnerName ?? ""),
+      comments: String(args.comments ?? ""),
+      entryDate: String(args.entryDate ?? ""),
+      procDate: String(args.procDate ?? ""),
+      vatTypeId:
+        args.vatTypeId !== undefined && args.vatTypeId !== null
+          ? Number(args.vatTypeId)
+          : undefined,
+      saleRepId: Number(args.saleRepId),
+      saleRepCode: String(args.saleRepCode ?? ""),
+      reference:
+        args.reference !== undefined && args.reference !== null
+          ? String(args.reference)
+          : undefined,
+      poNumber:
+        args.poNumber !== undefined && args.poNumber !== null
+          ? String(args.poNumber)
+          : undefined,
+      ddNumber:
+        args.ddNumber !== undefined && args.ddNumber !== null
+          ? String(args.ddNumber)
+          : undefined,
+      deliveryTo: args.deliveryTo as string | string[] | undefined,
+      layoutType:
+        args.layoutType !== undefined && args.layoutType !== null
+          ? Number(args.layoutType)
+          : undefined,
+      productId: Number(args.productId),
+      productCode: String(args.productCode ?? ""),
+      quantity: Number(args.quantity),
+      unitPrice: Number(args.unitPrice),
+      vatRateId: Number(args.vatRateId),
+      vatPercentage: Number(args.vatPercentage),
+      tranNote: String(args.tranNote ?? ""),
+      analysisCategoryId: Number(args.analysisCategoryId),
+      accountCode: String(args.accountCode ?? ""),
+    });
   }
   
   export function buildBankAccountPayload(args: Record<string, unknown>) {

@@ -28,6 +28,12 @@ import {
   type RequestRouteMode,
 } from "./intent-classifier.js";
 import {
+  assembleCorrectionGuidance,
+  CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+  isCashPaymentCorrectionMessage,
+  isCorrectionIntent,
+} from "./correction-intent.js";
+import {
   hashRouteMessage,
   issueActionRouteToken,
   isIssuedRouteTokenConsumed,
@@ -65,7 +71,7 @@ export type RouteRequestResult = {
   allowedTools?: string[];
   /**
    * Opaque short-lived action routeToken. Only present for action mode.
-   * Never issued for help or unsupported_action.
+   * Never issued for help, correction, or unsupported_action.
    */
   routeToken?: string;
   routeTokenExpiresAt?: number;
@@ -74,6 +80,11 @@ export type RouteRequestResult = {
   /** Present in help mode — output of the unified help pipeline. */
   help?: ReturnType<typeof buildUnifiedFindHelpResourcesResponse>;
   guidance: string;
+  /**
+   * Verified actions on the existing record for this correction request.
+   * Assistant-facing only. Not a write permission and not a routeToken.
+   */
+  supportedExistingRecordActions?: readonly string[];
 };
 
 function guidanceFor(classification: IntentClassification): string {
@@ -113,6 +124,8 @@ function guidanceFor(classification: IntentClassification): string {
         "Do not create, update, or delete records for this request.",
         "Do not clear or replace an active routeToken from a prior action preview.",
       ].join(" ");
+    case "correction":
+      return assembleCorrectionGuidance(classification.originalMessage);
     default:
       return [
         "Mode unknown: ask a brief clarifying question — whether they want Red to perform the action or want manual Big Red Cloud steps.",
@@ -211,7 +224,9 @@ async function tryConfirmationContinuation(args: {
   connectionId?: string | null;
   clientKey?: string | null;
 }): Promise<RouteRequestResult | null> {
-  if (!isAffirmativeConfirmation(args.message)) {
+  // Undo / reverse / put it back is planning, not permission to complete a
+  // pending write — even if a preview is waiting.
+  if (isCorrectionIntent(args.message) || !isAffirmativeConfirmation(args.message)) {
     return null;
   }
 
@@ -403,12 +418,20 @@ export async function routeRequest(
     preferredTools: classification.preferredTools,
     allowCompanyConnectionTool: classification.allowCompanyConnectionTool,
     guidance: guidanceFor(classification),
+    ...(classification.mode === "correction" &&
+    isCashPaymentCorrectionMessage(classification.originalMessage)
+      ? {
+          supportedExistingRecordActions: [
+            ...CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+          ],
+        }
+      : {}),
   };
 
-  if (classification.mode === "unsupported_action") {
+  if (classification.mode === "unsupported_action" || classification.mode === "correction") {
     logRouteRequestResolved({
-      mode: "unsupported_action",
-      allowedToolCount: 0,
+      mode: classification.mode,
+      allowedToolCount: classification.preferredTools.length,
       tokenIssued: false,
       pendingSaved: false,
       confirmationContinuation: false,

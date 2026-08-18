@@ -70,23 +70,141 @@ export function registerSalesCreditNoteAndRepTools(server) {
             response,
         });
     });
-    server.tool("brc_update_sales_credit_note", "Updates a BRC sales credit note using structured safe text/reference fields.", {
+    server.tool("brc_update_sales_credit_note", [
+        "Updates an existing BRC sales credit note.",
+        "Supports text/reference fields, transaction dates, customer/sales-rep fields, and complete product/monetary updates.",
+        "Historical credit notes are not automatically blocked because they belong to an earlier financial year.",
+        "The BRC API is the source of truth for whether the requested historical change is permitted.",
+        "For monetary changes, provide productTrans, totalNet, totalVAT and total together.",
+        "Do not manually change unpaid; Red preserves the existing BRC value.",
+    ].join(" "), {
         companyName: companyNameSchema,
-        id: z.union([z.string(), z.number()]).describe("Sales credit note id."),
+        id: z
+            .union([z.string(), z.number()])
+            .describe("Sales credit note id."),
         note: z.string().optional(),
         reference: z.string().optional(),
-    }, async ({ companyName, id, note, reference }) => {
-        const current = await brcFetch(companyName, `/v1/salesCreditNotes/${encodeURIComponent(id)}`);
-        if (!current || typeof current !== "object" || Array.isArray(current))
+        ourReference: z.string().optional(),
+        yourReference: z.string().optional(),
+        details: z.string().optional(),
+        entryDate: z
+            .string()
+            .optional()
+            .describe("Entry date. Historical dates may be attempted; BRC determines whether the update is permitted."),
+        procDate: z
+            .string()
+            .optional()
+            .describe("Processing date. Historical dates may be attempted; BRC determines whether the update is permitted."),
+        customerId: z.number().int().positive().optional(),
+        saleRepId: z.number().int().positive().optional(),
+        vatTypeId: z.number().int().positive().optional(),
+        totalNet: z.number().optional(),
+        totalVAT: z.number().optional(),
+        total: z.number().optional(),
+        productTrans: z
+            .array(z.record(z.string(), z.unknown()))
+            .optional()
+            .describe("Complete BRC productTrans collection. Preserve existing line ids and accounting/VAT data when modifying an existing credit note."),
+    }, async ({ companyName, id, note, reference, ourReference, yourReference, details, entryDate, procDate, customerId, saleRepId, vatTypeId, totalNet, totalVAT, total, productTrans, }) => {
+        const endpoint = `/v1/salesCreditNotes/${encodeURIComponent(String(id))}`;
+        const current = await brcFetch(companyName, endpoint);
+        if (!current ||
+            typeof current !== "object" ||
+            Array.isArray(current)) {
             throw new Error(`Could not read sales credit note ${id} before update.`);
+        }
         const payload = cloneJson(current);
         if (note !== undefined)
             payload.note = note;
         if (reference !== undefined)
             payload.reference = reference;
-        const updateResponse = await brcJsonRequest(companyName, "PUT", `/v1/salesCreditNotes/${encodeURIComponent(id)}`, payload);
-        const verification = await brcFetch(companyName, `/v1/salesCreditNotes/${encodeURIComponent(id)}`);
-        return jsonResponse({ message: "Sales credit note updated using structured MCP fields.", companyName, payloadSent: payload, updateResponse, verification });
+        if (ourReference !== undefined)
+            payload.ourReference = ourReference;
+        if (yourReference !== undefined)
+            payload.yourReference = yourReference;
+        if (details !== undefined)
+            payload.details = details;
+        if (entryDate !== undefined)
+            payload.entryDate = entryDate;
+        if (procDate !== undefined)
+            payload.procDate = procDate;
+        if (customerId !== undefined)
+            payload.customerId = customerId;
+        if (saleRepId !== undefined)
+            payload.saleRepId = saleRepId;
+        if (vatTypeId !== undefined)
+            payload.vatTypeId = vatTypeId;
+        const monetaryEditRequested = totalNet !== undefined ||
+            totalVAT !== undefined ||
+            total !== undefined ||
+            productTrans !== undefined;
+        if (monetaryEditRequested) {
+            if (totalNet === undefined ||
+                totalVAT === undefined ||
+                total === undefined ||
+                productTrans === undefined) {
+                throw new Error("Monetary sales credit note updates require productTrans, totalNet, totalVAT and total together.");
+            }
+            const calculatedNet = productTrans.reduce((sum, line) => sum +
+                (typeof line.amountNet === "number"
+                    ? line.amountNet
+                    : 0), 0);
+            const calculatedVat = productTrans.reduce((sum, line) => sum +
+                (typeof line.vat === "number"
+                    ? line.vat
+                    : 0), 0);
+            const calculatedTotal = productTrans.reduce((sum, line) => sum +
+                (typeof line.amount === "number"
+                    ? line.amount
+                    : 0), 0);
+            const tolerance = 0.01;
+            if (Math.abs(totalNet - calculatedNet) > tolerance) {
+                throw new Error(`totalNet ${totalNet} does not match productTrans net total ${calculatedNet}.`);
+            }
+            if (Math.abs(totalVAT - calculatedVat) > tolerance) {
+                throw new Error(`totalVAT ${totalVAT} does not match productTrans VAT total ${calculatedVat}.`);
+            }
+            if (Math.abs(total - calculatedTotal) > tolerance) {
+                throw new Error(`total ${total} does not match productTrans gross total ${calculatedTotal}.`);
+            }
+            payload.productTrans = productTrans;
+            payload.totalNet = totalNet;
+            payload.totalVAT = totalVAT;
+            payload.total = total;
+            // Preserve payload.unpaid from the existing record.
+        }
+        try {
+            const updateResponse = await brcJsonRequest(companyName, "PUT", endpoint, payload);
+            const verification = await brcFetch(companyName, endpoint);
+            return jsonResponse({
+                success: true,
+                message: "Sales credit note updated.",
+                companyName,
+                id,
+                endpoint: `PUT ${endpoint}`,
+                monetaryEditAttempted: monetaryEditRequested,
+                payloadSent: payload,
+                updateResponse,
+                verification,
+            });
+        }
+        catch (error) {
+            return jsonResponse({
+                success: false,
+                message: "BRC rejected the sales credit note update. Red attempted the requested change rather than automatically blocking it because of financial year.",
+                companyName,
+                id,
+                endpoint: `PUT ${endpoint}`,
+                transactionDate: procDate ??
+                    entryDate ??
+                    payload.procDate ??
+                    payload.entryDate,
+                monetaryEditAttempted: monetaryEditRequested,
+                error: error instanceof Error
+                    ? error.message
+                    : String(error),
+            });
+        }
     });
     server.tool("brc_delete_sales_credit_note", "Deletes a BRC sales credit note by id using timestamp confirmation.", {
         companyName: companyNameSchema,

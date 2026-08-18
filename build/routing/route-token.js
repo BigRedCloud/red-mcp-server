@@ -19,6 +19,7 @@ import { getToolSkillGroup } from "../config/server_config.js";
 import { getBoundConnectionIdForSession, getCurrentMcpSessionId, getMcpSessionContext, resolveConnectionIdForActiveSessionWithMeta, } from "../auth/connection_store.js";
 import { isWriteActionConfirmed } from "../guards/write_confirmation.js";
 import { getActiveConnectionRef, jsonResponse, resolveActiveMcpSessionId, resolveHttpClientKey, } from "../shared.js";
+import { peekInitiatingRequestForRoute, rememberInitiatingRequestForRoute, runWithInitiatingRequest, } from "../audit/initiating_request.js";
 export const ROUTE_TOKEN_TTL_MS = 5 * 60 * 1000;
 export const ROUTE_TOKEN_SIGNING_SECRET_ENV = "BRC_ROUTE_TOKEN_SIGNING_SECRET";
 export const ROUTE_TOKEN_PREFIX = "redroute_";
@@ -245,6 +246,11 @@ export function issueActionRouteToken(args) {
     const signature = toBase64Url(createHmac("sha256", getSigningSecret())
         .update(encodedPayload, "utf8")
         .digest());
+    rememberInitiatingRequestForRoute({
+        jti: payload.jti,
+        message: args.message,
+        exp: payload.exp,
+    });
     return {
         routeToken: `${ROUTE_TOKEN_PREFIX}${encodedPayload}.${signature}`,
         payload,
@@ -458,7 +464,10 @@ export function wrapRouteTokenHandler(toolName, handler) {
         if (!validation.ok) {
             return buildRouteRequiredResponse();
         }
-        const result = await handler(args);
+        const initiatingRequest = peekInitiatingRequestForRoute(validation.payload.jti);
+        const result = initiatingRequest
+            ? await runWithInitiatingRequest(initiatingRequest, () => handler(args))
+            : await handler(args);
         const { buildTargetRecordKey, clearPendingActionForCurrentScope, markPendingActionPreviewed, } = await import("./pending-action.js");
         if (isWriteActionConfirmed(args)) {
             markRouteTokenConsumed(validation.payload.jti, validation.payload.exp);

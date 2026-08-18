@@ -473,7 +473,7 @@ export function evaluateCompanyReadiness(input) {
         : buildFinancialYearCheck(input.financialYear, todayInFinancialYear);
     if (fy.blocker) {
         pushUnique(blockers, fy.blocker);
-        pushUnique(recommendedActions, "Update the financial year in Big Red Cloud, or use a transaction date inside the current year.");
+        pushUnique(recommendedActions, "Check the company's configured financial year. For historical transactions, do not automatically refuse the request: after explicit confirmation, use the appropriate transaction tool and let the BRC endpoint determine whether the requested operation is supported.");
     }
     const customers = connectionProblem
         ? unknownCheck("Skipped customer check because the company connection is not active.")

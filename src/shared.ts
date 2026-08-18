@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
+import { getActiveInitiatingRequest } from "./audit/initiating_request.js";
+import {
+  recordBrcDownstreamFailureTelemetry,
+  telemetryIdsFromContext,
+} from "./telemetry/brc_failure.js";
 import { assertApiKeyAllowed, getMaxAuditEntries } from "./config/server_config.js";
 import {
   clearAllCompaniesFromConnectionStore,
@@ -850,22 +855,62 @@ function parseRequestBody(init: RequestInit): unknown {
   }
 }
 
+export type RedAuditOperation =
+  | "create"
+  | "update"
+  | "delete"
+  | "batch"
+  | "close"
+  | "reopen"
+  | "email"
+  | "change";
+
+export type RedAuditOutcome = "success" | "failure";
+
 export type RedAuditEntry = {
   id: number;
+  /** Server-generated ISO UTC time. Same instant as timestampUtc. */
   timestamp: string;
+  /** Authoritative server-generated ISO UTC timestamp, e.g. 2026-08-17T10:30:15.123Z. */
+  timestampUtc: string;
   companyName: string;
   method: string;
   path: string;
   action: string;
+  operation: RedAuditOperation;
+  outcome: RedAuditOutcome;
   recordType: string;
   recordId?: string | number;
   summary: string;
+  /** Short failure summary. Never a credential or full sensitive payload. */
+  errorSummary?: string;
+  /** Technical-only: where a confirmed write failed. Omitted from customer-facing audit. */
+  stage?: "preflight" | "write";
+  /** Technical-only: sanitized instruction received by brc_route_request. Never invented. */
+  initiatingRequest?: string;
+  /** Technical-only: write tool name when recorded inside a confirmed write. */
+  toolName?: string;
+  /** Technical-only: BRC HTTP status when known. */
+  statusCode?: number;
+  statusText?: string;
+  /**
+   * Technical-only: the HTTP request that actually failed, when it differs
+   * from the intended write (for example a preflight GET before PUT).
+   */
+  failedMethod?: string;
+  failedPath?: string;
+  /** Technical-only: App Insights customDimensions["red.connection_session_id"]. */
+  telemetryConnectionSessionId?: string;
+  /** Technical-only: App Insights customDimensions["red.telemetry_client_id"]. */
+  telemetryClientId?: string;
   requestBody?: unknown;
   responseBody?: unknown;
   /**
    * Session/connection/company scope captured when the entry was recorded.
    * Never returned to the user — used only to keep audit answers scoped to the
    * current MCP session, connection, and currently connected companies.
+   *
+   * No authenticated BRC userId is available at runtime today. Do not invent one.
    */
   mcpSessionId?: string;
   connectionId?: string;
@@ -1140,6 +1185,34 @@ function resolveAuditAction(method: string, parsed: ParsedAuditPath): string {
   return "Changed";
 }
 
+function resolveAuditOperation(
+  action: string,
+  parsed: ParsedAuditPath
+): RedAuditOperation {
+  if (parsed.resourceKey === "email") {
+    return "email";
+  }
+  if (action === "Closed") return "close";
+  if (action === "Reopened") return "reopen";
+  if (action === "Batch processed") return "batch";
+  if (action === "Created") return "create";
+  if (action === "Deleted") return "delete";
+  if (action === "Updated") return "update";
+  return "change";
+}
+
+function sanitizeAuditErrorSummary(status: number, statusText: string, bodyText: string): string {
+  const compact = bodyText.replace(/\s+/g, " ").trim().slice(0, 280);
+  const withoutSecrets = compact
+    .replace(/Bearer\s+\S+/gi, "<REDACTED>")
+    .replace(/api[_-]?key["']?\s*[:=]\s*["']?\S+/gi, "apiKey=<REDACTED>");
+  const statusBit = `${status}${statusText ? ` ${statusText}` : ""}`.trim();
+  if (!withoutSecrets) {
+    return `Write did not complete (${statusBit}).`;
+  }
+  return `Write did not complete (${statusBit}). ${withoutSecrets}`;
+}
+
 function buildAuditSummary(args: {
   companyName: string;
   method: string;
@@ -1213,6 +1286,218 @@ function buildAuditSummary(args: {
   };
 }
 
+type ConfirmedWriteAuditState = {
+  toolName: string;
+  companyName: string;
+  args: Record<string, unknown>;
+  audited: boolean;
+};
+
+const confirmedWriteAuditAls = new AsyncLocalStorage<ConfirmedWriteAuditState>();
+
+const TOOL_NOUN_TO_RESOURCE: Record<string, string> = {
+  quote: "quotes",
+  cash_payment: "cashPayments",
+  cash_receipt: "cashReceipts",
+  sales_invoice: "salesInvoices",
+  sales_entry: "salesEntries",
+  sales_credit_note: "salesCreditNotes",
+  purchase: "purchases",
+  payment: "payments",
+  customer: "customers",
+  supplier: "suppliers",
+  product: "products",
+  bank_account: "bankAccounts",
+  accrual: "accruals",
+  prepayment: "prepayments",
+  nominal_journal_batch: "nominalJournalBatches",
+};
+
+function toolNounToResource(noun: string): string {
+  return TOOL_NOUN_TO_RESOURCE[noun] ?? `${noun.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())}s`;
+}
+
+function inferConfirmedWriteAuditTarget(
+  toolName: string,
+  args: Record<string, unknown>
+): { method: string; path: string } {
+  const id = args.id ?? args.quoteId;
+  const idPart =
+    id !== undefined && id !== null && String(id) !== ""
+      ? `/${encodeURIComponent(String(id))}`
+      : "";
+
+  if (toolName === "brc_close_quote") {
+    return { method: "PUT", path: `/v1/quotes/close${idPart}` };
+  }
+  if (toolName === "brc_reopen_quote") {
+    return { method: "PUT", path: `/v1/quotes/reopen${idPart}` };
+  }
+  if (toolName === "brc_generate_sales_invoice_from_quote") {
+    return { method: "POST", path: "/v1/quotes/generateSaleInvoice" };
+  }
+  if (toolName === "brc_create_quote_gen_ref") {
+    return { method: "POST", path: "/v1/quotes/createQuoteWithGeneratingReference" };
+  }
+
+  const batch = /^brc_batch_(.+)$/.exec(toolName);
+  if (batch) {
+    return { method: "PUT", path: `/v1/${toolNounToResource(batch[1]!)}/batch` };
+  }
+  const deleted = /^brc_delete_(.+)$/.exec(toolName);
+  if (deleted) {
+    return { method: "DELETE", path: `/v1/${toolNounToResource(deleted[1]!)}${idPart}` };
+  }
+  const updated = /^brc_update_(.+)$/.exec(toolName);
+  if (updated) {
+    return { method: "PUT", path: `/v1/${toolNounToResource(updated[1]!)}${idPart}` };
+  }
+  const created = /^brc_create_(.+)$/.exec(toolName);
+  if (created) {
+    const noun = created[1]!.replace(/_gen_ref$/, "");
+    return { method: "POST", path: `/v1/${toolNounToResource(noun)}` };
+  }
+
+  return { method: "PUT", path: idPart ? `/v1/records${idPart}` : "/v1/records" };
+}
+
+function inferConfirmedWriteFailureStage(error: unknown): "preflight" | "write" {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /\bGET\b/.test(message) ||
+    /could not read/i.test(message) ||
+    /before (?:update|deletion|delete)/i.test(message) ||
+    /timestamp/i.test(message)
+  ) {
+    return "preflight";
+  }
+  return "write";
+}
+
+function sanitizeConfirmedWriteError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const compact = raw.replace(/\s+/g, " ").trim().slice(0, 280);
+  const withoutSecrets = compact
+    .replace(/Bearer\s+\S+/gi, "<REDACTED>")
+    .replace(/api[_-]?key["']?\s*[:=]\s*["']?\S+/gi, "apiKey=<REDACTED>")
+    .replace(/redconn_[A-Za-z0-9]+/gi, "<REDACTED>")
+    .replace(/routeToken["']?\s*[:=]\s*["']?\S+/gi, "routeToken=<REDACTED>");
+  return withoutSecrets
+    ? `Write did not complete. ${withoutSecrets}`
+    : "Write did not complete.";
+}
+
+function parseFailedBrcRequestFromError(error: unknown): {
+  failedMethod?: string;
+  failedPath?: string;
+  statusCode?: number;
+  statusText?: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const api = /BRC API (GET|POST|PUT|PATCH|DELETE) ([^\s:]+) failed/i.exec(
+    message
+  );
+  const status = /\b(\d{3})\s+([A-Za-z][A-Za-z ]+?)(?:\.|$)/.exec(message);
+  return {
+    ...(api
+      ? {
+          failedMethod: api[1]!.toUpperCase(),
+          failedPath: api[2],
+        }
+      : {}),
+    ...(status
+      ? {
+          statusCode: Number(status[1]),
+          statusText: status[2]!.trim(),
+        }
+      : {}),
+  };
+}
+
+function recordConfirmedWriteFailureIfNeeded(
+  error: unknown,
+  options?: {
+    stage?: "preflight" | "write";
+    errorSummary?: string;
+    statusCode?: number;
+    statusText?: string;
+    failedMethod?: string;
+    failedPath?: string;
+  }
+): void {
+  const store = confirmedWriteAuditAls.getStore();
+  if (!store || store.audited || !store.companyName) {
+    return;
+  }
+
+  const target = inferConfirmedWriteAuditTarget(store.toolName, store.args);
+  const parsed = parseFailedBrcRequestFromError(error);
+  const failedMethod = options?.failedMethod ?? parsed.failedMethod;
+  const failedPath = options?.failedPath ?? parsed.failedPath;
+  const stage = options?.stage ?? inferConfirmedWriteFailureStage(error);
+  const errorSummary = options?.errorSummary ?? sanitizeConfirmedWriteError(error);
+  store.audited = true;
+  recordRedAuditEntry({
+    companyName: store.companyName,
+    method: target.method,
+    path: target.path,
+    outcome: "failure",
+    errorSummary,
+    stage,
+    statusCode: options?.statusCode ?? parsed.statusCode,
+    statusText: options?.statusText ?? parsed.statusText,
+    failedMethod,
+    failedPath,
+  });
+
+  if (failedMethod && failedPath) {
+    const parsedIntended = parseAuditPath(target.path);
+    recordBrcDownstreamFailureTelemetry({
+      method: failedMethod,
+      path: failedPath,
+      statusCode: options?.statusCode ?? parsed.statusCode,
+      statusText: options?.statusText ?? parsed.statusText,
+      stage,
+      operation: resolveAuditOperation(
+        resolveAuditAction(target.method, parsedIntended),
+        parsedIntended
+      ),
+      recordType: parsedIntended.recordType,
+      recordId: parsedIntended.recordId,
+      toolName: store.toolName,
+      errorSummary,
+    });
+  }
+}
+
+/**
+ * Audits a user-confirmed write if it fails at any point, including required
+ * pre-write reads. Does not record a second entry when brcFetch already audited
+ * the POST/PUT/DELETE itself.
+ */
+export async function runConfirmedWriteWithFailureAudit<T>(
+  args: { toolName: string; args: Record<string, unknown> },
+  operation: () => Promise<T> | T
+): Promise<T> {
+  const companyName =
+    typeof args.args.companyName === "string" ? args.args.companyName : "";
+  const state: ConfirmedWriteAuditState = {
+    toolName: args.toolName,
+    companyName,
+    args: args.args,
+    audited: false,
+  };
+
+  return confirmedWriteAuditAls.run(state, async () => {
+    try {
+      return await operation();
+    } catch (error) {
+      recordConfirmedWriteFailureIfNeeded(error);
+      throw error;
+    }
+  });
+}
+
 export function recordRedAuditEntry(args: {
   companyName: string;
   method: string;
@@ -1222,22 +1507,91 @@ export function recordRedAuditEntry(args: {
   mcpSessionId?: string;
   connectionId?: string;
   companyId?: string | number;
+  outcome?: RedAuditOutcome;
+  errorSummary?: string;
+  stage?: "preflight" | "write";
+  initiatingRequest?: string;
+  toolName?: string;
+  statusCode?: number;
+  statusText?: string;
+  failedMethod?: string;
+  failedPath?: string;
+  telemetryConnectionSessionId?: string;
+  telemetryClientId?: string;
 }): RedAuditEntry {
   const meta = buildAuditSummary(args);
   const pathname = args.path.split("?")[0] ?? args.path;
+  const parsed = parseAuditPath(pathname);
+  const timestampUtc = new Date().toISOString();
+  const outcome: RedAuditOutcome = args.outcome ?? "success";
+  const operation = resolveAuditOperation(meta.action, parsed);
+  const summary =
+    outcome === "failure"
+      ? `Failed to ${operation} ${meta.recordType}${
+          meta.recordId !== undefined ? ` ${meta.recordId}` : ""
+        }`.trim()
+      : meta.summary;
 
   const scope = resolveCurrentAuditScope();
+  const confirmedWrite = confirmedWriteAuditAls.getStore();
+  if (confirmedWrite) {
+    confirmedWrite.audited = true;
+  }
+
+  const initiatingRequest =
+    args.initiatingRequest ?? getActiveInitiatingRequest();
+  const toolName = args.toolName ?? confirmedWrite?.toolName;
+  const telemetryIds = telemetryIdsFromContext();
+  const statusFromBody =
+    args.responseBody &&
+    typeof args.responseBody === "object" &&
+    !Array.isArray(args.responseBody)
+      ? (args.responseBody as JsonRecord)
+      : undefined;
 
   const entry: RedAuditEntry = {
     id: redAuditCounter++,
-    timestamp: new Date().toISOString(),
+    timestamp: timestampUtc,
+    timestampUtc,
     companyName: args.companyName,
     method: args.method,
     path: pathname,
     action: meta.action,
+    operation,
+    outcome,
     recordType: meta.recordType,
     recordId: meta.recordId,
-    summary: meta.summary,
+    summary,
+    ...(args.errorSummary ? { errorSummary: args.errorSummary } : {}),
+    ...(args.stage ? { stage: args.stage } : {}),
+    ...(initiatingRequest ? { initiatingRequest } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(args.statusCode !== undefined
+      ? { statusCode: args.statusCode }
+      : typeof statusFromBody?.statusCode === "number"
+        ? { statusCode: statusFromBody.statusCode }
+        : {}),
+    ...(args.statusText
+      ? { statusText: args.statusText }
+      : typeof statusFromBody?.statusText === "string"
+        ? { statusText: statusFromBody.statusText }
+        : {}),
+    ...(args.failedMethod ? { failedMethod: args.failedMethod } : {}),
+    ...(args.failedPath ? { failedPath: args.failedPath.split("?")[0] } : {}),
+    ...(args.telemetryConnectionSessionId ||
+    telemetryIds.telemetryConnectionSessionId
+      ? {
+          telemetryConnectionSessionId:
+            args.telemetryConnectionSessionId ??
+            telemetryIds.telemetryConnectionSessionId,
+        }
+      : {}),
+    ...(args.telemetryClientId || telemetryIds.telemetryClientId
+      ? {
+          telemetryClientId:
+            args.telemetryClientId ?? telemetryIds.telemetryClientId,
+        }
+      : {}),
     requestBody: args.requestBody,
     responseBody: args.responseBody,
     mcpSessionId: args.mcpSessionId ?? scope.mcpSessionId,
@@ -1255,6 +1609,36 @@ export function recordRedAuditEntry(args: {
   }
 
   return entry;
+}
+
+function emitBrcHttpFailureTelemetry(args: {
+  method: string;
+  path: string;
+  statusCode: number;
+  statusText: string;
+  stage: "preflight" | "write";
+  errorSummary: string;
+}): void {
+  const confirmed = confirmedWriteAuditAls.getStore();
+  const intended = confirmed
+    ? inferConfirmedWriteAuditTarget(confirmed.toolName, confirmed.args)
+    : { method: args.method, path: args.path };
+  const parsed = parseAuditPath(intended.path.split("?")[0] ?? intended.path);
+  recordBrcDownstreamFailureTelemetry({
+    method: args.method,
+    path: args.path,
+    statusCode: args.statusCode,
+    statusText: args.statusText,
+    stage: args.stage,
+    operation: resolveAuditOperation(
+      resolveAuditAction(intended.method, parsed),
+      parsed
+    ),
+    recordType: parsed.recordType,
+    recordId: parsed.recordId,
+    toolName: confirmed?.toolName,
+    errorSummary: args.errorSummary,
+  });
 }
 
 export async function brcFetch(
@@ -1313,6 +1697,54 @@ export async function brcFetch(
       return enrichReadResponseBody(payload, buildConnectionMetadataOptions(companyName));
     }
 
+    if (isWriteHttpMethod(method)) {
+      const errorSummary = sanitizeAuditErrorSummary(
+        response.status,
+        response.statusText,
+        text
+      );
+      recordRedAuditEntry({
+        companyName,
+        method,
+        path: safePath,
+        requestBody,
+        responseBody: {
+          statusCode: response.status,
+          statusText: response.statusText,
+        },
+        outcome: "failure",
+        errorSummary,
+        stage: "write",
+        statusCode: response.status,
+        statusText: response.statusText,
+      });
+      emitBrcHttpFailureTelemetry({
+        method,
+        path: safePath,
+        statusCode: response.status,
+        statusText: response.statusText,
+        stage: "write",
+        errorSummary,
+      });
+    } else if (confirmedWriteAuditAls.getStore()) {
+      const errorSummary = sanitizeAuditErrorSummary(
+        response.status,
+        response.statusText,
+        text
+      );
+      recordConfirmedWriteFailureIfNeeded(
+        new Error(`${response.status} ${response.statusText}`),
+        {
+          stage: "preflight",
+          errorSummary,
+          statusCode: response.status,
+          statusText: response.statusText,
+          failedMethod: method,
+          failedPath: safePath,
+        }
+      );
+    }
+
     throw new Error(
       `BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`
     );
@@ -1341,6 +1773,7 @@ export async function brcFetch(
       path: safePath,
       requestBody,
       responseBody: parsedBody,
+      outcome: "success",
     });
 
     return enrichToolResponseData(parsedBody, { companyName });
@@ -1460,6 +1893,24 @@ function logAuditScopeDiagnostic(details: {
   );
 }
 
+function toCustomerFacingAuditEntry(entry: RedAuditEntry): RedAuditEntry {
+  return {
+    id: entry.id,
+    timestamp: entry.timestamp,
+    timestampUtc: entry.timestampUtc,
+    companyName: entry.companyName,
+    method: entry.method,
+    path: entry.path,
+    action: entry.action,
+    operation: entry.operation,
+    outcome: entry.outcome,
+    recordType: entry.recordType,
+    recordId: entry.recordId,
+    summary: entry.summary,
+    ...(entry.errorSummary ? { errorSummary: entry.errorSummary } : {}),
+  };
+}
+
 /**
  * Returns audit entries for the current MCP session/connection scope, further
  * restricted to companies currently connected in this session.
@@ -1469,6 +1920,9 @@ function logAuditScopeDiagnostic(details: {
  * - If no companies are currently connected, returns no entries.
  * - Entries from other sessions/connections, or for companies not currently
  *   connected (including disconnected/cleared companies), are never returned.
+ *
+ * Customer-facing results never include userId, session ids, connection ids,
+ * or request/response bodies. Technical details remain scoped the same way.
  */
 export function getRedAuditLog(options?: {
   includeTechnicalDetails?: boolean;
@@ -1511,17 +1965,7 @@ export function getRedAuditLog(options?: {
     }));
   }
 
-  return scoped.map((entry) => ({
-    id: entry.id,
-    timestamp: entry.timestamp,
-    companyName: entry.companyName,
-    method: entry.method,
-    action: entry.action,
-    recordType: entry.recordType,
-    recordId: entry.recordId,
-    summary: entry.summary,
-    path: entry.path,
-  }));
+  return scoped.map(toCustomerFacingAuditEntry);
 }
 
 /**

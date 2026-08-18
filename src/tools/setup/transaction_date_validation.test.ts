@@ -1,3 +1,4 @@
+/**Test financialyear date warning logic**/
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -19,7 +20,8 @@ test("a date before the financial year is flagged as before with corrective word
   assert.equal(result.position, "before");
   assert.match(result.message, /outside the company's current financial year/);
   assert.match(result.message, /before the current financial year starts/);
-  assert.match(result.message, /choose a date within the current financial year/);
+  assert.match(result.message, /warning, not an automatic block/i);
+  assert.match(result.message, /specific BRC endpoint/i);
   assert.equal(/create\/generate requests/.test(result.message), false);
 });
 

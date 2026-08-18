@@ -6,6 +6,12 @@ export function registerCustomerTools(server) {
     registerRawDeleteTool(server, "brc_delete_customer", "Deletes a BRC customer by id.", "/v1/customers", "customer");
     registerSubresourceGetTool(server, "brc_get_customer_opening_balance", "Gets a customer's opening balance.", "/v1/customers", "openingBalance", "Customer");
     registerSubresourceGetTool(server, "brc_list_customer_op_bal_trans", "Gets a customer's opening balance transaction list.", "/v1/customers", "openingBalanceList", "Customer");
-    registerSubresourceGetTool(server, "brc_list_customer_account_trans", "Gets a customer's account transactions.", "/v1/customers", "accountTrans", "Customer");
+    registerSubresourceGetTool(server, "brc_list_customer_account_trans", [
+        "Gets a customer's account transactions, including historical transactions.",
+        "Returned transactions can contain bookTranId and bookTranTypeId.",
+        "When acting on a returned transaction, do not choose a CRUD endpoint from bookTypeDesc alone.",
+        "Resolve bookTranTypeId against the company's /v1/bookTranTypes result first, then use the matching Red transaction tool.",
+        "Do not assume bookTranId is valid for a different document endpoint."
+    ].join(" "), "/v1/customers", "accountTrans", "Customer");
     registerSubresourceGetTool(server, "brc_list_customer_quotes", "Gets quotes for a specific customer.", "/v1/customers", "quotes", "Customer");
 }

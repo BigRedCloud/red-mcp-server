@@ -9,6 +9,7 @@ functions/brc-edu-resource-processor/local.settings.json
 # Environment and local secrets
 logs/
 *.log
+npm-debug.log*
 .env
 .env.*
 !.env.example
@@ -51,5 +52,5 @@ Thumbs.db
 # Local TypeScript build metadata (compiled build/ is intentionally committed)
 *.tsbuildinfo
 
-# Internal development scripts
-scripts/tests/dev-only/
+# Local AI/developer configuration
+.cursor/

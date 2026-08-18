@@ -143,7 +143,7 @@ test("regression: metadata updates after exclusion keep excluded true", () => {
             [videoId]: {
                 excluded: true,
                 excludedAt: "2024-05-01T00:00:00Z",
-                excludedBy: "admin@example.com",
+                excludedBy: "admin@bigredcloud.com",
                 reason: "Internal staff-only recording",
                 updatedAt: "2024-05-01T00:00:00Z",
             },

@@ -40,7 +40,6 @@ export function withConnectionRefSchema(schema) {
 }
 /** Tools that do not accept company credentials — connectionRef is optional but omitted from schema checks. */
 export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
-    "brc_getting_started",
     "brc_get_deployment_policy",
     "brc_route_request",
     "brc_red_help",

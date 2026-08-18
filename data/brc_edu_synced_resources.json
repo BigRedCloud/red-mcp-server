@@ -1,0 +1,18 @@
+{
+  "storedAt": "2026-08-18T07:31:59.552Z",
+  "resources": [
+    {
+      "title": "Integration bank feeds",
+      "url": "https://example.com/integration-bank-feeds",
+      "helpRoutingCategory": "bank_feeds",
+      "keywords": "integration, bank, feeds",
+      "description": "Video resource about bank feeds and open banking: Integration bank feeds.",
+      "isActive": true,
+      "contentType": "video",
+      "source": "Big Red Cloud",
+      "lastReviewed": "2026-08-18",
+      "generatedFrom": "webinar_video_routing_index.csv",
+      "needsReview": false
+    }
+  ]
+}

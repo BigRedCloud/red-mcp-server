@@ -12,6 +12,7 @@ import { getActiveConnectionRef, resolveActiveMcpSessionId, resolveHttpClientKey
 import { getRedTelemetryContext } from "../telemetry/identity.js";
 import { getStoredSessionPlatform } from "../telemetry/platform.js";
 import { classifyRequestIntent, } from "./intent-classifier.js";
+import { assembleCorrectionGuidance, CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS, isCashPaymentCorrectionMessage, isCorrectionIntent, } from "./correction-intent.js";
 import { hashRouteMessage, issueActionRouteToken, isIssuedRouteTokenConsumed, logRouteTokenIssued, resolveConnectionIdForRouteToken, validateRouteToken, } from "./route-token.js";
 import { clearPendingAction, getPendingAction, isAffirmativeConfirmation, logPendingActionLookup, logPendingActionRejected, resolvePendingActionScopeKey, savePendingAction, } from "./pending-action.js";
 function guidanceFor(classification) {
@@ -51,6 +52,8 @@ function guidanceFor(classification) {
                 "Do not create, update, or delete records for this request.",
                 "Do not clear or replace an active routeToken from a prior action preview.",
             ].join(" ");
+        case "correction":
+            return assembleCorrectionGuidance(classification.originalMessage);
         default:
             return [
                 "Mode unknown: ask a brief clarifying question — whether they want Red to perform the action or want manual Big Red Cloud steps.",
@@ -112,7 +115,9 @@ async function resolveRouteConnection(args) {
     };
 }
 async function tryConfirmationContinuation(args) {
-    if (!isAffirmativeConfirmation(args.message)) {
+    // Undo / reverse / put it back is planning, not permission to complete a
+    // pending write — even if a preview is waiting.
+    if (isCorrectionIntent(args.message) || !isAffirmativeConfirmation(args.message)) {
         return null;
     }
     const sessionId = args.sessionId ??
@@ -277,11 +282,19 @@ export async function routeRequest(message, options) {
         preferredTools: classification.preferredTools,
         allowCompanyConnectionTool: classification.allowCompanyConnectionTool,
         guidance: guidanceFor(classification),
+        ...(classification.mode === "correction" &&
+            isCashPaymentCorrectionMessage(classification.originalMessage)
+            ? {
+                supportedExistingRecordActions: [
+                    ...CASH_PAYMENT_SUPPORTED_EXISTING_RECORD_ACTIONS,
+                ],
+            }
+            : {}),
     };
-    if (classification.mode === "unsupported_action") {
+    if (classification.mode === "unsupported_action" || classification.mode === "correction") {
         logRouteRequestResolved({
-            mode: "unsupported_action",
-            allowedToolCount: 0,
+            mode: classification.mode,
+            allowedToolCount: classification.preferredTools.length,
             tokenIssued: false,
             pendingSaved: false,
             confirmationContinuation: false,

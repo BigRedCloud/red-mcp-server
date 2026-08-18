@@ -6,6 +6,8 @@ import { registerQuoteTools } from "./sales-emails/quotes_tools.js";
 import { registerBatchTools } from "./general/batch_tools.js";
 import { registerCompanyContextTools } from "./setup/company_context_tools.js";
 import { registerNominalReportTools } from "./journals/nominal_report_tools.js";
+import { registerTools as registerListTools } from "./general/list_tools.js";
+import { registerCashPaymentTools } from "./bank-payments/cash_payments_tools.js";
 import { SALES_DOCUMENT_SALES_VAT_CATEGORY_DESCRIPTION, SALES_DOCUMENT_RAW_PAYLOAD_STRUCTURE_DESCRIPTION, } from "./general/payloads_tools.js";
 /**
  * Registers the given tool modules against a recording server and returns a map
@@ -27,6 +29,8 @@ function captureRegisteredTools() {
         registerBatchTools,
         registerCompanyContextTools,
         registerNominalReportTools,
+        registerListTools,
+        registerCashPaymentTools,
     ]) {
         register(recorder);
     }
@@ -84,6 +88,25 @@ test("brc_start_company_connection guides reconnect and fresh-link behaviour", (
     assert.match(description, /Do not call this tool when a valid connectionRef/i);
     assert.match(description, /empty list/i);
 });
+test("brc_start_company_connection registered description includes deferred-search intents", () => {
+    const { description } = getTool("brc_start_company_connection");
+    assert.match(description, /MANDATORY FIRST TOOL/i);
+    assert.match(description, /connect my companies to Red/i);
+    assert.match(description, /does not require companyName or connectionRef/i);
+    assert.match(description, /Do not tell the user to go manually to the Big Red Cloud website/i);
+});
+test("brc_confirm_company_connection registered description includes finish/complete connection wording", () => {
+    const { description } = getTool("brc_confirm_company_connection");
+    assert.match(description, /confirm company connection/i);
+    assert.match(description, /finish connection/i);
+    assert.match(description, /complete connection after the secure page/i);
+});
+test("brc_list_company_contexts registered description includes connected-company discovery wording", () => {
+    const { description } = getTool("brc_list_company_contexts");
+    assert.match(description, /which companies are connected/i);
+    assert.match(description, /show connected companies/i);
+    assert.match(description, /check existing Red company connections/i);
+});
 test("brc_list_company_contexts says connection credentials, not API keys", () => {
     const { description } = getTool("brc_list_company_contexts");
     assert.match(description, /connection credentials are never returned/i);
@@ -131,6 +154,87 @@ test("write tool descriptions do not describe BRC previews as drafts", () => {
     }
     const confirmWriteDesc = confirmWriteSchema.description ?? "";
     assert.equal(/\bdraft\b/i.test(confirmWriteDesc), false);
+});
+test("quote create tools require companyId with no test-company default wording", () => {
+    for (const name of ["brc_create_quote", "brc_create_quote_gen_ref"]) {
+        const { schema } = getTool(name);
+        const companyId = schema.companyId;
+        assert.ok(companyId, `${name} expected a companyId field`);
+        assert.equal(companyId.isOptional(), false, `${name} companyId must be required`);
+        assert.match(companyId.description ?? "", /required/i);
+        assert.match(companyId.description ?? "", /connected company/i);
+        assert.equal(/previous test company|defaults to/i.test(companyId.description ?? ""), false, `${name} companyId must not use test-environment default wording`);
+    }
+});
+test("quote manual reference schemas enforce max 6 characters", () => {
+    for (const name of [
+        "brc_create_quote",
+        "brc_create_quote_gen_ref",
+        "brc_update_quote",
+    ]) {
+        const { schema } = getTool(name);
+        const reference = schema.reference;
+        assert.ok(reference, `${name} expected a reference field`);
+        const accepted = reference.safeParse("BQ1234");
+        assert.equal(accepted.success, true, `${name} should accept BQ1234`);
+        const rejected = reference.safeParse("QUOTE-TEST-20260813-01");
+        assert.equal(rejected.success, false, `${name} should reject long references`);
+        if (!rejected.success) {
+            assert.match(rejected.error.issues[0].message, /6 characters or fewer because Big Red Cloud truncates/i);
+        }
+        assert.match(reference.description ?? "", /6 characters/i, `${name} reference description should mention the 6-character limit`);
+    }
+});
+test("brc_update_quote advertises reference-only updates and does not expose note", () => {
+    const { schema, description } = getTool("brc_update_quote");
+    assert.equal("note" in schema, false, "note must not be in brc_update_quote schema");
+    assert.ok(schema.reference, "reference must remain in brc_update_quote schema");
+    assert.match(description, /manual reference only/i);
+    assert.match(description, /note is not persisted/i);
+    assert.equal(/update quote note/i.test(description), false, "description must not advertise updating quote notes");
+    assert.equal(/staging has proven/i.test(description), false, "description must not use staging-test wording");
+});
+test("brc_delete_quote describes preview details and inconclusive post-delete lookups", () => {
+    const { description } = getTool("brc_delete_quote");
+    assert.match(description, /reference/i);
+    assert.match(description, /customer/i);
+    assert.match(description, /total/i);
+    assert.match(description, /open or closed/i);
+    assert.match(description, /inconclusive/i);
+    assert.match(description, /quote id/i);
+    assert.match(description, /not necessarily unique/i);
+});
+test("quote list and get wording does not treat field differences as failures", () => {
+    const list = getTool("brc_list_quotes");
+    const get = getTool("brc_get_quote");
+    for (const tool of [list, get]) {
+        assert.match(tool.description, /representation differences/i);
+        assert.equal(/list and get return the same fields/i.test(tool.description), false);
+    }
+});
+test("Quote and cash tool descriptions have no leftover staging or diagnostic wording", () => {
+    const names = [
+        "brc_create_quote",
+        "brc_create_quote_gen_ref",
+        "brc_update_quote",
+        "brc_delete_quote",
+        "brc_list_quotes",
+        "brc_get_quote",
+        "brc_create_cash_receipt",
+        "brc_update_cash_receipt",
+        "brc_delete_cash_receipt",
+        "brc_list_cash_receipts",
+        "brc_get_cash_receipt",
+        "brc_create_cash_payment",
+        "brc_update_cash_payment",
+        "brc_delete_cash_payment",
+        "brc_list_cash_payments",
+        "brc_get_cash_payment",
+    ];
+    for (const name of names) {
+        const { description } = getTool(name);
+        assert.equal(/staging has proven|temporary diagnostic|staging test|requestedUpdateKeys|currentRecordLedger/i.test(description), false, `${name} description must not contain leftover staging or diagnostic wording`);
+    }
 });
 test("nominal report tools state monthly values are period movements", () => {
     for (const name of [

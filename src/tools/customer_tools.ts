@@ -47,7 +47,13 @@ export function registerCustomerTools(server: ServerType) {
   registerSubresourceGetTool(
     server,
     "brc_list_customer_account_trans",
-    "Gets a customer's account transactions.",
+    [
+      "Gets a customer's account transactions, including historical transactions.",
+      "Returned transactions can contain bookTranId and bookTranTypeId.",
+      "When acting on a returned transaction, do not choose a CRUD endpoint from bookTypeDesc alone.",
+      "Resolve bookTranTypeId against the company's /v1/bookTranTypes result first, then use the matching Red transaction tool.",
+      "Do not assume bookTranId is valid for a different document endpoint."
+    ].join(" "),
     "/v1/customers",
     "accountTrans",
     "Customer"

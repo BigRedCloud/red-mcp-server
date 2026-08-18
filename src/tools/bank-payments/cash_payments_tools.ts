@@ -56,18 +56,39 @@ export function registerCashPaymentTools(server: ServerType) {
       const entryDate = args.entryDate ?? todayIsoDate();
       const procDate = args.procDate ?? entryDate;
       const payload = buildCashPaymentPayload({ ...args, entryDate, procDate } as any);
-      const response = await brcJsonRequest(companyName, "POST", "/v1/cashPayments", payload);
-
-      return jsonResponse({
-        message: "Cash payment created using structured MCP fields.",
-        companyName,
-        endpoint: "POST /v1/cashPayments",
-        payloadSent: payload,
-        response,
-      });
+      try {
+        const response = await brcJsonRequest(
+          companyName,
+          "POST",
+          "/v1/cashPayments",
+          payload
+        );
+      
+        return jsonResponse({
+          success: true,
+          message: "Cash payment created using structured MCP fields.",
+          companyName,
+          endpoint: "POST /v1/cashPayments",
+          payloadSent: payload,
+          response,
+        });
+      } catch (error) {
+        return jsonResponse({
+          success: false,
+          message:
+            "BRC rejected the cash payment create request. Red sent the request to BRC rather than automatically blocking it because of financial year.",
+          companyName,
+          endpoint: "POST /v1/cashPayments",
+          transactionDate: payload.procDate ?? payload.entryDate,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        });
+      }
     }
   );
-  registerRawUpdateTool(server, "brc_update_cash_payment", "Updates a BRC cash payment using merged fields.", "/v1/cashPayments", "Cash payment");
+  registerRawUpdateTool(server, "brc_update_cash_payment", "Updates an existing Cash Payment by merging supplied fields onto the current record. Fields that can be merged include total, entryDate, procDate, supplierId, acCode, note, ledger, discount, bankAccountId, bankAccountCode, lodgement, analysisCategoryId, accountCode, and description. This update flow is a verified action on the existing record.", "/v1/cashPayments", "Cash payment");
   registerRawDeleteTool(server, "brc_delete_cash_payment", "Deletes a BRC cash payment by id.", "/v1/cashPayments", "cash payment");
   registerRawBatchTool(server, "brc_batch_cash_payments", "Processes a batch of BRC cash payments.", "/v1/cashPayments");
 
@@ -139,20 +160,40 @@ server.tool(
     const vatOnCashEnabled = processingSettings.vatOnCashReceiptsEnabled === true;
     const payload = buildCashReceiptPayload(merged, { vatOnCashEnabled });
 
-    const response = await brcJsonRequest(
-      companyName,
-      "POST",
-      "/v1/cashReceipts",
-      payload
-    );
-
-    return jsonResponse({
-      message: "Cash receipt create request sent to BRC.",
-      companyName,
-      endpoint: "POST /v1/cashReceipts",
-      payloadSent: payload,
-      response,
-    });
+    try {
+      const response = await brcJsonRequest(
+        companyName,
+        "POST",
+        "/v1/cashReceipts",
+        payload
+      );
+    
+      return jsonResponse({
+        success: true,
+        message: "Cash receipt created.",
+        companyName,
+        endpoint: "POST /v1/cashReceipts",
+        transactionDate:
+          payload.procDate ?? payload.entryDate,
+        payloadSent: payload,
+        response,
+      });
+    } catch (error) {
+      return jsonResponse({
+        success: false,
+        message:
+          "BRC rejected the cash receipt create request. Red sent the request to BRC rather than automatically blocking it because of financial year.",
+        companyName,
+        endpoint: "POST /v1/cashReceipts",
+        transactionDate:
+          payload.procDate ?? payload.entryDate,
+        payloadSent: payload,
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    }
   }
 );
 
@@ -214,15 +255,40 @@ registerRawBatchTool(
       const entryDate = args.entryDate ?? todayIsoDate();
       const procDate = args.procDate ?? entryDate;
       const payload = buildPaymentPayload({ ...args, entryDate, procDate } as any);
-      const response = await brcJsonRequest(companyName, "POST", "/v1/payments", payload);
-
-      return jsonResponse({
-        message: "Payment created using structured MCP fields.",
-        companyName,
-        endpoint: "POST /v1/payments",
-        payloadSent: payload,
-        response,
-      });
+      try {
+        const response = await brcJsonRequest(
+          companyName,
+          "POST",
+          "/v1/payments",
+          payload
+        );
+      
+        return jsonResponse({
+          success: true,
+          message: "Payment created using structured MCP fields.",
+          companyName,
+          endpoint: "POST /v1/payments",
+          transactionDate:
+            payload.procDate ?? payload.entryDate,
+          payloadSent: payload,
+          response,
+        });
+      } catch (error) {
+        return jsonResponse({
+          success: false,
+          message:
+            "BRC rejected the payment create request. Red sent the request to BRC rather than automatically blocking it because of financial year.",
+          companyName,
+          endpoint: "POST /v1/payments",
+          transactionDate:
+            payload.procDate ?? payload.entryDate,
+          payloadSent: payload,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        });
+      }
     }
   );
   registerRawUpdateTool(server, "brc_update_payment", "Updates a BRC payment using merged fields.", "/v1/payments", "Payment");

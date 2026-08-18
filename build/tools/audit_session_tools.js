@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { clearRedAuditLog, ensureCredentialsForCurrentSession, getRedAuditLog, listConnectedCompanyNames, RED_ACTIVITY_SCOPE_INSTRUCTION, textResponse, } from "../shared.js";
+import { buildRedSupportReport, supportReportMcpResponse, } from "../audit/support_report.js";
+import { clearRedAuditLog, companyNameSchema, ensureCredentialsForCurrentSession, getRedAuditLog, listConnectedCompanyNames, normaliseCompanyName, RED_ACTIVITY_SCOPE_INSTRUCTION, textResponse, } from "../shared.js";
 export function registerAuditTools(server) {
-    server.tool("brc_list_audit_log", `Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red MCP server session. Read-only API calls are not logged. Use this as the source of truth for "what did I do today in Red?" style questions. ${RED_ACTIVITY_SCOPE_INSTRUCTION}`, {
+    server.tool("brc_list_audit_log", `Show a record of data changes (create, update, delete, batch, quote close/reopen, emails, etc.) made through this Red MCP server session. Read-only API calls are not logged. Use this as the source of truth for "what did I do today in Red?" style questions. Show only this simple activity summary in chat. After showing it, also prepare a downloadable support diagnostic with brc_generate_support_report — do not paste technical diagnostic fields into the chat summary. ${RED_ACTIVITY_SCOPE_INSTRUCTION}`, {
         includeTechnicalDetails: z
             .boolean()
             .default(false)
@@ -25,6 +26,29 @@ export function registerAuditTools(server) {
             count: entries.length,
             entries,
         }, null, 2));
+    });
+    server.tool("brc_generate_support_report", "Prepare a downloadable plain-text Red support diagnostic report for one currently connected company in this session. Read-only — does not write to Big Red Cloud. Use after showing the simple audit summary. Do not paste the full report into the chat summary unless the user's client cannot attach or download the file. Secrets, credentials, tokens, and connection references are excluded.", {
+        companyName: companyNameSchema.describe("Currently connected company to include in the diagnostic report."),
+    }, async ({ companyName }) => {
+        await ensureCredentialsForCurrentSession();
+        const connectedCompanyNames = listConnectedCompanyNames();
+        const matched = connectedCompanyNames.filter((name) => normaliseCompanyName(name) === normaliseCompanyName(companyName));
+        if (matched.length === 0) {
+            return textResponse(connectedCompanyNames.length === 0
+                ? "No companies are currently connected in this Red session. Connect a company before preparing a support diagnostic report."
+                : "That company is not connected in this Red session. A support diagnostic can only include a currently connected company.");
+        }
+        const scopedName = matched[0];
+        const entries = getRedAuditLog({
+            includeTechnicalDetails: true,
+            connectedCompanyNames: [scopedName],
+            toolName: "brc_generate_support_report",
+        });
+        const report = buildRedSupportReport({
+            companyName: scopedName,
+            entries,
+        });
+        return supportReportMcpResponse(report);
     });
     server.tool("brc_clear_audit_log", "Clear the Red audit log for this MCP server session.", {
         confirmClear: z

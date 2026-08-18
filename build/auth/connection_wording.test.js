@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderExpiredLinkPage, renderSuccessPage } from "./connection_page.js";
-import { DO_NOT_PASTE_API_KEY_IN_CHAT, DO_NOT_REUSE_OLD_CONNECTION_LINK, FRESH_CONNECTION_ASSISTANT_GUIDANCE, FRESH_CONNECTION_LINK_CLAIM_GUIDANCE, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, CONNECTION_REF_PERSISTENCE_GUIDANCE, VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, formatStartConnectionResponse, } from "./connection_wording.js";
+import { DO_NOT_PASTE_API_KEY_IN_CHAT, DO_NOT_REUSE_OLD_CONNECTION_LINK, FRESH_CONNECTION_ASSISTANT_GUIDANCE, FRESH_CONNECTION_LINK_CLAIM_GUIDANCE, START_COMPANY_CONNECTION_TOOL_DESCRIPTION, START_COMPANY_CONNECTION_DO_NOT_USE_WHEN, CONNECTION_REF_PERSISTENCE_GUIDANCE, VIBE_MISTRAL_CONNECTION_REF_GUIDANCE, CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION, LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION, formatStartConnectionResponse, } from "./connection_wording.js";
 function assertFreshConnectionWording(text) {
     assert.match(text, /fresh/i);
     assert.match(text, /secure Red connection link/i);
@@ -22,6 +22,41 @@ test("start company connection tool description covers connect, reconnect, retry
     assert.match(description, /generates a fresh one-time secure Red connection link/i);
     assert.match(description, /never reuse a previous connection link/i);
     assert.match(description, /paste an API key into chat/i);
+});
+test("start company connection tool description is discoverable for Claude deferred MCP tool search", () => {
+    const description = START_COMPANY_CONNECTION_TOOL_DESCRIPTION;
+    assert.match(description, /MANDATORY FIRST TOOL/i);
+    assert.match(description, /Use this FIRST/i);
+    assert.match(description, /connect my company/i);
+    assert.match(description, /connect my companies/i);
+    assert.match(description, /connect my companies to Red/i);
+    assert.match(description, /connect Big Red Cloud/i);
+    assert.match(description, /link a company/i);
+    assert.match(description, /add another company/i);
+    assert.match(description, /set up Red/i);
+    assert.match(description, /authenticate a company/i);
+    assert.match(description, /reconnect a company/i);
+    assert.match(description, /onboard one or multiple companies/i);
+    assert.match(description, /works before any company is connected/i);
+    assert.match(description, /does not require companyName or connectionRef/i);
+    assert.match(description, /secure Red \/ Big Red Cloud connection flow/i);
+    assert.match(description, /Supports one or multiple companies/i);
+    assert.match(description, /Do not tell the user to go manually to the Big Red Cloud website/i);
+    assert.match(description, /This tool is brc_start_company_connection/i);
+});
+test("confirm company connection tool description is discoverable for finish/complete connection", () => {
+    const description = CONFIRM_COMPANY_CONNECTION_TOOL_DESCRIPTION;
+    assert.match(description, /confirm company connection/i);
+    assert.match(description, /finish connection/i);
+    assert.match(description, /complete connection after the secure page/i);
+    assert.match(description, /This tool is brc_confirm_company_connection/i);
+});
+test("list company contexts tool description is discoverable for connected-company questions", () => {
+    const description = LIST_COMPANY_CONTEXTS_TOOL_DESCRIPTION;
+    assert.match(description, /which companies are connected/i);
+    assert.match(description, /show connected companies/i);
+    assert.match(description, /check existing Red company connections/i);
+    assert.match(description, /This tool is brc_list_company_contexts/i);
 });
 test("start company connection tool description forbids unnecessary reconnect after working connectionRef", () => {
     const description = START_COMPANY_CONNECTION_TOOL_DESCRIPTION;

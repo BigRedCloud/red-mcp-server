@@ -36,6 +36,7 @@ export const RED_HELP_TOOL_TITLE =
 export const RED_HELP_TOOL_DESCRIPTION = [
   "MANDATORY FOR RED-HELP COMMANDS: When the user's message starts with red-help or /red-help, call this tool before searching for or calling any accounting action tool.",
   `${RED_HELP_TOOL_TITLE}.`,
+  "This tool is brc_red_help. Also use it for Big Red Cloud help and how-to questions: how do I, how can I, show me how, tell me how, where do I, what are the steps, tutorial, help article, and manual instructions in Big Red Cloud.",
   "This tool gives manual Big Red Cloud instructions and searches Freshdesk, YouTube, BRC Edu, webinars, screenshots and other available help resources.",
   "red-help means the user does not want Red to perform the accounting action — never replace a red-help request with create, update, delete or post tools.",
   "Pass the text after red-help as the query.",

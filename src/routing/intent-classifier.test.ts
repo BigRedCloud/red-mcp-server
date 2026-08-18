@@ -141,6 +141,71 @@ test("classify: empty → unknown", () => {
   assert.equal(classifyRequestIntent("").mode, "unknown");
 });
 
+test("classify: undo that quote reference change → correction", () => {
+  const result = classifyRequestIntent("Undo that quote reference change");
+  assert.equal(result.mode, "correction");
+  assert.equal(result.blockTransactionalTools, true);
+  assert.equal(result.reason, "correction_request");
+});
+
+test("classify: change the quote reference to QT0003 → action", () => {
+  const result = classifyRequestIntent("Change the quote reference to QT0003");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_quote");
+});
+test("classify: explicit cash receipt update routes correctly", () => {
+  const result = classifyRequestIntent(
+    "In Company C, update Cash Receipt id 550078131. Change only the note to CASH RECEIPT MERGE TEST."
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: short cash receipt update routes correctly", () => {
+  const result = classifyRequestIntent(
+    "update cash receipt 550078131"
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: changing a cash receipt note routes correctly", () => {
+  const result = classifyRequestIntent(
+    "change the note on cash receipt 550078131"
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("routeRequest: cash receipt update issues correct route token", async () => {
+  const result = await routeRequest(
+    "In Company C, update Cash Receipt id 550078131. Change only the note to CASH RECEIPT MERGE TEST."
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow, "update_cash_receipt");
+  assert.deepEqual(
+    result.allowedTools,
+    ["brc_update_cash_receipt"]
+  );
+  assert.ok(result.routeToken);
+});
+
 const sampleArticle: SyncedFreshdeskArticle = {
   id: "freshdesk-1001",
   source: "freshdesk",
@@ -156,7 +221,7 @@ const sampleArticle: SyncedFreshdeskArticle = {
   enabled: true,
   slug: "how-do-i-add-a-customer",
   publicUrl:
-    "https://bigredcloud.freshdesk.com/support/solutions/articles/1001",
+    "https://bigredcloud.freshdesk.com/support/solutions/articles/157000368447-how-do-i-add-a-customer-",
 };
 
 test("routeRequest help mode calls unified help pipeline and blocks transactional tools", async () => {
@@ -229,4 +294,89 @@ test("routeRequest red-help add a customer → help with cleaned query", async (
   assert.equal(result.mode, "help");
   assert.equal(result.cleanedQuery, "add a customer");
   assert.equal(result.blockTransactionalTools, true);
+});
+test("classify: cash receipt update ignores customer in do-not-change constraints", () => {
+  const result = classifyRequestIntent(
+    'In Company C, update Cash Receipt id 550078131. Change only the note to: "CASH RECEIPT MERGE TEST". Do not change any monetary, VAT, allocation, ledger, customer, account or date fields. Use brc_update_cash_receipt. Show me the proposed update first and do not submit until I confirm.'
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: update cash receipt record is not treated as create", () => {
+  const result = classifyRequestIntent(
+    'Update cash receipt record. In Company C, update Cash Receipt id 550078131, changing only the note field to "CASH RECEIPT MERGE TEST".'
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "update_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_update_cash_receipt"]
+  );
+});
+
+test("classify: staging batch cash payments wording routes to batch_cash_payments", () => {
+  const result = classifyRequestIntent(
+    "In Company C, prepare a batch of 2 disposable analysed Cash Payments. Use brc_batch_cash_payments. Item 1: ... Item 2: ... Show me the exact batch payload first. Do not submit until I confirm.",
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "batch_cash_payments");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_batch_cash_payments"],
+  );
+});
+
+test("classify: batch of 2 Cash Payments routes to batch_cash_payments", () => {
+  const result = classifyRequestIntent("batch of 2 Cash Payments");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "batch_cash_payments");
+});
+
+test("classify: create 2 Cash Payments routes to batch_cash_payments", () => {
+  const result = classifyRequestIntent("create 2 Cash Payments");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "batch_cash_payments");
+});
+
+test("classify: multiple Cash Payments routes to batch_cash_payments", () => {
+  const result = classifyRequestIntent("multiple Cash Payments");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "batch_cash_payments");
+});
+
+test("classify: create a Cash Payment still routes to create_cash_payment", () => {
+  const result = classifyRequestIntent("create a Cash Payment");
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "create_cash_payment");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_create_cash_payment"],
+  );
+});
+
+test("classify: prepare a batch of Cash Receipts still routes to batch_cash_receipts", () => {
+  const result = classifyRequestIntent(
+    "prepare a batch of 2 Cash Receipts",
+  );
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "batch_cash_receipts");
+});
+
+test("routeRequest: staging batch cash payments issues batch route token", async () => {
+  const result = await routeRequest(
+    "In Company C, prepare a batch of 2 disposable analysed Cash Payments. Use brc_batch_cash_payments. Item 1: ... Item 2: ... Show me the exact batch payload first. Do not submit until I confirm.",
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow, "batch_cash_payments");
+  assert.deepEqual(result.allowedTools, ["brc_batch_cash_payments"]);
+  assert.ok(result.routeToken);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getBrcMcpServerInstructions } from "./mcp_config.js";
+import { getBrcMcpServerInstructions, MANDATORY_ROUTING_INSTRUCTION } from "./mcp_config.js";
 import { formatCredentialTtlForUser } from "../auth/connection_presentation.js";
 test("MCP server instructions keep connectionRef after successful lookups", () => {
     const instructions = getBrcMcpServerInstructions(50, false);
@@ -56,4 +56,34 @@ test("MCP server instructions define red-help mode and block auto transactional 
     assert.match(instructions, /RED-HELP SHORTCUT/i);
     assert.match(instructions, /red-help how do I add a customer/i);
     assert.match(instructions, /classifiers alone cannot force tool selection/i);
+});
+test("MCP server instructions include correction/undo planning before another write", () => {
+    const instructions = getBrcMcpServerInstructions(50, false);
+    assert.match(instructions, /Red correction, undo, and reversal rules/i);
+    assert.match(instructions, /first request is not write confirmation/i);
+    assert.match(instructions, /Never invent previous values/i);
+    assert.match(instructions, /Undo \/ reverse \/ put it back \/ change it back \/ restore \/ cancel what you just did/i);
+    assert.match(instructions, /Undo, reverse, put it back, change it back, restore, and cancel-what-you-just-did are not confirmation/i);
+    assert.match(instructions, /change the quote reference to QT0003/i);
+    assert.match(instructions, /correct invoice 123 amount to €20/i);
+    assert.match(instructions, /Never propose a specific accounting transaction type as a reversal/i);
+    assert.match(instructions, /Do not assume Cash Payment is reversed with a Cash Receipt/i);
+    assert.equal(/create a reversing entry/i.test(instructions), false);
+    assert.match(instructions, /Do not claim what the resulting customer or supplier outstanding balance/i);
+    assert.match(instructions, /Do not say deletion makes a transaction look like it never existed/i);
+    assert.match(instructions, /Hiding internal tool names does not make it acceptable to describe an imagined reversal transaction/i);
+    assert.match(instructions, /Neither is automatically the safest or correct accounting treatment/i);
+    assert.match(instructions, /Do not invent an offsetting entry, opposite entry, matching entry that cancels the original/i);
+    assert.match(instructions, /Do not recommend one accounting treatment based on generic claims such as most businesses prefer/i);
+    assert.match(instructions, /Never mention internal tool names in customer-facing correction or reversal explanations/i);
+    assert.match(instructions, /Do not say deletion or removal is the only supported correction/i);
+    assert.match(instructions, /Example fields the current Cash Payment update can change include amount, date, and supplier/i);
+    assert.match(instructions, /Do not say deletion is the only supported operation for this record type/i);
+    assert.equal(/rather than naming one/i.test(instructions), false);
+    assert.match(instructions, /which verified actions on the existing record are available/i);
+});
+test("routing instructions forbid paraphrasing the original request", () => {
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /complete original message verbatim/i);
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /do not paraphrase/i);
+    assert.match(MANDATORY_ROUTING_INSTRUCTION, /do not.*retry.*different wording/i);
 });
