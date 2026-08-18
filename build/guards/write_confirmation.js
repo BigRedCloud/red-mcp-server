@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { getToolSkillGroup } from "../config/server_config.js";
 import { buildQuoteOrSalesInvoiceDraftDetails } from "./document_draft_details.js";
-import { jsonResponse } from "../shared.js";
-import { applySalesPriceBasisToRawPayload, enforceSalesProductLineProductIdOrThrow, } from "../tools/general/payloads_tools.js";
+import { jsonResponse, runConfirmedWriteWithFailureAudit } from "../shared.js";
+import { applySalesPriceBasisToRawPayload, buildQuoteCreatePayloadFromToolArgs, enforceSalesProductLineProductIdOrThrow, normalizeBatchItems, } from "../tools/general/payloads_tools.js";
+import { buildGenerateSalesInvoiceFromQuotePayload } from "../tools/sales-emails/quotes_tools.js";
 import { buildSalesInvoiceGenRefValidationFailureBody, validateGeneratedReferenceSalesInvoicePayload, } from "../tools/sales-emails/sales_invoice_payload_schemas.js";
 import { assertSalesVatRatesOrThrow, loadSalesVatCategoryContext, } from "./sales_vat_category.js";
 /**
@@ -207,18 +208,29 @@ function hasSupplierCounterparty(body) {
         (typeof supplierId === "string" && supplierId.trim().length > 0)) &&
         isNonEmptyString(body.acCode));
 }
-function hasCashReceiptCounterparty(body) {
-    if (hasCustomerCounterparty(body)) {
-        return true;
-    }
+/**
+ * Analysed Cash Receipts post via analysis allocation (flat analysis fields or
+ * acEntries) and do not require a customer counterparty.
+ */
+function isAnalysedCashReceipt(body) {
     if (isPositiveNumber(body.analysisCategoryId) &&
         isNonEmptyString(body.accountCode)) {
         return true;
     }
-    if (Array.isArray(body.acEntries) && body.acEntries.length > 0) {
+    return Array.isArray(body.acEntries) && body.acEntries.length > 0;
+}
+function hasCashReceiptCounterparty(body) {
+    if (hasCustomerCounterparty(body)) {
         return true;
     }
-    return false;
+    return isAnalysedCashReceipt(body);
+}
+/**
+ * Customer-ledger Cash Receipts require explicit customer confirmation.
+ * Analysed Cash Receipts (allocation only, no customer) do not.
+ */
+function cashReceiptNeedsExplicitCustomerConfirmation(body) {
+    return hasCustomerCounterparty(body);
 }
 function hasCashPaymentCounterparty(body) {
     if (hasSupplierCounterparty(body)) {
@@ -319,41 +331,61 @@ async function validateCounterpartyForWrite(args) {
     if (!kind) {
         return null;
     }
-    const bodies = args.toolName.startsWith("brc_batch_") && getBatchItems(args.payload).length > 0
-        ? getBatchItems(args.payload)
+    const isBatch = args.toolName.startsWith("brc_batch_");
+    const bodies = isBatch && getBatchItems(args.payload).length > 0
+        ? getBatchItems(args.payload).map((entry) => extractBatchItemBody(entry))
         : [getWriteBody(args.payload)];
     const missingIndex = bodies.findIndex((body) => !bodyHasCounterparty(kind, body));
     if (missingIndex !== -1) {
         const label = counterpartyLabel(kind);
+        const missingGuidance = kind === "cash_receipt"
+            ? [
+                `Ask the user for a customer (customerId/acCode) or an analysis allocation (analysisCategoryId + accountCode, or acEntries) before calling this tool again.`,
+                "Do not invent a customer for an analysed cash receipt.",
+            ]
+            : [
+                `Ask the user which ${label} to use before calling this tool again.`,
+                "You may suggest a customer or supplier from an earlier preview as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
+            ];
         return jsonResponse({
             status: "counterparty_missing",
             message: [
                 `Red stopped before showing a preview because the required ${label} is missing.`,
                 "",
-                `Ask the user which ${label} to use before calling this tool again.`,
-                "You may suggest a customer or supplier from an earlier preview as a convenience, but do not select or reuse one without explicit confirmation in the current conversation.",
+                ...missingGuidance,
                 "",
-                "Do not call this tool again, and do not pass confirmWrite: true, until the user has explicitly provided or confirmed the counterparty.",
+                "Do not call this tool again, and do not pass confirmWrite: true, until the required counterparty or allocation details are provided.",
             ].join("\n"),
             toolName: args.toolName,
             companyName: args.companyName,
             counterpartyKind: kind,
             counterpartyLabel: label,
-            missingBatchItemIndex: args.toolName.startsWith("brc_batch_") ? missingIndex : undefined,
+            missingBatchItemIndex: isBatch ? missingIndex : undefined,
             confirmationField: "confirmCounterpartyExplicit",
         });
     }
     if (isCounterpartyExplicitlyConfirmed(args.payload)) {
         return null;
     }
-    const label = counterpartyLabel(kind);
-    const isBatch = args.toolName.startsWith("brc_batch_");
+    // Analysed Cash Receipts (allocation only) do not require a customer or
+    // confirmCounterpartyExplicit. Customer-ledger Cash Receipts still do.
+    // Ordinary preview-before-posting / confirmWrite remains required.
+    if (kind === "cash_receipt") {
+        const needsCustomerConfirm = bodies.some((body) => cashReceiptNeedsExplicitCustomerConfirmation(body));
+        if (!needsCustomerConfirm) {
+            return null;
+        }
+    }
+    // Customer-ledger cash receipts ask for the customer specifically — not a
+    // fake "choose a customer" prompt for analysed receipts (those bypass above).
+    const label = kind === "cash_receipt" ? "customer" : counterpartyLabel(kind);
     const batchHints = isBatch ? collectBatchCounterpartyHints(bodies) : [];
     const hint = isBatch
         ? batchHints[0]
         : counterpartyNameHint(getWriteBody(args.payload));
     const exampleQuestion = buildCounterpartyQuestion(label, isBatch, batchHints, hint);
-    return jsonResponse(await enrichWriteConfirmationResponse(args.toolName, args.companyName, args.payload, {
+    const previewSource = args.displayPayload ?? args.payload;
+    return jsonResponse(await enrichWriteConfirmationResponse(args.toolName, args.companyName, previewSource, {
         status: "counterparty_confirmation_required",
         message: [
             `Red stopped because the ${label} must be explicitly confirmed in the current conversation before showing a validated preview for posting.`,
@@ -378,7 +410,7 @@ async function validateCounterpartyForWrite(args) {
         suggestedCounterpartyName: hint,
         batchCounterpartyNames: isBatch ? batchHints : undefined,
         exampleUserQuestion: exampleQuestion,
-        payloadPreview: buildWritePayloadPreview(args.payload),
+        payloadPreview: buildWritePayloadPreview(previewSource),
         confirmationField: "confirmCounterpartyExplicit",
         confirmWriteRequiresExplicitCounterparty: true,
     }));
@@ -430,6 +462,9 @@ function writeActionLabel(toolName) {
     if (toolName.includes("reopen")) {
         return "reopening this record";
     }
+    if (toolName.includes("generate_sales_invoice_from_quote")) {
+        return "generating a sales invoice from this quote";
+    }
     if (toolName.includes("purchase")) {
         return "creating this purchase";
     }
@@ -457,6 +492,18 @@ function draftFieldsForTool(toolName) {
             "batch action summary for each item",
             "dates, amounts, VAT, and references where applicable",
             "record counts within the batch limit",
+        ];
+    }
+    if (toolName === "brc_delete_quote") {
+        return [
+            "company",
+            "quote id",
+            "reference",
+            "customer",
+            "total",
+            "open or closed",
+            "linked sales invoice if any",
+            "timestamp",
         ];
     }
     if (toolName.startsWith("brc_delete_") || toolName.startsWith("brc_update_")) {
@@ -520,7 +567,10 @@ function draftFieldsForTool(toolName) {
     return [...WRITE_DRAFT_FIELDS_COMMON];
 }
 async function enrichWriteConfirmationResponse(toolName, companyName, payload, response) {
-    const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payload);
+    const payloadRecord = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload
+        : {};
+    const draftDetails = await buildQuoteOrSalesInvoiceDraftDetails(toolName, companyName, payloadRecord);
     if (!draftDetails.documentDraftDetails) {
         return response;
     }
@@ -534,21 +584,102 @@ async function enrichWriteConfirmationResponse(toolName, companyName, payload, r
         missingDetailsDisplayHint: "Show the 'Missing or not provided' section once. Do not repeat the same customer phone or email warnings elsewhere in the reply.",
     };
 }
+const SENSITIVE_WRITE_PREVIEW_KEYS = [
+    "companyName",
+    "routeToken",
+    "connectionRef",
+    "apiKey",
+    "api_key",
+    "credentials",
+    "credential",
+    "password",
+    "authorization",
+    "Authorization",
+    "auth",
+    "session",
+    "sessionId",
+    "mcpSessionId",
+    "mcp_session_id",
+];
+const QUOTE_CREATE_WRITE_TOOLS = new Set([
+    "brc_create_quote",
+    "brc_create_quote_gen_ref",
+]);
 function buildWritePayloadPreview(input) {
-    const preview = { ...input };
+    if (Array.isArray(input)) {
+        return input.map((entry) => buildWritePayloadPreview(entry));
+    }
+    if (!input || typeof input !== "object") {
+        return input;
+    }
+    const preview = {
+        ...input,
+    };
     for (const key of Object.keys(preview)) {
         if (key === "confirmWrite" || key.startsWith("confirm")) {
             delete preview[key];
         }
     }
+    for (const key of SENSITIVE_WRITE_PREVIEW_KEYS) {
+        delete preview[key];
+    }
+    // Batch entries use { opCode, item }; strip auth/routing from nested item too.
+    if (preview.item && typeof preview.item === "object") {
+        preview.item = buildWritePayloadPreview(preview.item);
+    }
     return preview;
+}
+function writeToolEndpoint(toolName) {
+    if (toolName === "brc_create_quote") {
+        return "POST /v1/quotes";
+    }
+    if (toolName === "brc_create_quote_gen_ref") {
+        return "POST /v1/quotes/createQuoteWithGeneratingReference";
+    }
+    if (toolName === "brc_generate_sales_invoice_from_quote") {
+        return "POST /v1/quotes/generateSaleInvoice";
+    }
+    if (toolName === "brc_batch_quotes") {
+        return "PUT /v1/quotes/batch";
+    }
+    if (toolName === "brc_delete_quote") {
+        return "DELETE /v1/quotes/{id}";
+    }
+    return undefined;
+}
+/**
+ * Builds the payload shown in confirmation_required / counterparty preview.
+ * Quote create tools expose the nested BRC body from buildQuotePayload.
+ * Quote batch exposes the exact PUT /v1/quotes/batch body from normalizeBatchItems.
+ * Generate-invoice-from-quote exposes the exact generateSaleInvoice POST body.
+ */
+function buildToolWritePayloadPreview(toolName, args) {
+    if (QUOTE_CREATE_WRITE_TOOLS.has(toolName)) {
+        return buildWritePayloadPreview(buildQuoteCreatePayloadFromToolArgs(args));
+    }
+    if (toolName === "brc_batch_quotes") {
+        const items = Array.isArray(args.items)
+            ? args.items
+            : [];
+        // Same normalizeBatchItems → buildQuotePayload path used by the real PUT.
+        return buildWritePayloadPreview(normalizeBatchItems("/v1/quotes", items));
+    }
+    if (toolName === "brc_generate_sales_invoice_from_quote") {
+        return buildWritePayloadPreview(buildGenerateSalesInvoiceFromQuotePayload({
+            quoteId: Number(args.quoteId),
+            entryDate: typeof args.entryDate === "string" ? args.entryDate : undefined,
+            procDate: typeof args.procDate === "string" ? args.procDate : undefined,
+        }));
+    }
+    return buildWritePayloadPreview(args);
 }
 export async function requireWriteConfirmation(args) {
     const action = writeActionLabel(args.toolName);
     const draftFields = draftFieldsForTool(args.toolName);
-    const payload = buildWritePayloadPreview((args.payload ?? {}));
+    const payload = buildWritePayloadPreview(args.payload ?? {});
     const response = await enrichWriteConfirmationResponse(args.toolName, args.companyName, payload, {
         status: "confirmation_required",
+        confirmationRequired: true,
         message: [
             `Red stopped before ${action} because explicit user confirmation is required.`,
             "",
@@ -561,7 +692,8 @@ export async function requireWriteConfirmation(args) {
             "Red shows what it will post and waits for confirmation.",
             "Passing preflight checks is not confirmation.",
             "",
-            "The customer or supplier must be explicitly named or confirmed in the current conversation before any validated preview for posting. Do not reuse a counterparty from an earlier preview without that confirmation.",
+            "When a customer or supplier is required, they must be explicitly named or confirmed in the current conversation before any validated preview for posting. Do not reuse a counterparty from an earlier preview without that confirmation.",
+            "Analysed cash receipts that use an analysis allocation (or acEntries) do not require a customer.",
             "",
             "Red must not invent missing customer phone or customer email values.",
             "",
@@ -573,6 +705,7 @@ export async function requireWriteConfirmation(args) {
         companyName: args.companyName,
         proposedAction: action,
         draftFieldsToShow: draftFields,
+        endpoint: args.endpoint,
         payloadPreview: payload,
         confirmationField: "confirmWrite",
         preflightPassedIsNotConfirmation: true,
@@ -586,36 +719,53 @@ export function wrapWriteToolHandler(toolName, handler) {
     }
     return async (args) => {
         const companyName = typeof args.companyName === "string" ? args.companyName : undefined;
-        runSalesDocumentProductIdPreflight(toolName, args);
-        await runSalesDocumentSalesVatPreflight(toolName, companyName, args);
-        const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, args);
-        if (genRefValidationBlock) {
-            return genRefValidationBlock;
-        }
-        const counterpartyBlock = await validateCounterpartyForWrite({
-            toolName,
-            companyName,
-            payload: args,
-        });
-        if (counterpartyBlock) {
-            return counterpartyBlock;
-        }
-        if (isWriteActionConfirmed(args)) {
-            if (requiresCounterpartyConfirmation(toolName) &&
-                !isCounterpartyExplicitlyConfirmed(args)) {
-                return validateCounterpartyForWrite({
-                    toolName,
-                    companyName,
-                    payload: args,
-                });
+        const rawArgs = args;
+        const runGuardsAndHandler = async () => {
+            runSalesDocumentProductIdPreflight(toolName, rawArgs);
+            await runSalesDocumentSalesVatPreflight(toolName, companyName, rawArgs);
+            const genRefValidationBlock = validateGenRefSalesInvoicePayloadOrRespond(toolName, companyName, rawArgs);
+            if (genRefValidationBlock) {
+                return genRefValidationBlock;
             }
-            return handler(args);
+            const displayPayload = buildToolWritePayloadPreview(toolName, rawArgs);
+            const counterpartyBlock = await validateCounterpartyForWrite({
+                toolName,
+                companyName,
+                payload: rawArgs,
+                displayPayload,
+            });
+            if (counterpartyBlock) {
+                return counterpartyBlock;
+            }
+            if (isWriteActionConfirmed(args) || toolName === "brc_delete_quote") {
+                // Re-run counterparty validation so customer-ledger tools still require
+                // confirmCounterpartyExplicit on post. Analysed cash receipts that do not
+                // use a customer return null here and may proceed with confirmWrite alone.
+                // brc_delete_quote loads the Quote first, then confirms from that record.
+                if (isWriteActionConfirmed(args) && requiresCounterpartyConfirmation(toolName)) {
+                    const postCounterpartyBlock = await validateCounterpartyForWrite({
+                        toolName,
+                        companyName,
+                        payload: rawArgs,
+                        displayPayload,
+                    });
+                    if (postCounterpartyBlock) {
+                        return postCounterpartyBlock;
+                    }
+                }
+                return handler(args);
+            }
+            return requireWriteConfirmation({
+                toolName,
+                companyName,
+                payload: displayPayload,
+                endpoint: writeToolEndpoint(toolName),
+            });
+        };
+        if (isWriteActionConfirmed(args)) {
+            return runConfirmedWriteWithFailureAudit({ toolName, args: rawArgs }, runGuardsAndHandler);
         }
-        return requireWriteConfirmation({
-            toolName,
-            companyName,
-            payload: buildWritePayloadPreview(args),
-        });
+        return runGuardsAndHandler();
     };
 }
 export function appendWriteConfirmationDescription(description, toolName) {

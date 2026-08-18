@@ -36,6 +36,11 @@ import {
   resolveActiveMcpSessionId,
   resolveHttpClientKey,
 } from "../shared.js";
+import {
+  peekInitiatingRequestForRoute,
+  rememberInitiatingRequestForRoute,
+  runWithInitiatingRequest,
+} from "../audit/initiating_request.js";
 
 export const ROUTE_TOKEN_TTL_MS = 5 * 60 * 1000;
 export const ROUTE_TOKEN_SIGNING_SECRET_ENV = "BRC_ROUTE_TOKEN_SIGNING_SECRET";
@@ -385,6 +390,12 @@ export function issueActionRouteToken(args: {
       .digest(),
   );
 
+  rememberInitiatingRequestForRoute({
+    jti: payload.jti,
+    message: args.message,
+    exp: payload.exp,
+  });
+
   return {
     routeToken: `${ROUTE_TOKEN_PREFIX}${encodedPayload}.${signature}`,
     payload,
@@ -706,7 +717,12 @@ export function wrapRouteTokenHandler<T extends Record<string, unknown>>(
       return buildRouteRequiredResponse();
     }
 
-    const result = await handler(args);
+    const initiatingRequest = peekInitiatingRequestForRoute(
+      validation.payload.jti
+    );
+    const result = initiatingRequest
+      ? await runWithInitiatingRequest(initiatingRequest, () => handler(args))
+      : await handler(args);
 
     const {
       buildTargetRecordKey,

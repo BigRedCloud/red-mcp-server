@@ -30,3 +30,10 @@ coverage/
 # Temporary files
 tmp/
 temp/
+
+# Generated financial exports
+scripts/exports/*.xlsx
+scripts/exports/*.csv
+
+# Local AI/developer configuration
+.cursor/

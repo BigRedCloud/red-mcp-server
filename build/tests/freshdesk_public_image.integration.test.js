@@ -1,84 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawn } from "node:child_process";
-import net from "node:net";
 import { GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION } from "../tools/edu/help_resources_tools.js";
-const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 30_000;
-async function getFreePort() {
-    return await new Promise((resolve, reject) => {
-        const server = net.createServer();
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            if (!address || typeof address === "string") {
-                server.close();
-                reject(new Error("Could not allocate a test port."));
-                return;
-            }
-            const port = address.port;
-            server.close(() => resolve(port));
-        });
-        server.on("error", reject);
-    });
-}
-async function probeServerHttpReady(port) {
-    try {
-        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
-            method: "GET",
-            signal: AbortSignal.timeout(750),
-        });
-        return response.status === 400;
-    }
-    catch {
-        return false;
-    }
-}
-async function waitForServerReady(child, port, timeoutMs = SERVER_START_TIMEOUT_MS) {
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-        if (output.includes(SERVER_READY_LOG_MARKER)) {
-            return;
-        }
-        if (child.exitCode !== null) {
-            throw new Error(`Server exited early:\n${output}`);
-        }
-        if (await probeServerHttpReady(port)) {
-            return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error(`Server did not start within ${timeoutMs}ms:\n${output}`);
-}
+import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 async function startTestServer(t, port) {
-    const child = spawn(process.execPath, ["build/remote.js"], {
-        cwd: process.cwd(),
-        env: {
-            ...process.env,
-            PORT: String(port),
-            RED_CONNECT_CONNECTION_STORE: "memory",
-            RED_CONNECT_SESSION_DEBUG: "false",
-            APPLICATIONINSIGHTS_CONNECTION_STRING: "",
-            BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
-            BRC_ALLOW_DEV_MODE: "false",
-            BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET: "integration-test-secret",
-            RED_PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+    return startHttpTestServer(t, port, {
+        BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET: "integration-test-secret",
+        RED_PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
     });
-    t.after(() => {
-        if (!child.killed) {
-            child.kill("SIGTERM");
-        }
-    });
-    await waitForServerReady(child, port);
-    return child;
 }
 test("GET public Freshdesk image route rejects invalid token without Azure details", async (t) => {
     const port = await getFreePort();

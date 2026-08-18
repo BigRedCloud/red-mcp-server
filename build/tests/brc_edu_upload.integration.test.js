@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import net from "node:net";
 import test from "node:test";
 import { BRC_EDU_ADMIN_UPLOAD_SECRET_QUERY } from "../edu/brc_edu_upload_store.js";
 import { EASY_AUTH_CLIENT_PRINCIPAL_HEADER, } from "../edu/brc_edu_admin_auth.js";
-const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 60_000;
+import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 const ADMIN_PATH = "/internal/brc-edu/admin";
 const LEGACY_UPLOAD_PATH = "/internal/brc-edu/resources/upload";
 const WORKBOOK_PATH = `${LEGACY_UPLOAD_PATH}/workbook`;
@@ -13,83 +10,14 @@ const WORKBOOK_DOWNLOAD_PATH = `${LEGACY_UPLOAD_PATH}/workbook/download`;
 function encodePrincipal(principal) {
     return Buffer.from(JSON.stringify(principal), "utf8").toString("base64");
 }
-async function getFreePort() {
-    return await new Promise((resolve, reject) => {
-        const server = net.createServer();
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            if (!address || typeof address === "string") {
-                server.close();
-                reject(new Error("Could not allocate a test port."));
-                return;
-            }
-            const port = address.port;
-            server.close(() => resolve(port));
-        });
-        server.on("error", reject);
-    });
-}
-async function probeServerHttpReady(port) {
-    try {
-        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
-            method: "GET",
-            signal: AbortSignal.timeout(750),
-        });
-        return response.status === 400;
-    }
-    catch {
-        return false;
-    }
-}
-async function waitForServerReady(child, port, timeoutMs = SERVER_START_TIMEOUT_MS) {
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-        if (output.includes(SERVER_READY_LOG_MARKER)) {
-            return;
-        }
-        if (child.exitCode !== null) {
-            throw new Error(`Server exited early:\n${output}`);
-        }
-        if (await probeServerHttpReady(port)) {
-            return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error(`Server did not start within ${timeoutMs}ms:\n${output}`);
-}
 async function startTestServer(t, port, envOverrides = {}) {
-    const child = spawn(process.execPath, ["build/remote.js"], {
-        cwd: process.cwd(),
-        env: {
-            ...process.env,
-            PORT: String(port),
-            RED_CONNECT_CONNECTION_STORE: "memory",
-            RED_CONNECT_SESSION_DEBUG: "false",
-            APPLICATIONINSIGHTS_CONNECTION_STRING: "",
-            BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
-            BRC_ALLOW_DEV_MODE: "false",
-            BRC_EDU_ADMIN_ENTRA_TENANT_ID: "",
-            BRC_EDU_ADMIN_ENTRA_GROUP_ID: "",
-            BRC_EDU_ADMIN_ENTRA_APP_ROLE: "",
-            BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "true",
-            ...envOverrides,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+    return startHttpTestServer(t, port, {
+        BRC_EDU_ADMIN_ENTRA_TENANT_ID: "",
+        BRC_EDU_ADMIN_ENTRA_GROUP_ID: "",
+        BRC_EDU_ADMIN_ENTRA_APP_ROLE: "",
+        BRC_EDU_ADMIN_ALLOW_SECRET_FALLBACK: "true",
+        ...envOverrides,
     });
-    t.after(() => {
-        if (!child.killed) {
-            child.kill("SIGTERM");
-        }
-    });
-    await waitForServerReady(child, port);
-    return child;
 }
 function withSecret(path, port, secret) {
     const base = `http://127.0.0.1:${port}${path}`;

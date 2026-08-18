@@ -258,6 +258,8 @@ test("affirmative confirmation helpers recognise yes and delete it", () => {
   assert.equal(isAffirmativeConfirmation("delete it"), true);
   assert.equal(isAffirmativeConfirmation("go ahead"), true);
   assert.equal(isAffirmativeConfirmation("delete a customer"), false);
+  assert.equal(isAffirmativeConfirmation("undo that"), false);
+  assert.equal(isAffirmativeConfirmation("reverse that cash payment"), false);
 });
 
 test("pending action confirmation continuation reuses routeToken", async () => {
@@ -298,6 +300,47 @@ test("pending action confirmation continuation reuses routeToken", async () => {
   assert.equal(continued.routeToken, first.routeToken);
   assert.equal(continued.workflow, "delete_customer");
   assert.match(continued.guidance, /Confirmation continuation/i);
+
+  await clearPendingAction({ connectionId, scopeKeyHash });
+});
+
+test("undo after a pending preview is correction planning, not confirmation continuation", async () => {
+  resetRouteTokenStateForTests({
+    signingSecret: process.env[ROUTE_TOKEN_SIGNING_SECRET_ENV]!,
+  });
+
+  const sessionId = "pending-undo-session";
+  const connectionId = "pending-undo-connection";
+  const clientKey = "stable-undo-client-key";
+
+  const first = await routeRequest("delete customer ACME", {
+    sessionId,
+    connectionId,
+    clientKey,
+  });
+  assert.equal(first.mode, "action");
+  assert.ok(first.routeToken);
+
+  const scopeKeyHash = resolvePendingActionScopeKey({
+    clientKey,
+    sessionId,
+  });
+  await markPendingActionPreviewed({
+    connectionId,
+    scopeKeyHash,
+    toolName: "brc_delete_customer",
+    targetRecordKey: "code:acme",
+  });
+
+  const undo = await routeRequest("undo that", {
+    sessionId,
+    connectionId,
+    clientKey,
+  });
+  assert.equal(undo.mode, "correction");
+  assert.equal(undo.routeToken, undefined);
+  assert.notEqual(undo.confirmationContinuation, true);
+  assert.equal(undo.blockTransactionalTools, true);
 
   await clearPendingAction({ connectionId, scopeKeyHash });
 });

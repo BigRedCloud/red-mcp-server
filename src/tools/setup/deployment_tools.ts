@@ -5,7 +5,12 @@ import {
   companyNameSchema,
   jsonResponse,
   textResponse,
+  type JsonRecord,
 } from "../../shared.js";
+import {
+  resolveTransactionDocumentKind,
+  type BookTranType,
+} from "../../routing/transaction-document-kind.js";
 import {
   getCustomerDeploymentCapabilities,
   redServerConfig,
@@ -49,6 +54,7 @@ export function buildTransactionDateValidation(
   if (inFinancialYear === false) {
     let position: TransactionDatePosition = "unknown";
     let detail = "";
+
     if (start && transactionDate < start) {
       position = "before";
       detail = " The date falls before the current financial year starts.";
@@ -60,7 +66,10 @@ export function buildTransactionDateValidation(
     return {
       inFinancialYear,
       position,
-      message: `This transaction date is outside the company's current financial year.${detail} Please choose a date within the current financial year before creating the transaction.`,
+      message:
+        `This transaction date is outside the company's current financial year.${detail} ` +
+        "This is a warning, not an automatic block. Historical transactions may be supported by this specific BRC endpoint. " +
+        "If the user has confirmed the action, use the appropriate Red transaction tool and report the exact BRC response if the API rejects the historical date.",
     };
   }
 
@@ -68,7 +77,8 @@ export function buildTransactionDateValidation(
     inFinancialYear,
     position: "unknown",
     message:
-      "Red could not determine the company's current financial year, so this transaction date could not be checked. Please verify the financial year in Big Red Cloud before creating the transaction.",
+      "Red could not determine the company's current financial year. Do not assume the transaction is unsupported. " +
+      "Proceed only after confirming the requested date and let the relevant BRC endpoint determine whether that operation is allowed.",
   };
 }
 
@@ -202,7 +212,10 @@ Write-action safety:
 - Supported create, update, delete, batch, and email actions require explicit plain-English confirmation before posting.
 - Where the relevant tool supports it, show a clear plain-English preview of what will be posted before asking for confirmation.
 - Confirm the company, transaction date, customer or supplier, products or accounts, VAT treatment, amounts, references, and totals as relevant.
-- Validate transaction dates against the current financial year.
+- Check transaction dates against the current financial year.
+- A date outside the current financial year is a warning, not by itself a reason to refuse the action.
+- Historical create, update, and delete support is endpoint-specific. After explicit user confirmation, use the appropriate Red tool and let the BRC API determine whether the operation is supported.
+- If BRC rejects a historical operation, report the actual API error. Do not invent a blanket rule that Red cannot work with previous financial years.
 - Do not bypass disabled actions with direct API calls, scripts, or configuration changes.
 - Delete, update, batch, and email actions depend on the current deployment capabilities above.
 - If an action is unavailable, explain that plainly and offer a read-only review or instructions for completing it directly in Big Red Cloud.
@@ -424,7 +437,7 @@ Supported create, update, delete, batch, and email actions require explicit plai
 Check the company, transaction date, customer or supplier, products or nominal accounts, VAT treatment, amounts, references, totals, and any warnings before confirming.
 
 7. Check transaction dates
-Accounting actions may fail when the transaction date is outside the company's current financial year. Validate the date before posting.
+Accounting actions outside the current financial year may be supported depending on the BRC endpoint. Check the date, warn the user when it is outside the current year, and after confirmation attempt the requested supported action. If BRC rejects it, explain the API response.
 
 8. Treat analysis as decision support
 Check important figures against Big Red Cloud. Red should explain the records used, calculations, assumptions, uncertainty, and limitations, and should never fill gaps by guessing.
@@ -454,20 +467,84 @@ Useful prompts:
 
 export { customerDeploymentPolicyText };
 
-
-export function registerDeploymentTools(server: ServerType) {
-  server.tool(
-    "brc_getting_started",
-    [
-      "Use this whenever the user asks how to start, says start or getting started, wants to connect or reconnect companies, or asks for a concise overview of Red.",
-      "Return the current customer-friendly overview, connection steps, help options, safe workflow, and example prompts.",
-      "For a specific tutorial, screenshot, article, YouTube video, or webinar question — or any red-help / /red-help command — use brc_red_help (or brc_find_help_resources for compatibility).",
-      "If the user asks what they can do or what permissions they have, call brc_get_deployment_policy instead and state only current permissions — do not list tool names or counts.",
-    ].join(" "),
-    {},
-    async () => textResponse(buildGettingStartedText())
+export async function resolveBookTransactionType(
+  companyName: string,
+  bookTranTypeId: number,
+  deps: {
+    brcFetch: typeof brcFetch;
+  } = {
+    brcFetch,
+  }
+) {
+  const response = await deps.brcFetch(
+    companyName,
+    "/v1/bookTranTypes"
   );
 
+  if (
+    !response ||
+    typeof response !== "object" ||
+    Array.isArray(response)
+  ) {
+    throw new Error(
+      "Could not load BRC book transaction types."
+    );
+  }
+
+  const items = Array.isArray(
+    (response as JsonRecord).Items
+  )
+    ? ((response as JsonRecord).Items as BookTranType[])
+    : [];
+
+  const matchedType = items.find(
+    (item) => item.id === bookTranTypeId
+  );
+
+  if (!matchedType) {
+    return {
+      resolved: false,
+      mapped: false,
+      companyName,
+      bookTranTypeId,
+      bookTranTypeDescription: null,
+      documentKind: "unknown" as const,
+      message:
+        `bookTranTypeId ${bookTranTypeId} was not present in this company's live /v1/bookTranTypes response.`,
+    };
+  }
+
+  const kind = resolveTransactionDocumentKind(
+    bookTranTypeId,
+    items
+  );
+
+  if (kind === "unknown") {
+    return {
+      resolved: true,
+      mapped: false,
+      companyName,
+      bookTranTypeId,
+      bookTranTypeDescription:
+        matchedType.description,
+      documentKind: "unknown" as const,
+      message:
+        `BRC returned transaction type "${matchedType.description}", but Red does not currently have a document-tool mapping for that transaction type.`,
+    };
+  }
+
+  return {
+    resolved: true,
+    mapped: true,
+    companyName,
+    bookTranTypeId,
+    bookTranTypeDescription:
+      matchedType.description,
+    documentKind: kind,
+  };
+}
+
+export function registerDeploymentTools(server: ServerType) {
   server.tool(
     "brc_get_deployment_policy",
     [
@@ -542,6 +619,27 @@ export function registerDeploymentTools(server: ServerType) {
     },
     async ({ companyName }) => jsonResponse(await runCompanyReadinessCheck(companyName))
   );
+
+  server.tool(
+    "brc_resolve_book_transaction_type",
+    [
+      "Resolves a bookTranTypeId from a BRC customer or supplier account transaction against the connected company's live /v1/bookTranTypes list.",
+      "Use this before choosing a get/update/delete transaction tool when accountTrans returns bookTranId and bookTranTypeId.",
+      "Do not infer the document type from bookTypeDesc alone and do not assume transaction type ids are globally fixed across companies.",
+    ].join(" "),
+    {
+      companyName: companyNameSchema,
+      bookTranTypeId: z.number().int().positive(),
+    },
+    async ({ companyName, bookTranTypeId }) =>
+      jsonResponse(
+        await resolveBookTransactionType(
+          companyName,
+          bookTranTypeId
+        )
+      )
+  );
+
 
   server.registerResource(
     "brc_help",

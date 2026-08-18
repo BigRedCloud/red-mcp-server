@@ -119,7 +119,7 @@ test("brc_create_sales_invoice_gen_ref schema registration includes connectionRe
     assert.ok(schema);
     assert.ok(schema.connectionRef, "expected connectionRef on MCP-facing schema");
 });
-test("supplied connectionRef is active during preview write-preflight and retained in payloadPreview", async () => {
+test("supplied connectionRef is active during preview write-preflight and omitted from payloadPreview", async () => {
     let refDuringVatPreflight;
     let companiesDuringVatPreflight = [];
     let handlerCalled = false;
@@ -143,11 +143,16 @@ test("supplied connectionRef is active during preview write-preflight and retain
         const body = parseText(result);
         assert.ok(body.status === "confirmation_required" ||
             body.status === "counterparty_confirmation_required", `unexpected status ${String(body.status)}`);
-        assert.equal(body.payloadPreview
-            ?.connectionRef, storedConnectionRef, "preview payload must retain the supplied connectionRef");
         assert.equal(handlerCalled, false, "post handler must not run on preview");
         assert.equal(refDuringVatPreflight, storedConnectionRef);
         assert.ok(companiesDuringVatPreflight.includes(COMPANY), `expected ${COMPANY} loaded during VAT preflight, got ${JSON.stringify(companiesDuringVatPreflight)}`);
+        const payloadPreview = body.payloadPreview;
+        assert.ok(payloadPreview && typeof payloadPreview === "object");
+        const previewRecord = payloadPreview;
+        assert.equal(previewRecord.connectionRef, undefined, "customer-facing payloadPreview must not include connectionRef");
+        assert.equal("connectionRef" in previewRecord, false);
+        const previewBlob = JSON.stringify(payloadPreview);
+        assert.equal(/redconn_/i.test(previewBlob), false, "customer-facing payloadPreview must not include redconn_ values");
         assertNoMissingConnectionRefMessage(body);
     }
     finally {

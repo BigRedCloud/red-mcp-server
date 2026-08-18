@@ -63,6 +63,8 @@ test("brc_red_help description includes sales invoice, customer, and manual-help
     assert.match(tool.description, /YouTube/i);
     assert.match(tool.description, /BRC Edu/i);
     assert.match(tool.description, /webinars/i);
+    assert.match(tool.description, /Big Red Cloud help/i);
+    assert.match(tool.description, /how-to questions/i);
     assert.match(tool.description, /never replace a red-help request with create, update, delete or post tools/i);
     assert.match(tool.description, /brc_red_help\(\{ query: "how do I add a sales invoice" \}\)/);
 });

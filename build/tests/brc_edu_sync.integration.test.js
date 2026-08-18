@@ -3,89 +3,15 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { spawn } from "node:child_process";
-import net from "node:net";
 import { BRC_EDU_SYNC_SECRET_HEADER } from "../edu/brc_edu_synced_store.js";
-const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const SERVER_START_TIMEOUT_MS = 60_000;
+import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 const SYNC_PATH = "/internal/brc-edu/resources/sync";
 const SUPPORT_CSV = [
     "Video Title,Video URL,Help-Routing Category",
     "Integration bank feeds,https://example.com/integration-bank-feeds,bank_feeds",
 ].join("\n");
-async function getFreePort() {
-    return await new Promise((resolve, reject) => {
-        const server = net.createServer();
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            if (!address || typeof address === "string") {
-                server.close();
-                reject(new Error("Could not allocate a test port."));
-                return;
-            }
-            const port = address.port;
-            server.close(() => resolve(port));
-        });
-        server.on("error", reject);
-    });
-}
-async function probeServerHttpReady(port) {
-    try {
-        const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
-            method: "GET",
-            signal: AbortSignal.timeout(750),
-        });
-        return response.status === 400;
-    }
-    catch {
-        return false;
-    }
-}
-async function waitForServerReady(child, port, timeoutMs = SERVER_START_TIMEOUT_MS) {
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-        output += chunk.toString();
-    });
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-        if (output.includes(SERVER_READY_LOG_MARKER)) {
-            return;
-        }
-        if (child.exitCode !== null) {
-            throw new Error(`Server exited early:\n${output}`);
-        }
-        if (await probeServerHttpReady(port)) {
-            return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error(`Server did not start within ${timeoutMs}ms:\n${output}`);
-}
 async function startTestServer(t, port, envOverrides = {}) {
-    const child = spawn(process.execPath, ["build/remote.js"], {
-        cwd: process.cwd(),
-        env: {
-            ...process.env,
-            PORT: String(port),
-            RED_CONNECT_CONNECTION_STORE: "memory",
-            RED_CONNECT_SESSION_DEBUG: "false",
-            APPLICATIONINSIGHTS_CONNECTION_STRING: "",
-            BRC_RATE_LIMIT_REQUESTS_PER_MINUTE: "1000",
-            BRC_ALLOW_DEV_MODE: "false",
-            ...envOverrides,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-    });
-    t.after(() => {
-        if (!child.killed) {
-            child.kill("SIGTERM");
-        }
-    });
-    await waitForServerReady(child, port);
-    return child;
+    return startHttpTestServer(t, port, envOverrides);
 }
 function createSyncFixture() {
     const baseDir = join(tmpdir(), `brc-edu-sync-http-${Date.now()}-${Math.random()}`);

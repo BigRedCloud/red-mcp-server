@@ -47,7 +47,13 @@ export function registerSupplierTools(server: ServerType) {
   registerSubresourceGetTool(
     server,
     "brc_list_supplier_account_trans",
-    "Gets a supplier's account transactions.",
+    [
+      "Gets a supplier's account transactions, including historical transactions.",
+      "Returned transactions can contain bookTranId and bookTranTypeId.",
+      "When acting on a returned transaction, do not choose a CRUD endpoint from the display description alone.",
+      "Resolve bookTranTypeId against the company's /v1/bookTranTypes result first, then use the matching Red transaction tool.",
+      "Do not assume bookTranId is valid for another document endpoint."
+    ].join(" "),
     "/v1/suppliers",
     "accountTrans",
     "Supplier"

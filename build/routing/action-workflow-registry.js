@@ -10,11 +10,42 @@ function verbNoun(verbs, nouns, window = 60) {
     return new RegExp(`\\b(?:${verbs})\\b.{0,${window}}\\b(?:${nouns})\\b|\\b(?:${nouns})\\b.{0,${window}}\\b(?:${verbs})\\b`, "i");
 }
 const CREATE_VERBS = "add|create|set\\s+up|setup|new|raise|prepare|record";
-const UPDATE_VERBS = "update|change|edit|amend|modify";
+const UPDATE_VERBS = "update|change|edit|amend|modify|correct";
 const DELETE_VERBS = "delete|remove|erase";
 const POST_VERBS = "post|raise|create|add|prepare";
 const BATCH_VERBS = "batch|bulk|import";
 const EMAIL_VERBS = "email|send|mail";
+/**
+ * Batch intent that should win over an earlier create-style verb
+ * (e.g. "prepare a batch of 2 Cash Payments", "create 2 Cash Payments").
+ */
+function hasExplicitBatchIntent(text) {
+    if (/\b(?:batch|bulk|import)\b/i.test(text)) {
+        return true;
+    }
+    if (/\bmultiple\b/i.test(text)) {
+        return true;
+    }
+    // "create 2 …", "add 3 …", "prepare 2 …" (quantity ≥ 2 before the noun)
+    if (/\b(?:add|create|prepare|record|raise|post)\s+(?:[2-9]|\d{2,})\b/i.test(text)) {
+        return true;
+    }
+    return false;
+}
+/**
+ * Match batch/bulk/import near a noun, plus quantity and "multiple" phrasing
+ * that clearly means more than one record.
+ */
+function batchNounMatch(nouns, window = 60) {
+    return new RegExp([
+        `\\b(?:${BATCH_VERBS})\\b.{0,${window}}\\b(?:${nouns})\\b`,
+        `\\b(?:${nouns})\\b.{0,${window}}\\b(?:${BATCH_VERBS})\\b`,
+        // "create 2 Cash Payments", "prepare 2 disposable Cash Payments"
+        `\\b(?:add|create|prepare|record|raise|post)\\s+(?:[2-9]|\\d{2,})\\b.{0,${window}}\\b(?:${nouns})\\b`,
+        // "multiple Cash Payments"
+        `\\bmultiple\\b.{0,${window}}\\b(?:${nouns})\\b`,
+    ].join("|"), "i");
+}
 /**
  * Ordered list — more specific patterns first (e.g. sales credit note before
  * generic sales entry; invoice from quote before create invoice).
@@ -274,7 +305,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
     },
     {
         workflowId: "update_quote",
-        description: "Update a quote after confirming the record.",
+        description: "Update a quote's manual reference after confirming the record. Does not update Quote notes.",
         allowedTools: ["brc_update_quote"],
         actionVerbs: ["update", "change", "edit"],
         businessNouns: ["quote"],
@@ -524,7 +555,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk", "import"],
         businessNouns: ["customer"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "customers?"),
+        match: batchNounMatch("customers?"),
     },
     {
         workflowId: "batch_suppliers",
@@ -533,7 +564,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk", "import"],
         businessNouns: ["supplier"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "suppliers?"),
+        match: batchNounMatch("suppliers?"),
     },
     {
         workflowId: "batch_products",
@@ -542,7 +573,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk", "import"],
         businessNouns: ["product"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "products?"),
+        match: batchNounMatch("products?"),
     },
     {
         workflowId: "batch_sales_reps",
@@ -551,7 +582,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["sales rep"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "sales\\s+reps?"),
+        match: batchNounMatch("sales\\s+reps?"),
     },
     {
         workflowId: "batch_sales_credit_notes",
@@ -560,7 +591,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["credit note"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "sales\\s+credit\\s+notes?|credit\\s+notes?"),
+        match: batchNounMatch("sales\\s+credit\\s+notes?|credit\\s+notes?"),
     },
     {
         workflowId: "batch_sales_invoices",
@@ -569,7 +600,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["sales invoice", "invoice"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "(?:sales\\s+)?invoices?"),
+        match: batchNounMatch("(?:sales\\s+)?invoices?"),
     },
     {
         workflowId: "batch_sales_entries",
@@ -578,7 +609,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["sales entry"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "sales\\s+entries|sales\\s+entry"),
+        match: batchNounMatch("sales\\s+entries|sales\\s+entry"),
     },
     {
         workflowId: "batch_quotes",
@@ -587,7 +618,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["quote"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "quotes?"),
+        match: batchNounMatch("quotes?"),
     },
     {
         workflowId: "batch_purchases",
@@ -596,7 +627,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["purchase"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "purchases?"),
+        match: batchNounMatch("purchases?"),
     },
     {
         workflowId: "batch_cash_receipts",
@@ -605,7 +636,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["cash receipt"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "cash\\s+receipts?"),
+        match: batchNounMatch("cash\\s+receipts?"),
     },
     {
         workflowId: "batch_cash_payments",
@@ -614,7 +645,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["cash payment"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "cash\\s+payments?"),
+        match: batchNounMatch("cash\\s+payments?"),
     },
     {
         workflowId: "batch_payments",
@@ -623,7 +654,7 @@ export const ACTION_WORKFLOW_REGISTRY = [
         actionVerbs: ["batch", "bulk"],
         businessNouns: ["payment"],
         permissionFlag: "batch",
-        match: verbNoun(BATCH_VERBS, "payments?"),
+        match: batchNounMatch("payments?"),
     },
     // --- Email ---
     {
@@ -706,17 +737,85 @@ export function toActionWorkflow(definition, allowedTools) {
  * Resolve a workflow from a user message. Returns null when no registry entry
  * matches. Callers must still filter by enabled tools before issuing a token.
  */
+function detectPrimaryAction(text) {
+    const regex = /\b(add|create|set\s+up|setup|new|raise|prepare|record|post|update|change|edit|amend|modify|correct|delete|remove|erase|batch|bulk|import|email|send|mail)\b/i;
+    const match = regex.exec(text);
+    if (!match) {
+        return null;
+    }
+    const verb = match[1].toLowerCase();
+    let action;
+    if (/^(update|change|edit|amend|modify|correct)$/.test(verb)) {
+        action = "update";
+    }
+    else if (/^(delete|remove|erase)$/.test(verb)) {
+        action = "delete";
+    }
+    else if (/^(batch|bulk|import)$/.test(verb)) {
+        action = "batch";
+    }
+    else if (/^(email|send|mail)$/.test(verb)) {
+        action = "email";
+    }
+    else {
+        action = "create";
+    }
+    return {
+        action,
+        index: match.index,
+    };
+}
+function earliestBusinessNounIndex(text, workflow, afterIndex) {
+    const lower = text.toLowerCase();
+    const indexes = workflow.businessNouns
+        .map((noun) => lower.indexOf(noun.toLowerCase(), afterIndex))
+        .filter((index) => index >= 0);
+    return indexes.length > 0
+        ? Math.min(...indexes)
+        : Number.MAX_SAFE_INTEGER;
+}
 export function resolveWorkflowFromMessage(cleanedQuery) {
     const text = cleanedQuery.trim();
     if (!text) {
         return null;
     }
-    for (const entry of ACTION_WORKFLOW_REGISTRY) {
-        if (entry.match.test(text)) {
-            return entry;
+    const matches = ACTION_WORKFLOW_REGISTRY.filter((entry) => entry.match.test(text));
+    if (matches.length === 0) {
+        return null;
+    }
+    if (matches.length === 1) {
+        return matches[0];
+    }
+    // Explicit tool-name mention (e.g. "Use brc_batch_cash_payments") wins.
+    const toolMention = matches.find((entry) => entry.allowedTools.some((tool) => new RegExp(`\\b${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text)));
+    if (toolMention) {
+        return toolMention;
+    }
+    // Explicit batch intent wins over an earlier create verb such as "prepare".
+    if (hasExplicitBatchIntent(text)) {
+        const batchMatches = matches.filter((entry) => entry.workflowId.startsWith("batch_"));
+        if (batchMatches.length === 1) {
+            return batchMatches[0];
+        }
+        if (batchMatches.length > 1) {
+            const primary = detectPrimaryAction(text);
+            const afterIndex = primary?.index ?? 0;
+            batchMatches.sort((a, b) => earliestBusinessNounIndex(text, a, afterIndex) -
+                earliestBusinessNounIndex(text, b, afterIndex));
+            return batchMatches[0];
         }
     }
-    return null;
+    const primary = detectPrimaryAction(text);
+    if (!primary) {
+        return matches[0];
+    }
+    const sameAction = matches.filter((entry) => entry.workflowId.startsWith(`${primary.action}_`));
+    if (sameAction.length === 0) {
+        return matches[0];
+    }
+    sameAction.sort((a, b) => earliestBusinessNounIndex(text, a, primary.index) -
+        earliestBusinessNounIndex(text, b, primary.index));
+    return sameAction[0];
 }
 /**
  * Resolve an enabled action workflow (legacy ActionWorkflow shape).
