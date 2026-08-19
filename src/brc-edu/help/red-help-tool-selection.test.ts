@@ -25,17 +25,11 @@ function captureRegisteredTools(): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
 
   const recorder = {
-    tool(name: string, description: string, schemaOrHandler: unknown, handler?: unknown) {
-      if (typeof schemaOrHandler === "function") {
-        tools.set(name, { description, schema: null });
-        return;
-      }
-
+    registerTool(name: string, config: { description?: string; inputSchema?: Record<string, unknown> }) {
       tools.set(name, {
-        description,
-        schema: schemaOrHandler as Record<string, unknown>,
+        description: config.description ?? "",
+        schema: config.inputSchema ?? null,
       });
-      void handler;
     },
     resource() {},
     registerResource() {},

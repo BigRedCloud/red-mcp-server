@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getToolAnnotations } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { registerCompanyContextTools } from "./tools/setup/company_context_tools.js";
@@ -66,8 +67,12 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_open_edu_admin",
 ]);
 
-function createFilteredServer(server: McpServer): McpServer {
-  const originalTool = server.tool.bind(server) as (...args: any[]) => any;
+export function createFilteredServer(server: McpServer): McpServer {
+  const originalRegisterTool = server.registerTool.bind(server) as (
+    name: string,
+    config: Record<string, unknown>,
+    handler: (...args: any[]) => any,
+  ) => any;
 
   const filteredServer = Object.create(server) as McpServer & {
     tool: (...args: any[]) => any;
@@ -82,15 +87,17 @@ function createFilteredServer(server: McpServer): McpServer {
       return undefined as unknown;
     }
 
+    const annotations = getToolAnnotations(toolName);
+
     if (args.length < 3) {
       const [description, handler] = args as [
         string,
         (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
       ];
 
-      return originalTool(
+      return originalRegisterTool(
         toolName,
-        description,
+        { description, annotations },
         wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
@@ -124,10 +131,13 @@ function createFilteredServer(server: McpServer): McpServer {
         ? wrapRouteTokenHandler(toolName, handler)
         : handler;
 
-      return originalTool(
+      return originalRegisterTool(
         toolName,
-        descriptionWithRoute,
-        schemaWithRouteToken,
+        {
+          description: descriptionWithRoute,
+          inputSchema: schemaWithRouteToken,
+          annotations,
+        },
         wrapHttpSessionAwareToolHandler(guardedHandler, { toolName })
       );
     }
@@ -154,10 +164,13 @@ function createFilteredServer(server: McpServer): McpServer {
       toolName,
     });
 
-    return originalTool(
+    return originalRegisterTool(
       toolName,
-      appendWriteConfirmationDescription(descriptionWithRoute, toolName),
-      wrappedSchema,
+      {
+        description: appendWriteConfirmationDescription(descriptionWithRoute, toolName),
+        inputSchema: wrappedSchema,
+        annotations,
+      },
       httpAwareHandler
     );
   };

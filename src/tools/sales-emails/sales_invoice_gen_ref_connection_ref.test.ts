@@ -138,9 +138,9 @@ test("brc_create_sales_invoice_gen_ref schema registration includes connectionRe
   const { registerAllTools } = await import("../../register_all_tools.js");
   const tools = new Map<string, Record<string, unknown>>();
   registerAllTools({
-    tool(name: string, _description: string, schema: unknown) {
-      if (schema && typeof schema === "object") {
-        tools.set(name, schema as Record<string, unknown>);
+    registerTool(name: string, config: { inputSchema?: unknown }) {
+      if (config.inputSchema && typeof config.inputSchema === "object") {
+        tools.set(name, config.inputSchema as Record<string, unknown>);
       }
     },
     resource() {},

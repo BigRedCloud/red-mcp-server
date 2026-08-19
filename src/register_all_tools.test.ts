@@ -4,29 +4,38 @@ import test from "node:test";
 import { isToolEnabled, getToolSkillGroup } from "./config/server_config.js";
 import {
   CONNECTION_REF_SCHEMA_EXEMPT_TOOLS,
+  createFilteredServer,
   registerAllTools,
 } from "./register_all_tools.js";
+import {
+  TOOL_ANNOTATIONS,
+  type ExplicitToolAnnotations,
+} from "./tool_annotations.js";
 
 type CapturedTool = {
   description: string;
   schema: Record<string, unknown> | null;
+  annotations: ExplicitToolAnnotations;
 };
 
 function captureRegisteredTools(): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
 
   const recorder = {
-    tool(name: string, description: string, schemaOrHandler: unknown, handler?: unknown) {
-      if (typeof schemaOrHandler === "function") {
-        tools.set(name, { description, schema: null });
-        return;
-      }
-
+    registerTool(
+      name: string,
+      config: {
+        description?: string;
+        inputSchema?: Record<string, unknown>;
+        annotations?: ExplicitToolAnnotations;
+      },
+    ) {
+      assert.ok(config.annotations, `${name} must have explicit annotations`);
       tools.set(name, {
-        description,
-        schema: schemaOrHandler as Record<string, unknown>,
+        description: config.description ?? "",
+        schema: config.inputSchema ?? null,
+        annotations: config.annotations,
       });
-      void handler;
     },
     resource() {},
     registerResource() {},
@@ -208,6 +217,58 @@ test("adding brc_find_help_resources does not reduce registered enabled tools un
   assert.ok(registeredTools.has("brc_generate_support_report"));
   assert.ok(registeredTools.has("brc_resolve_book_transaction_type"));
   assert.equal(enabledToolCount, 159);
+});
+
+test("every registered production tool has all three explicit safety hints", () => {
+  assert.equal(registeredTools.size, 159);
+  for (const [name, tool] of registeredTools) {
+    assert.equal(typeof tool.annotations.readOnlyHint, "boolean", name);
+    assert.equal(typeof tool.annotations.openWorldHint, "boolean", name);
+    assert.equal(typeof tool.annotations.destructiveHint, "boolean", name);
+  }
+});
+
+test("development-only tools have explicit annotation entries", () => {
+  for (const name of [
+    "brc_get_dev_mode_details",
+    "brc_dev_diagnose_company_processing_settings",
+    "brc_set_company_api_key",
+    "brc_get_connection_store_diagnostics",
+  ] as const) {
+    assert.ok(TOOL_ANNOTATIONS[name], name);
+  }
+});
+
+test("representative tool annotations match audited behavior", () => {
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_list_customers, {
+    readOnlyHint: true, openWorldHint: false, destructiveHint: false,
+  });
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_create_customer, {
+    readOnlyHint: false, openWorldHint: false, destructiveHint: false,
+  });
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_update_customer, {
+    readOnlyHint: false, openWorldHint: false, destructiveHint: true,
+  });
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_delete_customer, {
+    readOnlyHint: false, openWorldHint: false, destructiveHint: true,
+  });
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_clear_all_company_api_keys, {
+    readOnlyHint: false, openWorldHint: false, destructiveHint: true,
+  });
+  assert.deepEqual(TOOL_ANNOTATIONS.brc_send_sales_invoice_email, {
+    readOnlyHint: false, openWorldHint: true, destructiveHint: true,
+  });
+});
+
+test("registration fails closed when a tool has no annotation entry", () => {
+  const filtered = createFilteredServer({
+    registerTool() {},
+  } as never);
+
+  assert.throws(
+    () => filtered.tool("brc_unannotated_test_tool", "test", async () => ({ content: [] })),
+    /no explicit safety annotation entry/i,
+  );
 });
 
 test("Claude catalogue omits redundant getting_started and company_options tools", () => {

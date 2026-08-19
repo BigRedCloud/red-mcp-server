@@ -6,6 +6,7 @@ Customer-facing release information is also published through the Big Red Cloud 
 
 ## Releases
 
+- [Red 1.6.1 — 19 August 2026](releases/1.6.1.md)
 - [Red 1.6.0 — 18 August 2026](releases/1.6.0.md)
 - [Red 1.5.0 — 5 August 2026](releases/1.5.0.md)
 - [Red 1.4.0 — 28 July 2026](releases/1.4.0.md)
