@@ -59,6 +59,10 @@ import {
   toPlatformDetectionDiagnostics,
   type RedClientPlatform,
 } from "./telemetry/platform.js";
+import {
+  OPENAI_APPS_CHALLENGE_PATH,
+  sendOpenAiAppsChallenge,
+} from "./openai_apps_challenge.js";
 
 import {
   completeConnectionCode,
@@ -470,6 +474,9 @@ app.use(
 );
 app.get("/favicon.ico", (_req, res) => {
   res.type("png").sendFile(RED_FAVICON_PATH);
+});
+app.get(OPENAI_APPS_CHALLENGE_PATH, (_req, res) => {
+  sendOpenAiAppsChallenge(res);
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(
