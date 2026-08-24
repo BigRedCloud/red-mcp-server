@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getToolAnnotations } from "./tool_annotations.js";
+import { getToolMetadata } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { registerCompanyContextTools } from "./tools/setup/company_context_tools.js";
@@ -87,7 +87,7 @@ export function createFilteredServer(server: McpServer): McpServer {
       return undefined as unknown;
     }
 
-    const annotations = getToolAnnotations(toolName);
+    const { title, annotations } = getToolMetadata(toolName);
 
     if (args.length < 3) {
       const [description, handler] = args as [
@@ -97,7 +97,7 @@ export function createFilteredServer(server: McpServer): McpServer {
 
       return originalRegisterTool(
         toolName,
-        { description, annotations },
+        { title, description, annotations },
         wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
@@ -134,6 +134,7 @@ export function createFilteredServer(server: McpServer): McpServer {
       return originalRegisterTool(
         toolName,
         {
+          title,
           description: descriptionWithRoute,
           inputSchema: schemaWithRouteToken,
           annotations,
@@ -167,6 +168,7 @@ export function createFilteredServer(server: McpServer): McpServer {
     return originalRegisterTool(
       toolName,
       {
+        title,
         description: appendWriteConfirmationDescription(descriptionWithRoute, toolName),
         inputSchema: wrappedSchema,
         annotations,

@@ -9,10 +9,12 @@ import {
 } from "./register_all_tools.js";
 import {
   TOOL_ANNOTATIONS,
+  TOOL_TITLES,
   type ExplicitToolAnnotations,
 } from "./tool_annotations.js";
 
 type CapturedTool = {
+  title: string;
   description: string;
   schema: Record<string, unknown> | null;
   annotations: ExplicitToolAnnotations;
@@ -25,6 +27,7 @@ function captureRegisteredTools(): Map<string, CapturedTool> {
     registerTool(
       name: string,
       config: {
+        title?: string;
         description?: string;
         inputSchema?: Record<string, unknown>;
         annotations?: ExplicitToolAnnotations;
@@ -32,6 +35,7 @@ function captureRegisteredTools(): Map<string, CapturedTool> {
     ) {
       assert.ok(config.annotations, `${name} must have explicit annotations`);
       tools.set(name, {
+        title: config.title ?? "",
         description: config.description ?? "",
         schema: config.inputSchema ?? null,
         annotations: config.annotations,
@@ -228,6 +232,19 @@ test("every registered production tool has all three explicit safety hints", () 
   }
 });
 
+test("every registered production tool has a non-empty unique human-readable title", () => {
+  assert.equal(registeredTools.size, 159);
+  const titles = new Set<string>();
+  for (const [name, tool] of registeredTools) {
+    assert.equal(tool.title, tool.title.trim(), name);
+    assert.match(tool.title, /^[A-Z][A-Za-z0-9 -]*$/, name);
+    assert.ok(tool.title.length > 0, name);
+    assert.equal(tool.title.includes("_"), false, name);
+    assert.equal(titles.has(tool.title), false, `${name}: duplicate title ${tool.title}`);
+    titles.add(tool.title);
+  }
+});
+
 test("development-only tools have explicit annotation entries", () => {
   for (const name of [
     "brc_get_dev_mode_details",
@@ -236,6 +253,26 @@ test("development-only tools have explicit annotation entries", () => {
     "brc_get_connection_store_diagnostics",
   ] as const) {
     assert.ok(TOOL_ANNOTATIONS[name], name);
+    assert.ok(TOOL_TITLES[name]?.trim(), name);
+  }
+});
+
+test("central metadata registry covers every production and dev-exposable tool", () => {
+  const annotationNames = Object.keys(TOOL_ANNOTATIONS).sort();
+  const titleNames = Object.keys(TOOL_TITLES).sort();
+  assert.equal(annotationNames.length, 163);
+  assert.deepEqual(titleNames, annotationNames);
+
+  const titles = new Set<string>();
+  for (const name of annotationNames) {
+    const title = TOOL_TITLES[name as keyof typeof TOOL_TITLES];
+    const annotations = TOOL_ANNOTATIONS[name as keyof typeof TOOL_ANNOTATIONS];
+    assert.ok(title.trim(), name);
+    assert.equal(titles.has(title), false, `${name}: duplicate title ${title}`);
+    assert.equal(typeof annotations.readOnlyHint, "boolean", name);
+    assert.equal(typeof annotations.openWorldHint, "boolean", name);
+    assert.equal(typeof annotations.destructiveHint, "boolean", name);
+    titles.add(title);
   }
 });
 
@@ -267,7 +304,7 @@ test("registration fails closed when a tool has no annotation entry", () => {
 
   assert.throws(
     () => filtered.tool("brc_unannotated_test_tool", "test", async () => ({ content: [] })),
-    /no explicit safety annotation entry/i,
+    /no complete metadata entry/i,
   );
 });
 
