@@ -362,6 +362,19 @@ test("classify: create a Cash Payment still routes to create_cash_payment", () =
   );
 });
 
+test("classify: standalone analysed cash receipt is not routed to create_customer", () => {
+  const result = classifyRequestIntent(
+    "Create a standalone cash receipt in Red Demo Company for 123.00 using analysis category 4393832 and account code CR01, with no customer or allocation.",
+  );
+
+  assert.equal(result.mode, "action");
+  assert.equal(result.workflow?.name, "create_cash_receipt");
+  assert.deepEqual(
+    [...result.preferredTools],
+    ["brc_create_cash_receipt"],
+  );
+});
+
 test("classify: prepare a batch of Cash Receipts still routes to batch_cash_receipts", () => {
   const result = classifyRequestIntent(
     "prepare a batch of 2 Cash Receipts",

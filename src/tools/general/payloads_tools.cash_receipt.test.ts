@@ -2,10 +2,160 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCashPaymentPayload,
   buildCashReceiptPayload,
   buildCustomerLikePayload,
   mergeCashReceiptUpdateFromCurrent,
+  unwrapPayload,
 } from "./payloads_tools.js";
+
+test("cash receipt keeps flat analysis when VAT on cash receipts is disabled", () => {
+  const payload = buildCashReceiptPayload(
+    {
+      total: 123,
+      entryDate: "2026-08-24",
+      procDate: "2026-08-24",
+      analysisCategoryId: 4393832,
+      accountCode: "CR01",
+    },
+    { vatOnCashEnabled: false },
+  );
+
+  assert.deepEqual(payload, {
+    id: 0,
+    bookTranTypeId: 1,
+    note: "Cash receipt",
+    entryDate: "2026-08-24",
+    procDate: "2026-08-24",
+    total: 123,
+    reference: "",
+    customFields: [],
+    discount: 0,
+    unallocated: 0,
+    ledger: 0,
+    detailCollection: ["Cash receipt"],
+    acEntries: [
+      {
+        accountCode: "CR01",
+        analysisCategoryId: 4393832,
+        description: "Cash receipt",
+        value: 123,
+      },
+    ],
+    vatEntries: [],
+  });
+  assert.equal(
+    (payload.acEntries as Array<{ value: number }>).reduce(
+      (sum, entry) => sum + entry.value,
+      0,
+    ),
+    payload.total,
+  );
+  assert.deepEqual(payload.vatEntries, []);
+  for (const key of [
+    "vatRateId",
+    "vatPercentage",
+    "percentage",
+    "vatTypeId",
+    "totalNet",
+    "totalVat",
+    "totalVAT",
+  ]) {
+    assert.equal(key in payload, false, key);
+  }
+});
+
+test("cash receipt preserves structured analysis when VAT is disabled", () => {
+  const payload = buildCashReceiptPayload(
+    {
+      total: 123,
+      note: "Structured analysed cash receipt",
+      acEntries: [
+        {
+          id: 0,
+          accountCode: "CR01",
+          analysisCategoryId: 4393832,
+          description: "Anthropic staging receipt",
+          value: 123,
+        },
+      ],
+      vatEntries: [
+        { vatRateId: 999, percentage: 23, amount: 123 },
+      ],
+    },
+    { vatOnCashEnabled: false },
+  );
+
+  assert.deepEqual(payload.acEntries, [
+    {
+      id: 0,
+      accountCode: "CR01",
+      analysisCategoryId: 4393832,
+      description: "Anthropic staging receipt",
+      value: 123,
+    },
+  ]);
+  assert.deepEqual(payload.vatEntries, []);
+});
+
+test("cash receipt raw payload analysis survives tool-style payload unwrapping", () => {
+  const merged = unwrapPayload({
+    note: "Outer note",
+    payload: {
+      total: 123,
+      note: "Raw payload note",
+      acEntries: [
+        {
+          accountCode: "CR01",
+          analysisCategoryId: 4393832,
+          description: "Anthropic staging receipt",
+          value: 123,
+        },
+      ],
+    },
+  });
+  const payload = buildCashReceiptPayload(merged, {
+    vatOnCashEnabled: false,
+  });
+
+  assert.equal(payload.note, "Raw payload note");
+  assert.deepEqual(payload.acEntries, [
+    {
+      accountCode: "CR01",
+      analysisCategoryId: 4393832,
+      description: "Anthropic staging receipt",
+      value: 123,
+    },
+  ]);
+  assert.deepEqual(payload.vatEntries, []);
+});
+
+test("analysed cash payment maps analysis fields to a reconciled acEntries line", () => {
+  const payload = buildCashPaymentPayload({
+    total: 123,
+    note: "Standalone analysed cash payment",
+    entryDate: "2026-08-24",
+    procDate: "2026-08-24",
+    bookTranTypeId: 2,
+    analysisCategoryId: 4393832,
+    accountCode: "CP01",
+    description: "Anthropic staging payment",
+  });
+
+  assert.deepEqual(payload.acEntries, [
+    {
+      id: 0,
+      accountCode: "CP01",
+      analysisCategoryId: 4393832,
+      description: "Anthropic staging payment",
+      value: 123,
+    },
+  ]);
+  assert.equal(
+    payload.acEntries.reduce((sum, entry) => sum + entry.value, 0),
+    payload.total,
+  );
+});
 
 test("cash receipt single-rate VAT amount is the receipt total, not net", () => {
   const payload = buildCashReceiptPayload({

@@ -562,10 +562,6 @@ function sanitizeCashReceiptInput(
   delete next.totalVAT;
   delete next.vatEntries;
 
-  if (Array.isArray(next.acEntries) && next.acEntries.length > 0) {
-    next.acEntries = [];
-  }
-
   const total = round2(asNumber(next.total));
   if (total > 0) {
     if (next.customerId !== undefined || next.acCode !== undefined) {
@@ -684,12 +680,12 @@ export function buildCashReceiptPayload(
     ? (argsForBuild.vatEntries as unknown[])
     : [];
 
-  const hasRawVatSplit = rawAcEntries.length > 0 && rawVatEntries.length > 0;
+  const hasRawAnalysis = rawAcEntries.length > 0;
 
-  // If a raw VAT-split payload was supplied, normalise it to the Cash Receipt
-  // contract. This is needed for stricter/paid BRC companies that reject
-  // simple ledger-only receipts.
-  if (hasRawVatSplit) {
+  // If structured analysis was supplied, normalise it to the Cash Receipt
+  // contract. VAT entries remain optional and are removed above when the
+  // company's VAT-on-cash-receipts setting is disabled.
+  if (hasRawAnalysis) {
     const { payload: _payload, ...cleanArgs } = argsForBuild;
     const payload: Record<string, unknown> = {
       ...cleanArgs,
@@ -759,13 +755,16 @@ export function buildCashReceiptPayload(
         ? asNumber(argsForBuild.percentage)
         : undefined;
 
-  const hasFlatVatSplit =
+  const hasFlatAnalysis =
     analysisCategoryId !== undefined &&
-    accountCode !== undefined &&
+    accountCode !== undefined;
+
+  const hasFlatVatSplit =
+    hasFlatAnalysis &&
     vatRateId !== undefined &&
     vatPercentage !== undefined;
 
-  const ledger = hasFlatVatSplit
+  const ledger = hasFlatAnalysis
     ? 0
     : round2(
         asNumber(
@@ -784,7 +783,7 @@ export function buildCashReceiptPayload(
     reference,
     customFields: [],
     discount,
-    unallocated: hasFlatVatSplit ? 0 : ledger > 0 ? total : 0,
+    unallocated: hasFlatAnalysis ? 0 : ledger > 0 ? total : 0,
     ledger,
     detailCollection: [description],
     acEntries: [],
@@ -801,7 +800,7 @@ export function buildCashReceiptPayload(
     payload.acCode = asString(argsForBuild.acCode);
   }
 
-  if (hasFlatVatSplit) {
+  if (hasFlatAnalysis) {
     payload.acEntries = [
       {
         accountCode,
@@ -810,7 +809,9 @@ export function buildCashReceiptPayload(
         value: total,
       },
     ];
+  }
 
+  if (hasFlatVatSplit) {
     // Cash Receipt vatEntries[].amount is the portion of the receipt TOTAL
     // allocated to this VAT rate (with one rate, that is the full total).
     payload.vatEntries = [
