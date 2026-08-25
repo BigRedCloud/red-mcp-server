@@ -1,23 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { isToolEnabled, getToolSkillGroup } from "./config/server_config.js";
+import { isToolEnabled, getToolSkillGroup, redServerConfig } from "./config/server_config.js";
 import {
   CONNECTION_REF_SCHEMA_EXEMPT_TOOLS,
   createFilteredServer,
   registerAllTools,
 } from "./register_all_tools.js";
 import {
+  getToolMetadata,
   TOOL_ANNOTATIONS,
   TOOL_TITLES,
-  type ExplicitToolAnnotations,
+  type RegisteredToolAnnotations,
 } from "./tool_annotations.js";
+import { createBrcMcpServer } from "./server.js";
 
 type CapturedTool = {
   title: string;
   description: string;
   schema: Record<string, unknown> | null;
-  annotations: ExplicitToolAnnotations;
+  annotations: RegisteredToolAnnotations;
 };
 
 function captureRegisteredTools(): Map<string, CapturedTool> {
@@ -30,10 +34,11 @@ function captureRegisteredTools(): Map<string, CapturedTool> {
         title?: string;
         description?: string;
         inputSchema?: Record<string, unknown>;
-        annotations?: ExplicitToolAnnotations;
+        annotations?: RegisteredToolAnnotations;
       },
     ) {
       assert.ok(config.annotations, `${name} must have explicit annotations`);
+      assert.equal(tools.has(name), false, `duplicate tool registration: ${name}`);
       tools.set(name, {
         title: config.title ?? "",
         description: config.description ?? "",
@@ -240,6 +245,8 @@ test("every registered production tool has a non-empty unique human-readable tit
     assert.match(tool.title, /^[A-Z][A-Za-z0-9 -]*$/, name);
     assert.ok(tool.title.length > 0, name);
     assert.equal(tool.title.includes("_"), false, name);
+    assert.equal(tool.annotations.title, tool.title, name);
+    assert.ok(tool.annotations.title.trim().length > 0, name);
     assert.equal(titles.has(tool.title), false, `${name}: duplicate title ${tool.title}`);
     titles.add(tool.title);
   }
@@ -254,6 +261,30 @@ test("development-only tools have explicit annotation entries", () => {
   ] as const) {
     assert.ok(TOOL_ANNOTATIONS[name], name);
     assert.ok(TOOL_TITLES[name]?.trim(), name);
+    const metadata = getToolMetadata(name);
+    assert.equal(metadata.annotations.title, metadata.title, name);
+  }
+});
+
+test("development-only tools receive annotation titles through the real registration path", () => {
+  const previous = redServerConfig.allowDevMode;
+  try {
+    redServerConfig.allowDevMode = true;
+    const developmentTools = captureRegisteredTools();
+    assert.equal(developmentTools.size, 163);
+    for (const name of [
+      "brc_get_dev_mode_details",
+      "brc_dev_diagnose_company_processing_settings",
+      "brc_set_company_api_key",
+      "brc_get_connection_store_diagnostics",
+    ] as const) {
+      const tool = developmentTools.get(name);
+      assert.ok(tool, name);
+      assert.equal(tool.annotations.title, tool.title, name);
+      assert.ok(tool.annotations.title.trim(), name);
+    }
+  } finally {
+    redServerConfig.allowDevMode = previous;
   }
 });
 
@@ -272,7 +303,71 @@ test("central metadata registry covers every production and dev-exposable tool",
     assert.equal(typeof annotations.readOnlyHint, "boolean", name);
     assert.equal(typeof annotations.openWorldHint, "boolean", name);
     assert.equal(typeof annotations.destructiveHint, "boolean", name);
+    const metadata = getToolMetadata(name);
+    assert.equal(metadata.annotations.title, title, name);
     titles.add(title);
+  }
+});
+
+test("registered annotations retain the central safety hints exactly", () => {
+  for (const [name, tool] of registeredTools) {
+    const { title: _annotationTitle, ...emittedHints } = tool.annotations;
+    assert.deepEqual(
+      emittedHints,
+      TOOL_ANNOTATIONS[name as keyof typeof TOOL_ANNOTATIONS],
+      name,
+    );
+  }
+});
+
+test("real MCP tools/list serializes titles inside annotations for representative tools", async () => {
+  const mcpServer = createBrcMcpServer();
+  registerAllTools(mcpServer);
+  const client = new Client({ name: "annotation-tools-list-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+  try {
+    await mcpServer.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = await client.listTools();
+    assert.equal(response.tools.length, 159);
+
+    const representativeNames = [
+      "brc_list_customers",
+      "brc_create_customer",
+      "brc_delete_customer",
+      "brc_send_sales_invoice_email",
+    ] as const;
+    const serialized = JSON.stringify(
+      response.tools.filter((tool) => representativeNames.includes(tool.name as typeof representativeNames[number])),
+    );
+    const representatives = JSON.parse(serialized) as Array<{
+      name: string;
+      title?: string;
+      annotations?: RegisteredToolAnnotations;
+    }>;
+    assert.equal(representatives.length, representativeNames.length);
+
+    for (const name of representativeNames) {
+      const tool = representatives.find((candidate) => candidate.name === name);
+      assert.ok(tool, name);
+      assert.equal(tool.title, TOOL_TITLES[name], name);
+      assert.equal(tool.annotations?.title, TOOL_TITLES[name], name);
+      assert.deepEqual(
+        {
+          readOnlyHint: tool.annotations?.readOnlyHint,
+          openWorldHint: tool.annotations?.openWorldHint,
+          destructiveHint: tool.annotations?.destructiveHint,
+        },
+        TOOL_ANNOTATIONS[name],
+        name,
+      );
+    }
+  } finally {
+    await client.close();
+    await mcpServer.close();
+    await clientTransport.close();
+    await serverTransport.close();
   }
 });
 

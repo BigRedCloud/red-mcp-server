@@ -372,7 +372,12 @@ export const TOOL_TITLES = {
 
 export type ExplicitToolMetadata = {
   title: string;
-  annotations: ExplicitToolAnnotations;
+  annotations: RegisteredToolAnnotations;
+};
+
+/** Exact annotation object emitted in MCP tools/list. */
+export type RegisteredToolAnnotations = ExplicitToolAnnotations & {
+  title: string;
 };
 
 export function getToolMetadata(toolName: string): ExplicitToolMetadata {
@@ -384,9 +389,15 @@ export function getToolMetadata(toolName: string): ExplicitToolMetadata {
     );
   }
 
-  return { title, annotations };
+  return {
+    title,
+    annotations: {
+      ...annotations,
+      title,
+    },
+  };
 }
 
-export function getToolAnnotations(toolName: string): ExplicitToolAnnotations {
+export function getToolAnnotations(toolName: string): RegisteredToolAnnotations {
   return getToolMetadata(toolName).annotations;
 }
