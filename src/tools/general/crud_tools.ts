@@ -567,6 +567,7 @@ export function registerRawBatchTool(
         succeededItemCount: resultSummary.succeededItemCount,
         failedItemCount: resultSummary.failedItemCount,
         failedItems: resultSummary.failedItems,
+        resultItems: resultSummary.resultItems,
         payloadSent: normalizedItems,
         response,
       });
@@ -590,9 +591,10 @@ export function summarizeBatchResponse(
   succeededItemCount: number;
   failedItemCount: number;
   failedItems: FailedBatchItem[];
+  resultItems: unknown[];
   message: string;
 } {
-  const responseItems = Array.isArray(response) ? response : [];
+  const responseItems = extractBatchResultRows(response);
   const failedItems: FailedBatchItem[] = [];
 
   submittedItems.forEach((submittedItem, index) => {
@@ -606,7 +608,17 @@ export function summarizeBatchResponse(
     const failed = responseItem === undefined || (Number.isFinite(code) && code >= 400);
     if (!failed) return;
 
-    const rawError = responseRecord?.message ?? responseRecord?.error;
+    const nestedResult = responseRecord?.result;
+    const nestedRecord =
+      nestedResult && typeof nestedResult === "object" && !Array.isArray(nestedResult)
+        ? (nestedResult as Record<string, unknown>)
+        : undefined;
+    const rawError =
+      responseRecord?.message ??
+      responseRecord?.error ??
+      nestedRecord?.message ??
+      nestedRecord?.error ??
+      (typeof nestedResult === "string" ? nestedResult : undefined);
     const error =
       typeof rawError === "string" && rawError.trim()
         ? rawError
@@ -631,10 +643,19 @@ export function summarizeBatchResponse(
     succeededItemCount,
     failedItemCount,
     failedItems,
+    resultItems: responseItems,
     message: success
       ? "Batch request completed successfully."
       : partialSuccess
         ? `Batch request partially succeeded: ${succeededItemCount} item(s) succeeded and ${failedItemCount} item(s) failed.`
         : `Batch request failed for ${failedItemCount} item(s).`,
   };
+}
+
+export function extractBatchResultRows(response: unknown): unknown[] {
+  if (Array.isArray(response)) return response;
+  if (!response || typeof response !== "object") return [];
+
+  const result = (response as { result?: unknown }).result;
+  return Array.isArray(result) ? result : [];
 }

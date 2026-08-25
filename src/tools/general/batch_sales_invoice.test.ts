@@ -31,7 +31,7 @@ const invoice = {
       unitPrice: 110,
       vat: 25.3,
       vatRateId: 1670008,
-      vatAnalysisTypeId: 1,
+      vatAnalysisTypeId: 2,
       tranNotes: ["Review Batch Sales Invoice"],
       acEntries: [
         {
@@ -68,8 +68,8 @@ test("batch sales invoice preserves the documented full invoice payload", () => 
 
   assert.equal(normalized.length, 1);
   assert.equal(normalized[0]!.opCode, 1);
-  const payload = normalized[0]!.item as Record<string, unknown>;
-  const line = (payload.productTrans as Record<string, unknown>[])[0]!;
+  const payloadSent = normalized[0]!.item as Record<string, unknown>;
+  const line = (payloadSent.productTrans as Record<string, unknown>[])[0]!;
   const analysis = (line.acEntries as Record<string, unknown>[])[0]!;
 
   assert.equal(line.productId, 5255119);
@@ -77,13 +77,14 @@ test("batch sales invoice preserves the documented full invoice payload", () => 
   assert.equal(line.unitPrice, 110);
   assert.equal(line.vatRateId, 1670008);
   assert.equal(line.percentage, 23);
+  assert.equal(line.vatAnalysisTypeId, 2);
   assert.deepEqual(line.tranNotes, ["Review Batch Sales Invoice"]);
   assert.equal(analysis.accountCode, "SA02");
   assert.equal(analysis.analysisCategoryId, 4393839);
   assert.equal(analysis.value, 110);
-  assert.equal(payload.totalNet, 110);
-  assert.equal(payload.totalVAT, 25.3);
-  assert.equal(payload.total, 135.3);
+  assert.equal(payloadSent.totalNet, 110);
+  assert.equal(payloadSent.totalVAT, 25.3);
+  assert.equal(payloadSent.total, 135.3);
 });
 
 test("batch sales invoice priceBasis adds flags without rebuilding line values", () => {
@@ -137,8 +138,13 @@ function assertBatchCounts(
 }
 
 test("complete batch success has internally consistent aggregation", () => {
+  const createdInvoice = {
+    id: 586774712,
+    reference: "000004",
+    total: 135.3,
+  };
   const summary = summarizeBatchResponse(
-    [{ code: 200, id: 1 }],
+    { result: [{ code: 201, result: createdInvoice }] },
     [{ opCode: 1 }],
   );
 
@@ -147,12 +153,21 @@ test("complete batch success has internally consistent aggregation", () => {
   assert.equal(summary.succeededItemCount, 1);
   assert.equal(summary.failedItemCount, 0);
   assert.deepEqual(summary.failedItems, []);
+  assert.deepEqual(summary.resultItems, [{ code: 201, result: createdInvoice }]);
+  assert.equal(
+    (summary.resultItems[0] as { result: { id: number } }).result.id,
+    586774712,
+  );
+  assert.equal(
+    (summary.resultItems[0] as { result: { reference: string } }).result.reference,
+    "000004",
+  );
   assertBatchCounts(summary, 1);
 });
 
 test("complete batch failure identifies the failed item and error", () => {
-  const failed = { code: 422, message: "Invalid VatRateId" };
-  const summary = summarizeBatchResponse([failed], [{ opCode: 1 }]);
+  const failed = { code: 422, result: { message: "Invalid VatRateId" } };
+  const summary = summarizeBatchResponse({ result: [failed] }, [{ opCode: 1 }]);
 
   assert.equal(summary.success, false);
   assert.equal(summary.partialSuccess, false);
@@ -165,9 +180,14 @@ test("complete batch failure identifies the failed item and error", () => {
 });
 
 test("mixed batch response is a consistent partial success", () => {
-  const failed = { code: 422, error: "Invalid VatRateId" };
+  const createdInvoice = {
+    id: 586774712,
+    reference: "000004",
+    total: 135.3,
+  };
+  const failed = { code: 422, result: { error: "Invalid VatRateId" } };
   const summary = summarizeBatchResponse(
-    [{ code: 200, id: 1 }, failed],
+    { result: [{ code: 201, result: createdInvoice }, failed] },
     [{ opCode: 1 }, { opCode: 2 }],
   );
 
@@ -180,6 +200,32 @@ test("mixed batch response is a consistent partial success", () => {
   ]);
   assertBatchCounts(summary, 2);
   assert.match(summary.message, /partially succeeded/i);
+});
+
+test("a genuinely missing result row remains an explicit failure", () => {
+  const createdInvoice = {
+    id: 586774712,
+    reference: "000004",
+    total: 135.3,
+  };
+  const summary = summarizeBatchResponse(
+    { result: [{ code: 201, result: createdInvoice }] },
+    [{ opCode: 1 }, { opCode: 2 }],
+  );
+
+  assert.equal(summary.success, false);
+  assert.equal(summary.partialSuccess, true);
+  assert.equal(summary.succeededItemCount, 1);
+  assert.equal(summary.failedItemCount, 1);
+  assert.deepEqual(summary.failedItems, [
+    {
+      index: 1,
+      opCode: 2,
+      error: "BRC returned no result for this submitted batch item.",
+      response: null,
+    },
+  ]);
+  assertBatchCounts(summary, 2);
 });
 
 test("batch sales invoice preserves counterparty and write confirmations", async () => {
