@@ -387,7 +387,8 @@ export function registerRawBatchTool(
   toolName: string,
   description: string,
   path: string,
-  itemSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown())
+  itemSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown()),
+  options?: { exposePriceBasis?: boolean; exposeConfirmCrAnalysisCategory?: boolean },
 ) {
   const maxBatchItems = getMaxBatchItems();
 
@@ -399,18 +400,26 @@ export function registerRawBatchTool(
       items: z.array(itemSchema).min(1)
             .max(maxBatchItems)
             .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
-      confirmCrAnalysisCategory: z
-        .boolean()
-        .optional()
-        .describe(
-          "Applies to every sales document item in this batch. Set true only after the user confirms a CR (customer) sales analysis account code is intentional for these product lines."
-        ),
-      priceBasis: z
-        .enum(["net", "gross"])
-        .optional()
-        .describe(
-          `Applies to every sales invoice/credit note item in this batch. ${SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION}`
-        ),
+      ...(options?.exposeConfirmCrAnalysisCategory === false
+        ? {}
+        : {
+            confirmCrAnalysisCategory: z
+              .boolean()
+              .optional()
+              .describe(
+                "Applies to every sales document item in this batch. Set true only after the user confirms a CR (customer) sales analysis account code is intentional for these product lines."
+              ),
+          }),
+      ...(options?.exposePriceBasis === false
+        ? {}
+        : {
+            priceBasis: z
+              .enum(["net", "gross"])
+              .optional()
+              .describe(
+                `Applies to every sales invoice/credit note item in this batch. ${SALES_DOCUMENT_PRICE_BASIS_DESCRIPTION}`
+              ),
+          }),
     },
     async ({ companyName, items, confirmCrAnalysisCategory, priceBasis }) => {
       if (items.length > maxBatchItems) {
