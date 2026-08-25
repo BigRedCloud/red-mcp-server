@@ -386,7 +386,8 @@ export function registerRawBatchTool(
   server: ServerType,
   toolName: string,
   description: string,
-  path: string
+  path: string,
+  itemSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown())
 ) {
   const maxBatchItems = getMaxBatchItems();
 
@@ -395,7 +396,7 @@ export function registerRawBatchTool(
     `${description} Maximum ${maxBatchItems} items per batch request.`,
     {
       companyName: companyNameSchema,
-      items: z.array(z.record(z.string(), z.unknown())).min(1)
+      items: z.array(itemSchema).min(1)
             .max(maxBatchItems)
             .describe(`Batch items to process. Maximum ${maxBatchItems} items per request.`),
       confirmCrAnalysisCategory: z
@@ -554,26 +555,86 @@ export function registerRawBatchTool(
         normalizedItems
       );
 
-      const responseItems = Array.isArray(response) ? response : [];
-      const failedItems = responseItems.filter((item) => {
-        const code = typeof item?.code === "number" ? item.code : 0;
-        return code >= 400;
-      });
-
-      if (failedItems.length > 0) {
-        throw new Error(
-          `BRC batch ${path} returned ${failedItems.length} failed item(s): ${JSON.stringify(failedItems)}`
-        );
-      }
+      const resultSummary = summarizeBatchResponse(response, normalizedItems);
 
       return jsonResponse({
-        message: "Batch request sent to BRC.",
+        message: resultSummary.message,
+        success: resultSummary.success,
+        partialSuccess: resultSummary.partialSuccess,
         companyName,
         endpoint: `PUT ${path}/batch`,
         itemCount: normalizedItems.length,
+        succeededItemCount: resultSummary.succeededItemCount,
+        failedItemCount: resultSummary.failedItemCount,
+        failedItems: resultSummary.failedItems,
         payloadSent: normalizedItems,
         response,
       });
     }
   );
+}
+
+export type FailedBatchItem = {
+  index: number;
+  opCode: number | null;
+  error: string;
+  response: unknown;
+};
+
+export function summarizeBatchResponse(
+  response: unknown,
+  submittedItems: Array<{ opCode?: unknown }>,
+): {
+  success: boolean;
+  partialSuccess: boolean;
+  succeededItemCount: number;
+  failedItemCount: number;
+  failedItems: FailedBatchItem[];
+  message: string;
+} {
+  const responseItems = Array.isArray(response) ? response : [];
+  const failedItems: FailedBatchItem[] = [];
+
+  submittedItems.forEach((submittedItem, index) => {
+    const responseItem = responseItems[index];
+    const responseRecord =
+      responseItem && typeof responseItem === "object" && !Array.isArray(responseItem)
+        ? (responseItem as Record<string, unknown>)
+        : undefined;
+    const rawCode = responseRecord?.code;
+    const code = typeof rawCode === "number" ? rawCode : Number(rawCode);
+    const failed = responseItem === undefined || (Number.isFinite(code) && code >= 400);
+    if (!failed) return;
+
+    const rawError = responseRecord?.message ?? responseRecord?.error;
+    const error =
+      typeof rawError === "string" && rawError.trim()
+        ? rawError
+        : responseItem === undefined
+          ? "BRC returned no result for this submitted batch item."
+          : `BRC batch item failed${Number.isFinite(code) ? ` with code ${code}` : ""}.`;
+    const rawOpCode = submittedItem?.opCode;
+    const opCode =
+      typeof rawOpCode === "number" && Number.isFinite(rawOpCode) ? rawOpCode : null;
+
+    failedItems.push({ index, opCode, error, response: responseItem ?? null });
+  });
+
+  const failedItemCount = failedItems.length;
+  const succeededItemCount = submittedItems.length - failedItemCount;
+  const success = failedItemCount === 0;
+  const partialSuccess = failedItemCount > 0 && succeededItemCount > 0;
+
+  return {
+    success,
+    partialSuccess,
+    succeededItemCount,
+    failedItemCount,
+    failedItems,
+    message: success
+      ? "Batch request completed successfully."
+      : partialSuccess
+        ? `Batch request partially succeeded: ${succeededItemCount} item(s) succeeded and ${failedItemCount} item(s) failed.`
+        : `Batch request failed for ${failedItemCount} item(s).`,
+  };
 }

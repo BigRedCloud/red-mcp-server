@@ -3,6 +3,7 @@ import {
     type JsonRecord
   
   } from "../../shared.js";
+import { validateGeneratedReferenceSalesInvoicePayload } from "../sales-emails/sales_invoice_payload_schemas.js";
 
 
 export function todayIsoDate(): string {
@@ -907,8 +908,33 @@ export function normalizeBatchItems(
     if (path === "/v1/cashPayments") item = buildCashPaymentPayload({ ...(raw as any), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), entryDate: asString(raw.entryDate, todayIsoDate()), note: asString(raw.note ?? raw.details ?? raw.description, "Batch cash payment"), bookTranTypeId: asNumber(raw.bookTranTypeId, 2) } as any);
     if (path === "/v1/purchases") item = buildPurchasePayload({ ...(raw as any), supplierId: asString(raw.supplierId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch purchase"), bookTranTypeId: asNumber(raw.bookTranTypeId, 4), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch purchase"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) } as any);
     if (path === "/v1/salesEntries") item = buildSimpleSalesEntryPayload({ ...(raw as any), ownerId: asNumber(raw.customerId), ownerField: "customerId", acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch sales entry"), bookTranTypeId: asNumber(raw.bookTranTypeId, 5), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch sales entry"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) } as any);
-    if (path === "/v1/salesInvoices") item = buildSalesInvoicePayload({ ...(raw as any), customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo as any, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
-    if (path === "/v1/salesCreditNotes") item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
+    if (path === "/v1/salesInvoices") {
+      const { priceBasis, confirmCrAnalysisCategory: _confirmCr, ...invoiceBody } = raw;
+      const normalized = applySalesPriceBasisToRawPayload(
+        invoiceBody,
+        priceBasis === "net" || priceBasis === "gross" ? priceBasis : undefined,
+      );
+      const validation = validateGeneratedReferenceSalesInvoicePayload(normalized);
+      if (!validation.valid) {
+        throw new Error(
+          `Invalid batch sales invoice item: ${validation.errors
+            .map((error) => `${error.field}: ${error.message}`)
+            .join("; ")}`,
+        );
+      }
+      item = validation.data;
+    }
+    if (path === "/v1/salesCreditNotes") {
+      if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
+        const { priceBasis, confirmCrAnalysisCategory: _confirmCr, ...creditNoteBody } = raw;
+        item = applySalesPriceBasisToRawPayload(
+          creditNoteBody,
+          priceBasis === "net" || priceBasis === "gross" ? priceBasis : undefined,
+        );
+      } else {
+        item = buildSalesCreditNotePayload({ ...(raw as any), customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined } as any);
+      }
+    }
     if (path === "/v1/quotes") {
       assertQuoteManualReferenceLengthOrThrow(raw.reference);
       if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
