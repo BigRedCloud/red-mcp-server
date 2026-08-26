@@ -10,7 +10,7 @@ export function registerSupplierTools(server: ServerType) {
   registerRawCreateTool(
     server,
     "brc_create_supplier",
-    "Creates a BRC supplier using a raw BRC payload. Does not create or update opening balance transactions. If the user provides an opening balance, warn them that it must be entered directly in Big Red Cloud.",
+    "Creates a BRC supplier using a raw BRC payload. Does not create or update opening balance transactions. Opening-balance fields are not posted by this tool; supplier opening balances are entered directly in Big Red Cloud.",
     "/v1/suppliers"
   );
   registerRawUpdateTool(

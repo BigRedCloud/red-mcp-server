@@ -421,6 +421,29 @@ test("real production tools/list emits policy-neutral factual descriptions", asy
         "Requires confirmCounterpartyExplicit: true; confirmation is scoped",
       ),
     );
+
+    const createSupplier = response.tools.find(
+      (tool) => tool.name === "brc_create_supplier",
+    );
+    assert.ok(
+      createSupplier?.description?.includes(
+        "Opening-balance fields are not posted by this tool; supplier opening balances are entered directly in Big Red Cloud.",
+      ),
+    );
+    assert.doesNotMatch(createSupplier?.description ?? "", /warn them|if the user/i);
+
+    const updateBankAccount = response.tools.find(
+      (tool) => tool.name === "brc_update_bank_account",
+    );
+    assert.ok(
+      updateBankAccount?.description?.includes(
+        "An unconfirmed call returns a plain-English change preview. Explicit confirmation is required before the update is applied.",
+      ),
+    );
+    assert.doesNotMatch(
+      updateBankAccount?.description ?? "",
+      /before calling this tool|show the user|ask for explicit confirmation/i,
+    );
   } finally {
     await client.close();
     await mcpServer.close();
