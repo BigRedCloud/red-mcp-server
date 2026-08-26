@@ -14,6 +14,7 @@ import { buildMcpSessionDiagnostic, logHttpClientKeyResolved, logMcpSessionDiagn
 import { buildTelemetryClientIdSetCookie, isValidTelemetryUuid, runWithRedTelemetryContext, } from "./telemetry.js";
 import { activatePreparedTelemetry, buildConnectTelemetryFlowDiagnostics, buildRequestTelemetryContext, extractConnectionRefFromMcpBody, logConnectTelemetryFlowDiagnostics, logTelemetryClientIdPathDiagnostics, prepareMcpTelemetryContext, resolveAndPersistConnectTelemetryClientId, resolveTelemetryClientIdFromRequest, } from "./telemetry/context.js";
 import { clearSessionPlatform, extractMcpInitializeClientInfo, getStoredSessionPlatform, logPlatformDetectionDiagnostics, resolveClientPlatform, storeSessionPlatform, toPlatformDetectionDiagnostics, } from "./telemetry/platform.js";
+import { OPENAI_APPS_CHALLENGE_PATH, sendOpenAiAppsChallenge, } from "./openai_apps_challenge.js";
 import { completeConnectionCode, getPendingConnection, issueConfirmationCodeForConnectToken, } from "./auth/connection_code.js";
 import { ensureConnectionStoreInitialized, getConnectionStore, getConnectionStoreTargetName, getDeploymentEnvironmentLabel, } from "./auth/connection_store.js";
 import { validateAndPersistConnectedCompanies } from "./auth/connection_persistence.js";
@@ -265,6 +266,9 @@ app.use("/assets", express.static(redAssetsDirectory, {
 }));
 app.get("/favicon.ico", (_req, res) => {
     res.type("png").sendFile(RED_FAVICON_PATH);
+});
+app.get(OPENAI_APPS_CHALLENGE_PATH, (_req, res) => {
+    sendOpenAiAppsChallenge(res);
 });
 app.use(express.urlencoded({ extended: false }));
 app.use("/internal/brc-edu/youtube/webhook", express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }));

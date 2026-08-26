@@ -43,6 +43,8 @@ import {
   routeTokenSchema,
   wrapRouteTokenHandler,
 } from "./routing/route-token.js";
+import { toAnthropicCompliantToolDescription } from "./tool_description_policy.js";
+import { getPublicToolDescription } from "./tool_description_overrides.js";
 
 export function withConnectionRefSchema(
   schema: Record<string, unknown>
@@ -97,7 +99,14 @@ export function createFilteredServer(server: McpServer): McpServer {
 
       return originalRegisterTool(
         toolName,
-        { title, description, annotations },
+        {
+          title,
+          description: toAnthropicCompliantToolDescription(
+            toolName,
+            getPublicToolDescription(toolName, description),
+          ),
+          annotations,
+        },
         wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
@@ -122,9 +131,10 @@ export function createFilteredServer(server: McpServer): McpServer {
         }
       : schemaWithConnectionRef;
 
+    const publicDescription = getPublicToolDescription(toolName, description);
     const descriptionWithRoute = needsRouteToken
-      ? appendRouteTokenDescription(description)
-      : description;
+      ? appendRouteTokenDescription(publicDescription)
+      : publicDescription;
 
     if (!requiresWriteConfirmation(toolName)) {
       const guardedHandler = needsRouteToken
@@ -135,7 +145,10 @@ export function createFilteredServer(server: McpServer): McpServer {
         toolName,
         {
           title,
-          description: descriptionWithRoute,
+          description: toAnthropicCompliantToolDescription(
+            toolName,
+            descriptionWithRoute,
+          ),
           inputSchema: schemaWithRouteToken,
           annotations,
         },
@@ -169,7 +182,10 @@ export function createFilteredServer(server: McpServer): McpServer {
       toolName,
       {
         title,
-        description: appendWriteConfirmationDescription(descriptionWithRoute, toolName),
+        description: toAnthropicCompliantToolDescription(
+          toolName,
+          appendWriteConfirmationDescription(descriptionWithRoute, toolName),
+        ),
         inputSchema: wrappedSchema,
         annotations,
       },

@@ -26,8 +26,8 @@ export function simulateRedHelpToolSelection(userMessage, tools, instructions) {
     const redHelp = tools.find((tool) => tool.name === "brc_red_help");
     if (hasRoutingOverride &&
         redHelp &&
-        /MANDATORY FOR RED-HELP COMMANDS/i.test(redHelp.description) &&
-        /red-help/i.test(redHelp.description)) {
+        /manual Big Red Cloud instructions/i.test(redHelp.description) &&
+        /Freshdesk/i.test(redHelp.description)) {
         return "brc_red_help";
     }
     // Fallback scoring: prefer help tools; never pick transactional tools in
@@ -46,8 +46,6 @@ export function simulateRedHelpToolSelection(userMessage, tools, instructions) {
         if (/red-help/i.test(tool.name) || /red-help/i.test(tool.description)) {
             score += 50;
         }
-        if (/MANDATORY FOR RED-HELP/i.test(tool.description))
-            score += 40;
         if (/manual instructions|help article|tutorial/i.test(tool.description)) {
             score += 10;
         }

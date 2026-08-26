@@ -119,8 +119,8 @@ export const confirmCounterpartyExplicitSchema = z
     .boolean()
     .optional()
     .describe("Must be true only after the user explicitly named or confirmed the customer, supplier, or other counterparty in the current conversation. Never set true because a customer or supplier appeared in an earlier preview, was inferred from context, or was filled in without the user's explicit choice in this conversation.");
-export const WRITE_CONFIRMATION_TOOL_SUFFIX = " First call without confirmWrite: true returns confirmation_required and a payload preview — show a plain-English preview before posting in chat, then retry with confirmWrite: true only after explicit user confirmation in a later message. Red shows what it will post and waits for confirmation. Passing preflight is not confirmation.";
-export const COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX = " Also requires confirmCounterpartyExplicit: true once the user has explicitly named or confirmed the customer/supplier in the current conversation. Do not reuse a counterparty from an earlier preview without that confirmation.";
+export const WRITE_CONFIRMATION_TOOL_SUFFIX = " A call without confirmWrite: true returns confirmation_required and a payload preview. confirmWrite: true applies the previewed change after explicit confirmation. Passing preflight is not confirmation.";
+export const COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX = " Requires confirmCounterpartyExplicit: true; confirmation is scoped to the counterparty selected for the current preview.";
 export const WRITE_DRAFT_FIELDS_COMMON = [
     "company",
     "customer or supplier",
@@ -770,13 +770,12 @@ export function wrapWriteToolHandler(toolName, handler) {
 }
 export function appendWriteConfirmationDescription(description, toolName) {
     let next = description;
-    if (!next.includes("confirmWrite") &&
-        !next.includes("confirmation_required")) {
+    if (!next.includes(WRITE_CONFIRMATION_TOOL_SUFFIX.trim())) {
         next = `${next}${WRITE_CONFIRMATION_TOOL_SUFFIX}`;
     }
     if (toolName &&
         requiresCounterpartyConfirmation(toolName) &&
-        !next.includes("confirmCounterpartyExplicit")) {
+        !next.includes(COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX.trim())) {
         next = `${next}${COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX}`;
     }
     return next;

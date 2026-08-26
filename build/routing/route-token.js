@@ -32,7 +32,7 @@ export const routeTokenSchema = z
     .string()
     .min(1)
     .describe("Opaque routeToken from brc_route_request for this action workflow. Required for transactional tools. Routing permission only — does not replace preview-before-posting or confirmWrite.");
-export const ROUTE_TOKEN_TOOL_SUFFIX = " Requires routeToken from brc_route_request for the matching action workflow. Call brc_route_request first with the user's complete original action request. Retain the returned routeToken through lookup, preview, and confirmation, and pass the same token on the final permitted transactional tool call. Never invent a placeholder token. A routeToken is not permission to post — preview-before-posting and confirmWrite/confirmDelete still apply.";
+export const ROUTE_TOKEN_TOOL_SUFFIX = " Requires a valid routeToken issued for the matching action workflow. The token remains valid through lookup, preview and the permitted transaction. Placeholder tokens are invalid. A routeToken does not bypass preview or explicit-confirmation requirements.";
 function toBase64Url(value) {
     const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
     return buffer

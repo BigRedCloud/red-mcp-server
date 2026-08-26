@@ -16,6 +16,7 @@ import {
   type RegisteredToolAnnotations,
 } from "./tool_annotations.js";
 import { createBrcMcpServer } from "./server.js";
+import { TOOL_DESCRIPTION_POLICY_PATTERNS } from "./tool_description_policy.js";
 
 type CapturedTool = {
   title: string;
@@ -181,7 +182,7 @@ test("brc_open_edu_admin does not require company credentials", () => {
   const tool = registeredTools.get("brc_open_edu_admin");
   assert.ok(tool);
   assert.match(tool.description, /Does not bypass authentication/i);
-  assert.match(tool.description, /never a shared secret/i);
+  assert.match(tool.description, /Microsoft Entra sign-in/i);
 });
 
 test("brc_get_help_resource_details does not require company credentials", () => {
@@ -193,15 +194,12 @@ test("brc_get_help_resource_details does not require company credentials", () =>
   assert.ok(tool.schema!.resourceId);
 });
 
-test("brc_find_help_resources description requests concise synthesized answers", () => {
+test("brc_find_help_resources description remains factual and discoverable", () => {
   const tool = registeredTools.get("brc_find_help_resources");
   assert.ok(tool);
-  assert.match(tool.description, /concise synthesized answer/i);
   assert.match(tool.description, /customer documentation/i);
-  assert.match(tool.description, /includeImages=true/i);
-  assert.match(tool.description, /Sources section/i);
-  assert.match(tool.description, /Still need help/i);
-  assert.match(tool.description, /Articles/i);
+  assert.match(tool.description, /Freshdesk support articles/i);
+  assert.match(tool.description, /recorded webinar videos/i);
 });
 
 test("brc_find_help_resources does not require company credentials", () => {
@@ -371,6 +369,66 @@ test("real MCP tools/list serializes titles inside annotations for representativ
   }
 });
 
+test("real production tools/list emits policy-neutral factual descriptions", async () => {
+  const mcpServer = createBrcMcpServer();
+  registerAllTools(mcpServer);
+  const client = new Client({ name: "description-policy-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+  try {
+    await mcpServer.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = await client.listTools();
+    assert.equal(response.tools.length, 159);
+    assert.equal(new Set(response.tools.map((tool) => tool.name)).size, 159);
+
+    for (const tool of response.tools) {
+      const description = tool.description ?? "";
+      assert.ok(description.trim(), `${tool.name}: empty description`);
+      assert.doesNotMatch(
+        description,
+        TOOL_DESCRIPTION_POLICY_PATTERNS.behaviouralInstruction,
+        `${tool.name}: model-directed instruction`,
+      );
+      assert.doesNotMatch(
+        description,
+        TOOL_DESCRIPTION_POLICY_PATTERNS.crossToolInstruction,
+        `${tool.name}: cross-tool instruction`,
+      );
+      for (const sentence of description.split(/(?<=[.!?])\s+/u)) {
+        assert.doesNotMatch(
+          sentence,
+          TOOL_DESCRIPTION_POLICY_PATTERNS.imperativeSentence,
+          `${tool.name}: imperative sentence`,
+        );
+        assert.doesNotMatch(
+          sentence,
+          TOOL_DESCRIPTION_POLICY_PATTERNS.directiveClause,
+          `${tool.name}: directive clause`,
+        );
+      }
+      assert.doesNotMatch(description, /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u);
+      assert.doesNotMatch(description, /(?:[A-Za-z0-9+/]{80,}={0,2}|(?:\\u[0-9a-fA-F]{4}){4,})/u);
+    }
+
+    const createInvoice = response.tools.find(
+      (tool) => tool.name === "brc_create_sales_invoice",
+    );
+    assert.ok(createInvoice?.description?.includes("Requires a valid routeToken"));
+    assert.ok(createInvoice?.description?.includes("A call without confirmWrite"));
+    assert.ok(
+      createInvoice?.description?.includes(
+        "Requires confirmCounterpartyExplicit: true; confirmation is scoped",
+      ),
+    );
+  } finally {
+    await client.close();
+    await mcpServer.close();
+    await clientTransport.close();
+    await serverTransport.close();
+  }
+});
+
 test("representative tool annotations match audited behavior", () => {
   assert.deepEqual(TOOL_ANNOTATIONS.brc_list_customers, {
     readOnlyHint: true, openWorldHint: false, destructiveHint: false,
@@ -457,24 +515,22 @@ function assertGatewayOutranksNewestTools(query: string, gatewayTool: string): v
 
 test("gateway tool descriptions outrank newest tools for Claude deferred connection queries", () => {
   assertGatewayOutranksNewestTools("connect my companies", "brc_start_company_connection");
-  assertGatewayOutranksNewestTools("connect my companies to Red", "brc_start_company_connection");
-  assertGatewayOutranksNewestTools("Use brc_start_company_connection", "brc_start_company_connection");
+  assertGatewayOutranksNewestTools("secure Red connection flow", "brc_start_company_connection");
   assertGatewayOutranksNewestTools("confirm company connection", "brc_confirm_company_connection");
   assertGatewayOutranksNewestTools("finish connection", "brc_confirm_company_connection");
   assertGatewayOutranksNewestTools("which companies are connected", "brc_list_company_contexts");
   assertGatewayOutranksNewestTools("show connected companies", "brc_list_company_contexts");
-  assertGatewayOutranksNewestTools("check existing Red company connections", "brc_list_company_contexts");
+  assertGatewayOutranksNewestTools("connected-company contexts", "brc_list_company_contexts");
   assertGatewayOutranksNewestTools("create a sales invoice", "brc_route_request");
   assertGatewayOutranksNewestTools("how do I add a customer", "brc_red_help");
 });
 
-test("brc_start_company_connection description contains strong deferred-search wording", () => {
+test("brc_start_company_connection description contains factual deferred-search wording", () => {
   const tool = registeredTools.get("brc_start_company_connection");
   assert.ok(tool);
-  assert.match(tool.description, /MANDATORY FIRST TOOL/i);
-  assert.match(tool.description, /connect my companies to Red/i);
-  assert.match(tool.description, /works before any company is connected/i);
-  assert.match(tool.description, /does not require companyName or connectionRef/i);
+  assert.match(tool.description, /secure Red \/ Big Red Cloud connection flow/i);
+  assert.match(tool.description, /one or multiple companies/i);
+  assert.match(tool.description, /one-time connection page URL/i);
   assert.equal(tool.schema!.companyName, undefined);
 });
 

@@ -1,0 +1,81 @@
+import type { AnnotatedToolName } from "./tool_annotations.js";
+
+/** Explicit neutral public descriptions for registrations whose legacy prose contains model instructions. */
+export const TOOL_DESCRIPTION_OVERRIDES: Partial<
+  Record<AnnotatedToolName, string>
+> = {
+  brc_start_company_connection: "Starts the secure Red / Big Red Cloud connection flow and returns a one-time connection page URL and confirmation code. The secure page supports one or multiple companies, including CSV upload, and keeps API credentials outside chat. Available without an existing company connection.",
+  brc_confirm_company_connection: "Confirms a short-lived company-connection code and returns the connected companies plus a reusable opaque connection reference. Connection credentials are not returned.",
+  brc_get_company_api_key_status: "Returns company connection-status metadata without returning API keys or other credentials.",
+  brc_list_company_contexts: "Returns connected-company contexts and connection-expiry metadata, including duration, remaining time and timezone details. Connection credentials are not returned.",
+  brc_list_analysis_categories: "Returns company analysis categories and their book context. Customer-control categories are distinct from Sales analysis categories.",
+  brc_list_nominal_accounts: "Returns nominal accounts and period movements. Monthly values represent movements rather than monthly balances.",
+  brc_get_nominal_account_ledger_by_id: "Returns one nominal account ledger and its period movements. Monthly values represent movements rather than monthly balances.",
+  brc_get_nom_ac_ledger_by_ids: "Returns nominal-account ledgers for supplied account IDs. Monthly values represent movements rather than monthly balances.",
+  brc_grouped_nominal_accounts_report: "Returns a grouped nominal-account report with period movements rather than monthly balances.",
+  brc_multi_company_nom_ac_report: "Returns a multi-company nominal-account report with period movements rather than monthly balances.",
+  brc_list_customer_account_trans: "Returns customer account transactions. Transaction IDs and types are endpoint- and company-specific.",
+  brc_list_supplier_account_trans: "Returns supplier account transactions. Transaction IDs and types are endpoint- and company-specific.",
+  brc_get_deployment_policy: "Returns the deployment capability and permission summary, including enabled action groups and development-mode status.",
+  brc_company_readiness_check: "Returns overall company readiness across connection, financial year, reference data, VAT, analysis categories and settings.",
+  brc_resolve_book_transaction_type: "Resolves a company-specific bookTranTypeId against live transaction-type reference data. Descriptions and numeric IDs are not globally stable.",
+  brc_route_request: "Classifies a supplied request as help, action, correction or unsupported. Classification covers read, create, update, delete, correct, undo, reverse, email and batch actions, including creating a sales invoice or add a customer, plus help wording such as how do I. Action results include allowed tools and an opaque routeToken. Help and correction results do not issue transactional route tokens.",
+  brc_get_company_processing_settings: "Returns company processing settings that affect VAT-sensitive accounting workflows.",
+  brc_get_company_reference_settings: "Returns quote and transaction reference settings. An Unknown quote-reference setting does not establish automatic reference generation.",
+  brc_check_transaction_settings: "Returns processing-setting warnings for one specified transaction workflow. It does not provide an overall company-readiness score.",
+  brc_generate_support_report: "Returns a downloadable support diagnostic and a concise summary for the current session.",
+  brc_list_audit_log: "Returns current-session audit entries scoped to currently connected companies. Entries from other sessions, connections or companies are excluded.",
+  brc_open_edu_admin: "Returns the protected education-administration URL. Access requires Microsoft Entra sign-in and does not bypass authentication. The response contains no upload secret or bypass parameter.",
+  brc_get_help_resource_details: "Returns detailed public help-resource content, ordered instruction blocks, signed screenshot links, source metadata and optional image content. Read-only and available without a connected company.",
+  brc_get_connection_store_diagnostics: "Returns operator diagnostics for the configured connection store without connection credentials or secrets.",
+  brc_list_vat_categories: "Returns company VAT categories and their Sales or Purchase context.",
+  brc_list_vat_rates: "Returns company VAT rates and their associated category identifiers.",
+  brc_list_allocated_transactions: "Returns existing transaction allocations and their identifiers.",
+  brc_list_allocation_resolvers: "Returns receiver transactions eligible for allocation updates.",
+  brc_list_nominal_journal_batches: "Returns nominal journal batches with identifiers and concurrency timestamps.",
+  brc_create_customer: "Creates a BRC customer from explicit code and name fields. Optional address, contact, credit and VAT fields are omitted when absent. Opening-balance fields are not posted.",
+  brc_create_purchase: "Creates a purchase with a caller-supplied reference when manual purchase references are configured.",
+  brc_create_purchase_gen_ref: "Creates a purchase using the company's generated-reference configuration.",
+  brc_create_cash_payment: "Creates a cash payment in supplier-ledger, bank-lodgement or analysed-expense mode.",
+  brc_create_payment: "Creates a bank payment in supplier or analysed-account mode.",
+  brc_create_bank_account: "Creates a bank account after an unconfirmed preview. confirmCreate applies the previewed creation.",
+  brc_delete_bank_account: "Deletes the specified bank account after explicit confirmation.",
+  brc_create_sales_invoice: "Creates a sales invoice with a caller-supplied reference and reconciled product, VAT and Sales-analysis lines. Missing customer contact values remain absent.",
+  brc_create_sales_invoice_gen_ref: "Creates a sales invoice using generated references and reconciled product, VAT and Sales-analysis lines. Missing customer contact values remain absent.",
+  brc_create_quote: "Creates a quote with a caller-supplied reference and reconciled product, VAT and Sales-analysis lines.",
+  brc_create_quote_gen_ref: "Creates a quote using generated references and reconciled product, VAT and Sales-analysis lines.",
+  brc_create_sales_credit_note: "Creates a sales credit note with a caller-supplied reference and reconciled negative document amounts.",
+  brc_create_sales_credit_note_gen_ref: "Creates a sales credit note using generated references and reconciled negative document amounts.",
+  brc_update_sales_entry: "Updates a sales entry while preserving the existing BRC unpaid value.",
+  brc_update_sales_invoice: "Updates a sales invoice. Supplied monetary changes must be explicit and reconciled.",
+  brc_update_sales_credit_note: "Updates a sales credit note while preserving the existing BRC unpaid value.",
+  brc_batch_purchases: "Processes purchases in a batch using structured generated-reference purchase items. Results are reported per submitted item and partial success is possible.",
+  brc_batch_sales_invoices: "Processes sales invoices in a batch using reconciled product, VAT and Sales-analysis lines. Results are reported per submitted item and partial success is possible.",
+  brc_batch_sales_credit_notes: "Processes sales credit notes in a batch using reconciled product, VAT and Sales-analysis lines. Results are reported per submitted item and partial success is possible.",
+  brc_batch_cash_payments: "Processes cash payments in supplier-ledger, bank-lodgement or analysed-expense mode. Results are reported per submitted item and partial success is possible.",
+  brc_batch_payments: "Processes supplier or analysed bank payments in a batch. Results are reported per submitted item and partial success is possible.",
+  brc_create_nominal_journal_batch: "Creates a nominal journal batch after returning an unconfirmed payload preview.",
+  brc_update_nominal_journal_batch: "Updates a nominal journal batch using its current concurrency timestamps.",
+  brc_delete_nominal_journal_batch: "Deletes a nominal journal batch using its current concurrency timestamp.",
+  brc_create_accrual: "Creates an accrual after returning an unconfirmed payload preview.",
+  brc_update_accrual: "Updates an accrual using its current concurrency timestamp.",
+  brc_delete_accrual: "Deletes an accrual using its current concurrency timestamp.",
+  brc_create_prepayment: "Creates a prepayment after returning an unconfirmed payload preview.",
+  brc_update_prepayment: "Updates a prepayment using its current concurrency timestamp.",
+  brc_delete_prepayment: "Deletes a prepayment using its current concurrency timestamp.",
+  brc_update_allocations: "Updates transaction allocations using eligible receiver transactions and an unconfirmed payload preview.",
+  brc_delete_allocation_resolver: "Reverses or deletes the specified allocation after returning an unconfirmed preview.",
+  brc_send_sales_invoice_email: "Sends a sales-invoice email to the customer address or an explicit recipient override. An unconfirmed call returns an email preview; confirmSend applies the send.",
+  brc_send_quote_email: "Sends a quote email to the customer address or an explicit recipient override. An unconfirmed call returns an email preview; confirmSend applies the send.",
+  brc_send_email_statement: "Sends a customer-statement email to the customer address or an explicit recipient override. An unconfirmed call returns an email preview; confirmSend applies the send.",
+};
+
+export function getPublicToolDescription(
+  toolName: string,
+  registeredDescription: string,
+): string {
+  return (
+    TOOL_DESCRIPTION_OVERRIDES[toolName as AnnotatedToolName] ??
+    registeredDescription
+  );
+}
