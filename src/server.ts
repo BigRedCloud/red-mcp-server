@@ -6,7 +6,7 @@ export function createBrcMcpServer(): McpServer {
   return new McpServer(
     {
       name: "Red",
-      version: "1.6.1",
+      version: "1.7.0",
     },
     {
       instructions: getBrcMcpServerInstructions(
