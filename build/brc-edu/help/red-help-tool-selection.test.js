@@ -5,19 +5,15 @@ import { registerAllTools } from "../../register_all_tools.js";
 import { buildUnifiedFindHelpResourcesResponse } from "./unified-help-search.js";
 import { ensureRedHelpQueryForUnifiedSearch, RED_HELP_TOOL_DESCRIPTION, RED_HELP_TOOL_TITLE, } from "../../tools/edu/help_resources_tools.js";
 import { isTransactionalAccountingToolName, simulateRedHelpToolSelection, } from "./red-help-tool-selection.js";
+import { toAnthropicCompliantToolDescription } from "../../tool_description_policy.js";
 function captureRegisteredTools() {
     const tools = new Map();
     const recorder = {
-        tool(name, description, schemaOrHandler, handler) {
-            if (typeof schemaOrHandler === "function") {
-                tools.set(name, { description, schema: null });
-                return;
-            }
+        registerTool(name, config) {
             tools.set(name, {
-                description,
-                schema: schemaOrHandler,
+                description: config.description ?? "",
+                schema: config.inputSchema ?? null,
             });
-            void handler;
         },
         resource() { },
         registerResource() { },
@@ -36,9 +32,6 @@ const discoverableTools = [...registeredTools.entries()].map(([name, tool]) => (
 test("brc_red_help is registered with red-help discovery metadata", () => {
     assert.ok(registeredTools.has("brc_red_help"));
     const tool = registeredTools.get("brc_red_help");
-    assert.match(tool.description, /red-help/i);
-    assert.match(tool.description, /^MANDATORY FOR RED-HELP COMMANDS:/);
-    assert.match(tool.description, /Red Help — Manual Instructions and Resources/);
     assert.equal(tool.description, RED_HELP_TOOL_DESCRIPTION);
     assert.match(RED_HELP_TOOL_TITLE, /Red Help/);
 });
@@ -46,16 +39,10 @@ test("brc_red_help description includes sales invoice, customer, and manual-help
     const tool = registeredTools.get("brc_red_help");
     assert.match(tool.description, /sales invoice/i);
     assert.match(tool.description, /customer/i);
-    assert.match(tool.description, /manual instructions/i);
-    assert.match(tool.description, /help article/i);
-    assert.match(tool.description, /tutorial/i);
+    assert.match(tool.description, /manual Big Red Cloud instructions/i);
     assert.match(tool.description, /screenshots/i);
-    assert.match(tool.description, /bank reconciliation/i);
-    assert.match(tool.description, /purchase invoice/i);
+    assert.match(tool.description, /purchases/i);
     assert.match(tool.description, /supplier/i);
-    assert.match(tool.description, /credit note/i);
-    assert.match(tool.description, /payment/i);
-    assert.match(tool.description, /receipt/i);
     assert.match(tool.description, /VAT/i);
     assert.match(tool.description, /reports/i);
     assert.match(tool.description, /company setup/i);
@@ -63,10 +50,8 @@ test("brc_red_help description includes sales invoice, customer, and manual-help
     assert.match(tool.description, /YouTube/i);
     assert.match(tool.description, /BRC Edu/i);
     assert.match(tool.description, /webinars/i);
-    assert.match(tool.description, /Big Red Cloud help/i);
-    assert.match(tool.description, /how-to questions/i);
-    assert.match(tool.description, /never replace a red-help request with create, update, delete or post tools/i);
-    assert.match(tool.description, /brc_red_help\(\{ query: "how do I add a sales invoice" \}\)/);
+    assert.match(tool.description, /read-only/i);
+    assert.match(tool.description, /without a connected company/i);
 });
 test("brc_red_help schema only requires query", () => {
     const tool = registeredTools.get("brc_red_help");
@@ -76,11 +61,16 @@ test("brc_red_help schema only requires query", () => {
     assert.equal(tool.schema.connectionRef, undefined);
     assert.equal(tool.schema.question, undefined);
 });
-test("brc_find_help_resources remains registered as compatibility alias", () => {
+test("both help descriptions are neutral, factual, and read-only", () => {
+    assert.ok(registeredTools.has("brc_red_help"));
     assert.ok(registeredTools.has("brc_find_help_resources"));
-    const tool = registeredTools.get("brc_find_help_resources");
-    assert.match(tool.description, /prefer brc_red_help/i);
-    assert.match(tool.description, /backward compatibility/i);
+    for (const name of ["brc_red_help", "brc_find_help_resources"]) {
+        const tool = registeredTools.get(name);
+        assert.match(tool.description, /read-only/i);
+        assert.equal(toAnthropicCompliantToolDescription(name, tool.description), tool.description);
+        assert.doesNotMatch(tool.description, /\bbrc_[a-z0-9_]+\b/i);
+        assert.doesNotMatch(tool.description, /mandatory|call this tool|also use it|recommended entry point|when the user|user(?:'s|’s) message|sources section|always end/i);
+    }
 });
 test("MCP server instructions begin with request routing override", () => {
     assert.ok(instructions.startsWith("MANDATORY ROUTING:"));

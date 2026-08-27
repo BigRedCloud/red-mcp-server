@@ -129,6 +129,6 @@ export function registerBankTools(server) {
             response,
         });
     });
-    registerRawUpdateTool(server, "brc_update_bank_account", "Updates a BRC bank account using merged fields. Before calling this tool, show the user a plain-English summary of the changes and ask for explicit confirmation.", "/v1/bankAccounts", "Bank account");
+    registerRawUpdateTool(server, "brc_update_bank_account", "Updates a BRC bank account using merged fields. An unconfirmed call returns a plain-English change preview. Explicit confirmation is required before the update is applied.", "/v1/bankAccounts", "Bank account");
     registerRawDeleteTool(server, "brc_delete_bank_account", "Deletes a BRC bank account by id. Only call this after the user has explicitly confirmed deletion.", "/v1/bankAccounts", "bank account");
 }

@@ -51,8 +51,9 @@ function freshdeskArticle() {
     };
 }
 test("how-to question guidance retrieves details with includeImages=true", () => {
-    assert.match(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /includeImages=true/i);
-    assert.match(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /imagePresentation=links/i);
+    assert.doesNotMatch(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /includeImages=true/i);
+    assert.doesNotMatch(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /imagePresentation=links/i);
+    assert.match(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /ordered guidance/i);
     assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /automatically.*includeImages=true/i);
     assert.match(GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION, /even when the user did not explicitly ask for screenshots/i);
     const response = buildUnifiedFindHelpResourcesResponse("How do I add a customer in Big Red Cloud?", { freshdeskArticles: [freshdeskArticle()] });
@@ -261,7 +262,7 @@ test("never claims no Freshdesk article exists when a matching article was retur
     const response = buildUnifiedFindHelpResourcesResponse("How do I add a customer in Big Red Cloud?", { freshdeskArticles: [freshdeskArticle()] });
     assert.ok(response.resources.some((resource) => resource.source === "freshdesk"));
     assert.match(response.responseGuidance.format.join(" "), /never claim no dedicated help article exists/i);
-    assert.match(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /Never claim no Freshdesk article exists/i);
+    assert.doesNotMatch(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /Never claim no Freshdesk article exists/i);
 });
 test("interaction-mode clarification feature is not restored", () => {
     const instructions = getBrcMcpServerInstructions(50, false);
