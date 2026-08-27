@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getToolMetadata } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { registerCompanyContextTools } from "./tools/setup/company_context_tools.js";
@@ -42,6 +43,8 @@ import {
   routeTokenSchema,
   wrapRouteTokenHandler,
 } from "./routing/route-token.js";
+import { toAnthropicCompliantToolDescription } from "./tool_description_policy.js";
+import { getPublicToolDescription } from "./tool_description_overrides.js";
 
 export function withConnectionRefSchema(
   schema: Record<string, unknown>
@@ -66,8 +69,12 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_open_edu_admin",
 ]);
 
-function createFilteredServer(server: McpServer): McpServer {
-  const originalTool = server.tool.bind(server) as (...args: any[]) => any;
+export function createFilteredServer(server: McpServer): McpServer {
+  const originalRegisterTool = server.registerTool.bind(server) as (
+    name: string,
+    config: Record<string, unknown>,
+    handler: (...args: any[]) => any,
+  ) => any;
 
   const filteredServer = Object.create(server) as McpServer & {
     tool: (...args: any[]) => any;
@@ -82,15 +89,24 @@ function createFilteredServer(server: McpServer): McpServer {
       return undefined as unknown;
     }
 
+    const { title, annotations } = getToolMetadata(toolName);
+
     if (args.length < 3) {
       const [description, handler] = args as [
         string,
         (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
       ];
 
-      return originalTool(
+      return originalRegisterTool(
         toolName,
-        description,
+        {
+          title,
+          description: toAnthropicCompliantToolDescription(
+            toolName,
+            getPublicToolDescription(toolName, description),
+          ),
+          annotations,
+        },
         wrapHttpSessionAwareToolHandler(handler, { toolName })
       );
     }
@@ -115,19 +131,27 @@ function createFilteredServer(server: McpServer): McpServer {
         }
       : schemaWithConnectionRef;
 
+    const publicDescription = getPublicToolDescription(toolName, description);
     const descriptionWithRoute = needsRouteToken
-      ? appendRouteTokenDescription(description)
-      : description;
+      ? appendRouteTokenDescription(publicDescription)
+      : publicDescription;
 
     if (!requiresWriteConfirmation(toolName)) {
       const guardedHandler = needsRouteToken
         ? wrapRouteTokenHandler(toolName, handler)
         : handler;
 
-      return originalTool(
+      return originalRegisterTool(
         toolName,
-        descriptionWithRoute,
-        schemaWithRouteToken,
+        {
+          title,
+          description: toAnthropicCompliantToolDescription(
+            toolName,
+            descriptionWithRoute,
+          ),
+          inputSchema: schemaWithRouteToken,
+          annotations,
+        },
         wrapHttpSessionAwareToolHandler(guardedHandler, { toolName })
       );
     }
@@ -154,10 +178,17 @@ function createFilteredServer(server: McpServer): McpServer {
       toolName,
     });
 
-    return originalTool(
+    return originalRegisterTool(
       toolName,
-      appendWriteConfirmationDescription(descriptionWithRoute, toolName),
-      wrappedSchema,
+      {
+        title,
+        description: toAnthropicCompliantToolDescription(
+          toolName,
+          appendWriteConfirmationDescription(descriptionWithRoute, toolName),
+        ),
+        inputSchema: wrappedSchema,
+        annotations,
+      },
       httpAwareHandler
     );
   };

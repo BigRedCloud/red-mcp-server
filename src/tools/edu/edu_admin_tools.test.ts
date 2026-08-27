@@ -96,13 +96,13 @@ test("registerAllTools includes brc_open_edu_admin", () => {
   const server = createBrcMcpServer();
   const names = new Set<string>();
 
-  const originalTool = server.tool.bind(server) as (...args: any[]) => unknown;
-  (server as { tool: (...args: any[]) => unknown }).tool = (
+  const originalRegisterTool = server.registerTool.bind(server) as (...args: any[]) => unknown;
+  (server as { registerTool: (...args: any[]) => unknown }).registerTool = (
     toolName: string,
     ...args: unknown[]
   ) => {
     names.add(toolName);
-    return originalTool(toolName, ...args);
+    return originalRegisterTool(toolName, ...args);
   };
 
   registerAllTools(server);

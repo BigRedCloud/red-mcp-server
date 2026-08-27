@@ -1,4 +1,5 @@
 import { round2 } from "../../shared.js";
+import { validateGeneratedReferenceSalesInvoicePayload } from "../sales-emails/sales_invoice_payload_schemas.js";
 export function todayIsoDate() {
     return new Date().toISOString().slice(0, 10);
 }
@@ -393,9 +394,6 @@ function sanitizeCashReceiptInput(args, vatOnCashEnabled) {
     delete next.totalVat;
     delete next.totalVAT;
     delete next.vatEntries;
-    if (Array.isArray(next.acEntries) && next.acEntries.length > 0) {
-        next.acEntries = [];
-    }
     const total = round2(asNumber(next.total));
     if (total > 0) {
         if (next.customerId !== undefined || next.acCode !== undefined) {
@@ -477,11 +475,11 @@ export function buildCashReceiptPayload(args, options) {
     const rawVatEntries = Array.isArray(argsForBuild.vatEntries)
         ? argsForBuild.vatEntries
         : [];
-    const hasRawVatSplit = rawAcEntries.length > 0 && rawVatEntries.length > 0;
-    // If a raw VAT-split payload was supplied, normalise it to the Cash Receipt
-    // contract. This is needed for stricter/paid BRC companies that reject
-    // simple ledger-only receipts.
-    if (hasRawVatSplit) {
+    const hasRawAnalysis = rawAcEntries.length > 0;
+    // If structured analysis was supplied, normalise it to the Cash Receipt
+    // contract. VAT entries remain optional and are removed above when the
+    // company's VAT-on-cash-receipts setting is disabled.
+    if (hasRawAnalysis) {
         const { payload: _payload, ...cleanArgs } = argsForBuild;
         const payload = {
             ...cleanArgs,
@@ -531,11 +529,12 @@ export function buildCashReceiptPayload(args, options) {
         : argsForBuild.percentage !== undefined
             ? asNumber(argsForBuild.percentage)
             : undefined;
-    const hasFlatVatSplit = analysisCategoryId !== undefined &&
-        accountCode !== undefined &&
+    const hasFlatAnalysis = analysisCategoryId !== undefined &&
+        accountCode !== undefined;
+    const hasFlatVatSplit = hasFlatAnalysis &&
         vatRateId !== undefined &&
         vatPercentage !== undefined;
-    const ledger = hasFlatVatSplit
+    const ledger = hasFlatAnalysis
         ? 0
         : round2(asNumber(argsForBuild.ledger, argsForBuild.customerId !== undefined || argsForBuild.acCode !== undefined ? total : 0));
     const payload = {
@@ -548,7 +547,7 @@ export function buildCashReceiptPayload(args, options) {
         reference,
         customFields: [],
         discount,
-        unallocated: hasFlatVatSplit ? 0 : ledger > 0 ? total : 0,
+        unallocated: hasFlatAnalysis ? 0 : ledger > 0 ? total : 0,
         ledger,
         detailCollection: [description],
         acEntries: [],
@@ -562,7 +561,7 @@ export function buildCashReceiptPayload(args, options) {
     if (argsForBuild.acCode !== undefined) {
         payload.acCode = asString(argsForBuild.acCode);
     }
-    if (hasFlatVatSplit) {
+    if (hasFlatAnalysis) {
         payload.acEntries = [
             {
                 accountCode,
@@ -571,6 +570,8 @@ export function buildCashReceiptPayload(args, options) {
                 value: total,
             },
         ];
+    }
+    if (hasFlatVatSplit) {
         // Cash Receipt vatEntries[].amount is the portion of the receipt TOTAL
         // allocated to this VAT rate (with one rate, that is the full total).
         payload.vatEntries = [
@@ -651,10 +652,26 @@ export function normalizeBatchItems(path, items, options) {
             item = buildPurchasePayload({ ...raw, supplierId: asString(raw.supplierId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch purchase"), bookTranTypeId: asNumber(raw.bookTranTypeId, 4), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch purchase"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) });
         if (path === "/v1/salesEntries")
             item = buildSimpleSalesEntryPayload({ ...raw, ownerId: asNumber(raw.customerId), ownerField: "customerId", acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch sales entry"), bookTranTypeId: asNumber(raw.bookTranTypeId, 5), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch sales entry"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23) });
-        if (path === "/v1/salesInvoices")
-            item = buildSalesInvoicePayload({ ...raw, customerId: asNumber(raw.customerId), customerName: raw.customerName !== undefined ? asString(raw.customerName) : (raw.name !== undefined ? asString(raw.name) : undefined), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: raw.note !== undefined ? asString(raw.note) : undefined, deliveryTo: raw.deliveryTo, bookTranTypeId: asNumber(raw.bookTranTypeId, 6), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch invoice"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
-        if (path === "/v1/salesCreditNotes")
-            item = buildSalesCreditNotePayload({ ...raw, customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
+        if (path === "/v1/salesInvoices") {
+            const { priceBasis, confirmCrAnalysisCategory: _confirmCr, ...invoiceBody } = raw;
+            const normalized = applySalesPriceBasisToRawPayload(invoiceBody, priceBasis === "net" || priceBasis === "gross" ? priceBasis : undefined);
+            const validation = validateGeneratedReferenceSalesInvoicePayload(normalized);
+            if (!validation.valid) {
+                throw new Error(`Invalid batch sales invoice item: ${validation.errors
+                    .map((error) => `${error.field}: ${error.message}`)
+                    .join("; ")}`);
+            }
+            item = validation.data;
+        }
+        if (path === "/v1/salesCreditNotes") {
+            if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {
+                const { priceBasis, confirmCrAnalysisCategory: _confirmCr, ...creditNoteBody } = raw;
+                item = applySalesPriceBasisToRawPayload(creditNoteBody, priceBasis === "net" || priceBasis === "gross" ? priceBasis : undefined);
+            }
+            else {
+                item = buildSalesCreditNotePayload({ ...raw, customerId: asNumber(raw.customerId), acCode: asString(raw.acCode), entryDate: asString(raw.entryDate, todayIsoDate()), procDate: asString(raw.procDate, asString(raw.entryDate, todayIsoDate())), note: asString(raw.note, "Batch credit note"), bookTranTypeId: asNumber(raw.bookTranTypeId, 7), analysisCategoryId: asNumber(raw.analysisCategoryId), accountCode: asString(raw.accountCode), description: asString(raw.description, "Batch credit note"), netAmount: asNumber(raw.netAmount, asNumber(raw.total, 0)), vatRateId: asNumber(raw.vatRateId), vatPercentage: asNumber(raw.vatPercentage, 23), productId: asNumber(raw.productId), productCode: asString(raw.productCode), quantity: asNumber(raw.quantity, 1), unitPrice: asNumber(raw.unitPrice, asNumber(raw.netAmount, asNumber(raw.total, 0))), saleRepId: raw.saleRepId !== undefined ? asNumber(raw.saleRepId) : undefined, saleRepCode: raw.saleRepCode !== undefined ? asString(raw.saleRepCode) : undefined, reference: raw.reference !== undefined ? asString(raw.reference) : undefined });
+            }
+        }
         if (path === "/v1/quotes") {
             assertQuoteManualReferenceLengthOrThrow(raw.reference);
             if (Array.isArray(raw.productTrans) && raw.productTrans.length > 0) {

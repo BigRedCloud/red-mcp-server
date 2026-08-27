@@ -1,3 +1,4 @@
+import { getToolMetadata } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { registerCompanyContextTools } from "./tools/setup/company_context_tools.js";
@@ -29,6 +30,8 @@ import { connectionRefSchema } from "./auth/connection_ref.js";
 import { getToolSkillGroup, isToolEnabled } from "./config/server_config.js";
 import { appendWriteConfirmationDescription, confirmCounterpartyExplicitSchema, confirmWriteSchema, requiresCounterpartyConfirmation, requiresWriteConfirmation, wrapWriteToolHandler, } from "./guards/write_confirmation.js";
 import { appendRouteTokenDescription, requiresRouteToken, routeTokenSchema, wrapRouteTokenHandler, } from "./routing/route-token.js";
+import { toAnthropicCompliantToolDescription } from "./tool_description_policy.js";
+import { getPublicToolDescription } from "./tool_description_overrides.js";
 export function withConnectionRefSchema(schema) {
     if (schema.connectionRef) {
         return schema;
@@ -47,17 +50,22 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
     "brc_get_help_resource_details",
     "brc_open_edu_admin",
 ]);
-function createFilteredServer(server) {
-    const originalTool = server.tool.bind(server);
+export function createFilteredServer(server) {
+    const originalRegisterTool = server.registerTool.bind(server);
     const filteredServer = Object.create(server);
     filteredServer.tool = (toolName, ...args) => {
         if (!isToolEnabled(toolName)) {
             console.warn(`Red: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`);
             return undefined;
         }
+        const { title, annotations } = getToolMetadata(toolName);
         if (args.length < 3) {
             const [description, handler] = args;
-            return originalTool(toolName, description, wrapHttpSessionAwareToolHandler(handler, { toolName }));
+            return originalRegisterTool(toolName, {
+                title,
+                description: toAnthropicCompliantToolDescription(toolName, getPublicToolDescription(toolName, description)),
+                annotations,
+            }, wrapHttpSessionAwareToolHandler(handler, { toolName }));
         }
         const [description, schema, handler] = args;
         const schemaWithConnectionRef = CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has(toolName)
@@ -70,14 +78,20 @@ function createFilteredServer(server) {
                 routeToken: schema.routeToken ?? routeTokenSchema,
             }
             : schemaWithConnectionRef;
+        const publicDescription = getPublicToolDescription(toolName, description);
         const descriptionWithRoute = needsRouteToken
-            ? appendRouteTokenDescription(description)
-            : description;
+            ? appendRouteTokenDescription(publicDescription)
+            : publicDescription;
         if (!requiresWriteConfirmation(toolName)) {
             const guardedHandler = needsRouteToken
                 ? wrapRouteTokenHandler(toolName, handler)
                 : handler;
-            return originalTool(toolName, descriptionWithRoute, schemaWithRouteToken, wrapHttpSessionAwareToolHandler(guardedHandler, { toolName }));
+            return originalRegisterTool(toolName, {
+                title,
+                description: toAnthropicCompliantToolDescription(toolName, descriptionWithRoute),
+                inputSchema: schemaWithRouteToken,
+                annotations,
+            }, wrapHttpSessionAwareToolHandler(guardedHandler, { toolName }));
         }
         const wrappedSchema = {
             ...schemaWithRouteToken,
@@ -95,7 +109,12 @@ function createFilteredServer(server) {
         const httpAwareHandler = wrapHttpSessionAwareToolHandler(routeWrappedHandler, {
             toolName,
         });
-        return originalTool(toolName, appendWriteConfirmationDescription(descriptionWithRoute, toolName), wrappedSchema, httpAwareHandler);
+        return originalRegisterTool(toolName, {
+            title,
+            description: toAnthropicCompliantToolDescription(toolName, appendWriteConfirmationDescription(descriptionWithRoute, toolName)),
+            inputSchema: wrappedSchema,
+            annotations,
+        }, httpAwareHandler);
     };
     return filteredServer;
 }

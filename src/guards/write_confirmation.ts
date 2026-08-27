@@ -174,10 +174,10 @@ export const confirmCounterpartyExplicitSchema = z
   );
 
 export const WRITE_CONFIRMATION_TOOL_SUFFIX =
-  " First call without confirmWrite: true returns confirmation_required and a payload preview — show a plain-English preview before posting in chat, then retry with confirmWrite: true only after explicit user confirmation in a later message. Red shows what it will post and waits for confirmation. Passing preflight is not confirmation.";
+  " A call without confirmWrite: true returns confirmation_required and a payload preview. confirmWrite: true applies the previewed change after explicit confirmation. Passing preflight is not confirmation.";
 
 export const COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX =
-  " Also requires confirmCounterpartyExplicit: true once the user has explicitly named or confirmed the customer/supplier in the current conversation. Do not reuse a counterparty from an earlier preview without that confirmation.";
+  " Requires confirmCounterpartyExplicit: true; confirmation is scoped to the counterparty selected for the current preview.";
 
 export const WRITE_DRAFT_FIELDS_COMMON = [
   "company",
@@ -1040,17 +1040,14 @@ export function appendWriteConfirmationDescription(
 ): string {
   let next = description;
 
-  if (
-    !next.includes("confirmWrite") &&
-    !next.includes("confirmation_required")
-  ) {
+  if (!next.includes(WRITE_CONFIRMATION_TOOL_SUFFIX.trim())) {
     next = `${next}${WRITE_CONFIRMATION_TOOL_SUFFIX}`;
   }
 
   if (
     toolName &&
     requiresCounterpartyConfirmation(toolName) &&
-    !next.includes("confirmCounterpartyExplicit")
+    !next.includes(COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX.trim())
   ) {
     next = `${next}${COUNTERPARTY_CONFIRMATION_TOOL_SUFFIX}`;
   }

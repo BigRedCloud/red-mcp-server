@@ -77,14 +77,9 @@ function freshdeskArticle(): SyncedFreshdeskArticle {
 }
 
 test("how-to question guidance retrieves details with includeImages=true", () => {
-  assert.match(
-    FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
-    /includeImages=true/i,
-  );
-  assert.match(
-    FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
-    /imagePresentation=links/i,
-  );
+  assert.doesNotMatch(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /includeImages=true/i);
+  assert.doesNotMatch(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /imagePresentation=links/i);
+  assert.match(FIND_HELP_RESOURCES_TOOL_DESCRIPTION, /ordered guidance/i);
   assert.match(
     GET_HELP_RESOURCE_DETAILS_TOOL_DESCRIPTION,
     /automatically.*includeImages=true/i,
@@ -432,7 +427,7 @@ test("never claims no Freshdesk article exists when a matching article was retur
     response.responseGuidance.format.join(" "),
     /never claim no dedicated help article exists/i,
   );
-  assert.match(
+  assert.doesNotMatch(
     FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
     /Never claim no Freshdesk article exists/i,
   );

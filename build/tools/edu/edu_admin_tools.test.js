@@ -53,10 +53,10 @@ test("brc_open_edu_admin only returns the protected URL without secrets", async 
 test("registerAllTools includes brc_open_edu_admin", () => {
     const server = createBrcMcpServer();
     const names = new Set();
-    const originalTool = server.tool.bind(server);
-    server.tool = (toolName, ...args) => {
+    const originalRegisterTool = server.registerTool.bind(server);
+    server.registerTool = (toolName, ...args) => {
         names.add(toolName);
-        return originalTool(toolName, ...args);
+        return originalRegisterTool(toolName, ...args);
     };
     registerAllTools(server);
     assert.equal(names.has("brc_open_edu_admin"), true);

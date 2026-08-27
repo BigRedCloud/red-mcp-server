@@ -4,6 +4,11 @@ import { brcJsonRequest, companyNameSchema, jsonResponse } from "../../shared.js
 import { registerListTool, registerGetTool } from "../../tools/general/list_tools.js";
 import { registerRawUpdateTool, registerRawDeleteTool, registerRawBatchTool, } from "../../tools/general/crud_tools.js";
 import { buildCashPaymentPayload, buildCashReceiptPayload, buildPaymentPayload, todayIsoDate, unwrapPayload, } from "../../tools/general/payloads_tools.js";
+import { cashPaymentBatchItemSchema, cashReceiptBatchItemSchema, paymentBatchItemSchema, } from "./cash_batch_schemas.js";
+const GROUP_B_BATCH_SCHEMA_OPTIONS = {
+    exposePriceBasis: false,
+    exposeConfirmCrAnalysisCategory: false,
+};
 export function registerCashPaymentTools(server) {
     // Cash Payments
     registerListTool(server, "brc_list_cash_payments", "Lists BRC cash payments.", "/v1/cashPayments");
@@ -63,7 +68,7 @@ export function registerCashPaymentTools(server) {
     });
     registerRawUpdateTool(server, "brc_update_cash_payment", "Updates an existing Cash Payment by merging supplied fields onto the current record. Fields that can be merged include total, entryDate, procDate, supplierId, acCode, note, ledger, discount, bankAccountId, bankAccountCode, lodgement, analysisCategoryId, accountCode, and description. This update flow is a verified action on the existing record.", "/v1/cashPayments", "Cash payment");
     registerRawDeleteTool(server, "brc_delete_cash_payment", "Deletes a BRC cash payment by id.", "/v1/cashPayments", "cash payment");
-    registerRawBatchTool(server, "brc_batch_cash_payments", "Processes a batch of BRC cash payments.", "/v1/cashPayments");
+    registerRawBatchTool(server, "brc_batch_cash_payments", "Processes a batch of BRC cash payments using strict supplier-ledger, bank-lodgement, or analysed-expense inputs. Use bank lodgement for a cash payment posted directly to a bank account.", "/v1/cashPayments", cashPaymentBatchItemSchema, GROUP_B_BATCH_SCHEMA_OPTIONS);
     // Cash Receipts
     registerListTool(server, "brc_list_cash_receipts", "Lists BRC cash receipts.", "/v1/cashReceipts");
     registerGetTool(server, "brc_get_cash_receipt", "Gets one BRC cash receipt by id.", "/v1/cashReceipts", "Cash receipt");
@@ -132,7 +137,7 @@ export function registerCashPaymentTools(server) {
     });
     registerRawUpdateTool(server, "brc_update_cash_receipt", "Updates a BRC cash receipt using merged fields.", "/v1/cashReceipts", "Cash receipt");
     registerRawDeleteTool(server, "brc_delete_cash_receipt", "Deletes a BRC cash receipt by id.", "/v1/cashReceipts", "cash receipt");
-    registerRawBatchTool(server, "brc_batch_cash_receipts", "Processes a batch of BRC cash receipts.", "/v1/cashReceipts");
+    registerRawBatchTool(server, "brc_batch_cash_receipts", "Processes a batch of BRC cash receipts.", "/v1/cashReceipts", cashReceiptBatchItemSchema, GROUP_B_BATCH_SCHEMA_OPTIONS);
     // Payments
     registerListTool(server, "brc_list_payments", "Lists BRC payments.", "/v1/payments");
     registerGetTool(server, "brc_get_payment", "Gets one BRC payment by id.", "/v1/payments", "Payment");
@@ -192,5 +197,5 @@ export function registerCashPaymentTools(server) {
     });
     registerRawUpdateTool(server, "brc_update_payment", "Updates a BRC payment using merged fields.", "/v1/payments", "Payment");
     registerRawDeleteTool(server, "brc_delete_payment", "Deletes a BRC payment by id.", "/v1/payments", "payment");
-    registerRawBatchTool(server, "brc_batch_payments", "Processes a batch of BRC payments.", "/v1/payments");
+    registerRawBatchTool(server, "brc_batch_payments", "Processes a batch of BRC payments using strict supplier-bank or analysed-bank inputs. Use analysed bank payments for non-supplier payments posted to an analysis account.", "/v1/payments", paymentBatchItemSchema, GROUP_B_BATCH_SCHEMA_OPTIONS);
 }
