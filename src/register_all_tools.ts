@@ -45,6 +45,11 @@ import {
 } from "./routing/route-token.js";
 import { toAnthropicCompliantToolDescription } from "./tool_description_policy.js";
 import { getPublicToolDescription } from "./tool_description_overrides.js";
+import {
+  isToolAllowedByProfile,
+  resolveRedMcpToolProfile,
+  type RedMcpToolProfile,
+} from "./tool_profiles.js";
 
 export function withConnectionRefSchema(
   schema: Record<string, unknown>
@@ -69,7 +74,16 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
   "brc_open_edu_admin",
 ]);
 
-export function createFilteredServer(server: McpServer): McpServer {
+type FilteredServerOptions = {
+  profile?: RedMcpToolProfile;
+  onRegistered?: (toolName: string) => void;
+};
+
+export function createFilteredServer(
+  server: McpServer,
+  options: FilteredServerOptions = {},
+): McpServer {
+  const profile = options.profile ?? "full";
   const originalRegisterTool = server.registerTool.bind(server) as (
     name: string,
     config: Record<string, unknown>,
@@ -81,6 +95,10 @@ export function createFilteredServer(server: McpServer): McpServer {
   };
 
   filteredServer.tool = (toolName: string, ...args: any[]) => {
+    if (!isToolAllowedByProfile(toolName, profile)) {
+      return undefined as unknown;
+    }
+
     if (!isToolEnabled(toolName)) {
       console.warn(
         `Red: skipping disabled ${getToolSkillGroup(toolName)} tool "${toolName}".`
@@ -88,6 +106,15 @@ export function createFilteredServer(server: McpServer): McpServer {
 
       return undefined as unknown;
     }
+
+    const registerTool = (
+      config: Record<string, unknown>,
+      handler: (...handlerArgs: any[]) => any,
+    ) => {
+      const registration = originalRegisterTool(toolName, config, handler);
+      options.onRegistered?.(toolName);
+      return registration;
+    };
 
     const { title, annotations } = getToolMetadata(toolName);
 
@@ -97,8 +124,7 @@ export function createFilteredServer(server: McpServer): McpServer {
         (toolArgs: Record<string, unknown>) => Promise<unknown> | unknown,
       ];
 
-      return originalRegisterTool(
-        toolName,
+      return registerTool(
         {
           title,
           description: toAnthropicCompliantToolDescription(
@@ -141,8 +167,7 @@ export function createFilteredServer(server: McpServer): McpServer {
         ? wrapRouteTokenHandler(toolName, handler)
         : handler;
 
-      return originalRegisterTool(
-        toolName,
+      return registerTool(
         {
           title,
           description: toAnthropicCompliantToolDescription(
@@ -178,8 +203,7 @@ export function createFilteredServer(server: McpServer): McpServer {
       toolName,
     });
 
-    return originalRegisterTool(
-      toolName,
+    return registerTool(
       {
         title,
         description: toAnthropicCompliantToolDescription(
@@ -197,7 +221,12 @@ export function createFilteredServer(server: McpServer): McpServer {
 }
 
 export function registerAllTools(server: McpServer): void {
-  const filteredServer = createFilteredServer(server);
+  const profile = resolveRedMcpToolProfile();
+  const advertisedToolNames = new Set<string>();
+  const filteredServer = createFilteredServer(server, {
+    profile,
+    onRegistered: (toolName) => advertisedToolNames.add(toolName),
+  });
   registerCompanyContextTools(filteredServer);
   registerTools(filteredServer);
   registerCompanySetupTools(filteredServer);
@@ -224,4 +253,7 @@ export function registerAllTools(server: McpServer): void {
   registerNominalJournalBatchTools(filteredServer);
   registerAccrualTools(filteredServer);
   registerPrepaymentTools(filteredServer);
+  console.info(
+    `Red MCP tool profile "${profile}" selected; advertising ${advertisedToolNames.size} tools.`,
+  );
 }
