@@ -71,15 +71,17 @@ const nominalGroups = {
     "5003": { groupCode: "5000G", description: "Bank Interest" },
 };
 function resolveNominalGroup(account) {
-    const accountGroup = account.accountGroup ?? account.group;
-    const accountType = account.accountType ?? account.type;
-    const rawCode = String(account.code ?? "").trim();
+    const accountGroup = account.accountGroup ?? account.AccountGroup ?? account.group ?? account.Group;
+    const accountType = account.accountType ?? account.AccountType ?? account.type ?? account.Type;
+    const rawCode = String(account.code ?? account.Code ?? "").trim();
     if (accountGroup !== undefined && accountGroup !== null && String(accountGroup).trim()) {
         return {
             groupKey: String(accountGroup).trim(),
             groupDescription: String(accountGroup).trim(),
             accountType: accountType ? String(accountType) : null,
-            groupedBy: account.accountGroup !== undefined ? "accountGroup" : "group",
+            groupedBy: account.accountGroup !== undefined || account.AccountGroup !== undefined
+                ? "accountGroup"
+                : "group",
         };
     }
     if (accountType !== undefined && accountType !== null && String(accountType).trim()) {
@@ -87,7 +89,9 @@ function resolveNominalGroup(account) {
             groupKey: String(accountType).trim(),
             groupDescription: String(accountType).trim(),
             accountType: String(accountType),
-            groupedBy: account.accountType !== undefined ? "accountType" : "type",
+            groupedBy: account.accountType !== undefined || account.AccountType !== undefined
+                ? "accountType"
+                : "type",
         };
     }
     const legacyGroup = rawCode ? nominalGroups[rawCode] : undefined;
@@ -101,7 +105,7 @@ function resolveNominalGroup(account) {
     }
     return {
         groupKey: rawCode || "Unknown",
-        groupDescription: String(account.description ?? rawCode ?? "Unknown"),
+        groupDescription: String(account.description ?? account.Description ?? rawCode ?? "Unknown"),
         accountType: null,
         groupedBy: "code",
     };
@@ -131,21 +135,21 @@ function addAccountToGroupedRows(groupedRows, account) {
         });
     }
     const row = groupedRows.get(groupKey);
-    row.openingBalance += toNumber(account.oBalance);
-    row.month1 += toNumber(account.month1);
-    row.month2 += toNumber(account.month2);
-    row.month3 += toNumber(account.month3);
-    row.month4 += toNumber(account.month4);
-    row.month5 += toNumber(account.month5);
-    row.month6 += toNumber(account.month6);
-    row.month7 += toNumber(account.month7);
-    row.month8 += toNumber(account.month8);
-    row.month9 += toNumber(account.month9);
-    row.month10 += toNumber(account.month10);
-    row.month11 += toNumber(account.month11);
-    row.month12 += toNumber(account.month12);
+    row.openingBalance += toNumber(account.oBalance ?? account.OBalance ?? account.openingBalance);
+    row.month1 += toNumber(account.month1 ?? account.Month1);
+    row.month2 += toNumber(account.month2 ?? account.Month2);
+    row.month3 += toNumber(account.month3 ?? account.Month3);
+    row.month4 += toNumber(account.month4 ?? account.Month4);
+    row.month5 += toNumber(account.month5 ?? account.Month5);
+    row.month6 += toNumber(account.month6 ?? account.Month6);
+    row.month7 += toNumber(account.month7 ?? account.Month7);
+    row.month8 += toNumber(account.month8 ?? account.Month8);
+    row.month9 += toNumber(account.month9 ?? account.Month9);
+    row.month10 += toNumber(account.month10 ?? account.Month10);
+    row.month11 += toNumber(account.month11 ?? account.Month11);
+    row.month12 += toNumber(account.month12 ?? account.Month12);
 }
-function buildGroupedNominalReport(nominalAccounts) {
+export function buildGroupedNominalReport(nominalAccounts) {
     const groupedRows = new Map();
     for (const account of nominalAccounts) {
         addAccountToGroupedRows(groupedRows, account);
