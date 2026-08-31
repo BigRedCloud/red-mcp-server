@@ -3,8 +3,17 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerAllTools } from "./register_all_tools.js";
+import { requiresRouteToken } from "./routing/route-token.js";
 import { createBrcMcpServer } from "./server.js";
 import { COPILOT_TOOL_ALLOWLIST, RED_MCP_TOOL_PROFILE_ENV, } from "./tool_profiles.js";
+const ACCOUNTING_PLUS_ADDITIONS = [
+    "brc_list_suppliers",
+    "brc_get_supplier",
+    "brc_list_supplier_account_trans",
+    "brc_list_purchases",
+    "brc_get_purchase",
+    "brc_grouped_nominal_accounts_report",
+];
 async function listRegisteredTools(profile) {
     const previous = process.env[RED_MCP_TOOL_PROFILE_ENV];
     if (profile === undefined) {
@@ -41,6 +50,7 @@ test("full, default, and Copilot profiles expose the expected descriptors", asyn
     const copilotTools = await listRegisteredTools("copilot");
     assert.equal(defaultTools.length, 159);
     assert.equal(fullTools.length, 159);
+    assert.equal(copilotTools.length, 17);
     assert.deepEqual(fullTools, defaultTools, "explicit full profile must not change descriptors");
     const expectedNames = [...COPILOT_TOOL_ALLOWLIST].sort();
     const actualNames = copilotTools.map((tool) => tool.name).sort();
@@ -48,6 +58,16 @@ test("full, default, and Copilot profiles expose the expected descriptors", asyn
     assert.equal(new Set(actualNames).size, actualNames.length);
     assert.equal(actualNames.includes("brc_route_request"), false);
     assert.equal(actualNames.includes("brc_send_email_statement"), false);
+    for (const excluded of [
+        "brc_create_supplier",
+        "brc_update_supplier",
+        "brc_delete_supplier",
+        "brc_create_purchase",
+        "brc_batch_purchases",
+        "brc_open_edu_admin",
+    ]) {
+        assert.equal(actualNames.includes(excluded), false, excluded);
+    }
     for (const required of [
         "brc_start_company_connection",
         "brc_confirm_company_connection",
@@ -57,6 +77,14 @@ test("full, default, and Copilot profiles expose the expected descriptors", asyn
         "brc_get_customer",
     ]) {
         assert.ok(actualNames.includes(required), required);
+    }
+    for (const addition of ACCOUNTING_PLUS_ADDITIONS) {
+        assert.ok(actualNames.includes(addition), addition);
+        assert.equal(requiresRouteToken(addition), false, `${addition}: route token`);
+        const descriptor = copilotTools.find((tool) => tool.name === addition);
+        assert.ok(descriptor, addition);
+        assert.equal(descriptor.annotations?.readOnlyHint, true, `${addition}: read-only`);
+        assert.equal(Object.hasOwn(descriptor.inputSchema.properties ?? {}, "routeToken"), false, `${addition}: routeToken schema field`);
     }
     const fullByName = new Map(fullTools.map((tool) => [tool.name, tool]));
     for (const tool of copilotTools) {

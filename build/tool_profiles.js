@@ -16,6 +16,12 @@ export const COPILOT_TOOL_ALLOWLIST = [
     "brc_list_customer_account_trans",
     "brc_list_sales_invoices",
     "brc_get_sales_invoice",
+    "brc_list_suppliers",
+    "brc_get_supplier",
+    "brc_list_supplier_account_trans",
+    "brc_list_purchases",
+    "brc_get_purchase",
+    "brc_grouped_nominal_accounts_report",
 ];
 const COPILOT_TOOL_NAMES = new Set(COPILOT_TOOL_ALLOWLIST);
 export function resolveRedMcpToolProfile(env = process.env) {
