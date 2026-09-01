@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { registerAllTools } from "./register_all_tools.js";
+import { createFilteredServer, registerAllTools } from "./register_all_tools.js";
 import { requiresRouteToken } from "./routing/route-token.js";
 import { createBrcMcpServer } from "./server.js";
 import {
   COPILOT_TOOL_ALLOWLIST,
+  COPILOT_FULL_TOOL_ALLOWLIST,
   RED_MCP_TOOL_PROFILE_ENV,
 } from "./tool_profiles.js";
 
@@ -115,6 +117,117 @@ test("full, default, and Copilot profiles expose the expected descriptors", asyn
   }
 });
 
+test("Copilot Full exposes the audited 80-tool catalogue without changing descriptors", async () => {
+  const fullTools = await listRegisteredTools("full");
+  const copilotTools = await listRegisteredTools("copilot");
+  const copilotFullTools = await listRegisteredTools("copilot-full");
+
+  assert.equal(fullTools.length, 159);
+  assert.equal(copilotTools.length, 17);
+  assert.equal(COPILOT_FULL_TOOL_ALLOWLIST.length, 80);
+  assert.equal(copilotFullTools.length, 80);
+
+  const fullNames = fullTools.map((tool) => tool.name).sort();
+  const auditedCatalogueHash = createHash("sha256")
+    .update(fullNames.join("\n"))
+    .digest("hex");
+  assert.equal(
+    auditedCatalogueHash,
+    "11820efba083f309fce8029d8310e178c5f84fd7d7d903b5379590f4a0dd9fdb",
+    "the 159-tool production catalogue changed; revisit the Copilot Full audit",
+  );
+
+  const expectedNames: string[] = [...COPILOT_FULL_TOOL_ALLOWLIST].sort();
+  const actualNames: string[] = copilotFullTools.map((tool) => tool.name).sort();
+  const actualNameSet = new Set<string>(actualNames);
+  assert.deepEqual(actualNames, expectedNames);
+  assert.equal(new Set(actualNames).size, 80);
+  assert.ok(COPILOT_TOOL_ALLOWLIST.every((name) => actualNameSet.has(name)));
+  assert.ok(expectedNames.every((name) => fullNames.includes(name)));
+
+  const routeDependentNames = fullTools
+    .map((tool) => tool.name)
+    .filter((name) => requiresRouteToken(name));
+  assert.equal(routeDependentNames.length, 73);
+  assert.ok(routeDependentNames.every((name) => !actualNameSet.has(name)));
+  const separatelyClassifiedRouteTools = new Set([
+    "brc_close_quote",
+    "brc_reopen_quote",
+    "brc_send_email_statement",
+    "brc_send_quote_email",
+    "brc_send_sales_invoice_email",
+  ]);
+  assert.equal(
+    routeDependentNames.filter((name) => !separatelyClassifiedRouteTools.has(name)).length,
+    68,
+  );
+
+  for (const excluded of [
+    "brc_route_request",
+    "brc_clear_all_company_api_keys",
+    "brc_clear_company_api_key",
+    "brc_clear_audit_log",
+    "brc_list_audit_log",
+    "brc_open_edu_admin",
+    "brc_create_customer",
+    "brc_update_customer",
+    "brc_delete_customer",
+    "brc_batch_customers",
+    "brc_process_vat_category_rates",
+    "brc_send_sales_invoice_email",
+  ]) {
+    assert.equal(actualNameSet.has(excluded), false, excluded);
+  }
+
+  for (const required of [
+    "brc_start_company_connection",
+    "brc_confirm_company_connection",
+    "brc_list_customers",
+    "brc_list_suppliers",
+    "brc_list_sales_invoices",
+    "brc_list_purchases",
+    "brc_list_nominal_accounts",
+    "brc_list_bank_accounts",
+    "brc_list_vat_rates",
+  ]) {
+    assert.ok(actualNameSet.has(required), required);
+  }
+
+  const connectionExceptions = new Set([
+    "brc_start_company_connection",
+    "brc_confirm_company_connection",
+  ]);
+  for (const tool of copilotFullTools) {
+    assert.equal(requiresRouteToken(tool.name), false, `${tool.name}: route token`);
+    assert.equal(tool.annotations?.destructiveHint, false, `${tool.name}: destructive`);
+    assert.equal(tool.annotations?.openWorldHint, false, `${tool.name}: open world`);
+    if (!connectionExceptions.has(tool.name)) {
+      assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name}: read-only`);
+    }
+  }
+
+  const fullByName = new Map(fullTools.map((tool) => [tool.name, tool]));
+  for (const tool of copilotFullTools) {
+    assert.deepEqual(tool, fullByName.get(tool.name), `${tool.name}: descriptor`);
+  }
+});
+
+test("Copilot Full filtering prevents excluded tools from reaching SDK registration", () => {
+  let registrations = 0;
+  const filtered = createFilteredServer(
+    {
+      registerTool() {
+        registrations += 1;
+      },
+    } as never,
+    { profile: "copilot-full" },
+  ) as unknown as { tool(name: string, description: string, handler: () => void): unknown };
+
+  const result = filtered.tool("brc_route_request", "excluded", () => undefined);
+  assert.equal(result, undefined);
+  assert.equal(registrations, 0);
+});
+
 test("unknown profile fails closed before any tool is registered", () => {
   const previous = process.env[RED_MCP_TOOL_PROFILE_ENV];
   process.env[RED_MCP_TOOL_PROFILE_ENV] = "unexpected";
@@ -128,7 +241,7 @@ test("unknown profile fails closed before any tool is registered", () => {
             registrations += 1;
           },
         } as never),
-      /Invalid RED_MCP_TOOL_PROFILE value "unexpected".*"full" or "copilot"/,
+      /Invalid RED_MCP_TOOL_PROFILE value "unexpected".*"copilot-full"/,
     );
     assert.equal(registrations, 0);
   } finally {
