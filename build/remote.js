@@ -34,9 +34,9 @@ import { authorizeYouTubeServiceSyncSecret, handleYouTubeAdminListVideos, handle
 import { authorizeFreshdeskServiceSyncSecret, handleFreshdeskAdminListArticles, handleFreshdeskAdminManualSync, handleFreshdeskServiceSync, handleFreshdeskVisibilityUpdate, } from "./brc-edu/freshdesk/freshdesk-admin-http.js";
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
-function createMcpServer() {
+function createMcpServer(profile) {
     const server = createBrcMcpServer();
-    registerAllTools(server);
+    registerAllTools(server, { profile });
     return server;
 }
 const sessions = new Map();
@@ -75,9 +75,9 @@ function restoreSessionPlatform(session, sessionId) {
 function trackHttpSession(sessionId, keyStore) {
     registerHttpSessionKeyStore(sessionId, keyStore);
 }
-async function createResumedMcpSession(sessionId) {
+async function createResumedMcpSession(sessionId, profile) {
     const keyStore = new Map();
-    const server = createMcpServer();
+    const server = createMcpServer(profile);
     const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => sessionId,
     });
@@ -90,6 +90,7 @@ async function createResumedMcpSession(sessionId) {
     await server.connect(transport);
     const clientPlatform = getStoredSessionPlatform(sessionId);
     return {
+        profile,
         server,
         transport,
         keyStore,
@@ -450,17 +451,25 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
         }
     });
 });
-app.post("/mcp", async (req, res) => {
+async function handleMcpPost(profile, req, res) {
     await ensureConnectionStoreInitialized();
     const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
+        if (session.profile !== profile) {
+            res.status(400).json({
+                jsonrpc: "2.0",
+                error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+                id: null,
+            });
+            return;
+        }
         touchSession(session);
         await handleMcpRequest(session, sessionId, req, res, req.body);
         return;
     }
     if (sessionId && !isInitializeRequest(req.body)) {
-        const resumed = await createResumedMcpSession(sessionId);
+        const resumed = await createResumedMcpSession(sessionId, profile);
         sessions.set(sessionId, resumed);
         trackHttpSession(sessionId, resumed.keyStore);
         touchSession(resumed);
@@ -482,7 +491,7 @@ app.post("/mcp", async (req, res) => {
     });
     logPlatformDetectionDiagnostics(toPlatformDetectionDiagnostics(initializePlatform));
     const keyStore = new Map();
-    const server = createMcpServer();
+    const server = createMcpServer(profile);
     const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
     });
@@ -496,6 +505,7 @@ app.post("/mcp", async (req, res) => {
     };
     await server.connect(transport);
     const provisionalSession = {
+        profile,
         server,
         transport,
         keyStore,
@@ -523,7 +533,9 @@ app.post("/mcp", async (req, res) => {
         rememberSessionPlatform(provisionalSession, sid, initializePlatform.platform);
         await ensureMcpSessionReady(sid, keyStore);
     }
-});
+}
+app.post("/mcp", (req, res) => handleMcpPost("full", req, res));
+app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-full", req, res));
 app.get("/connect", async (req, res) => {
     await ensureConnectionStoreInitialized();
     const code = String(req.query.code ?? "");
@@ -571,17 +583,25 @@ app.get("/connect/success/:successId", async (req, res) => {
         .type("html")
         .send(renderSuccessPage(successPage.connectedNames, successPage.confirmationCode, successPage.failedCompanies));
 });
-app.get("/mcp", async (req, res) => {
+async function handleMcpGet(profile, req, res) {
     await ensureConnectionStoreInitialized();
     const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
+        if (session.profile !== profile) {
+            res.status(400).json({
+                jsonrpc: "2.0",
+                error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+                id: null,
+            });
+            return;
+        }
         touchSession(session);
         await handleMcpRequest(session, sessionId, req, res);
         return;
     }
     if (sessionId) {
-        const resumed = await createResumedMcpSession(sessionId);
+        const resumed = await createResumedMcpSession(sessionId, profile);
         sessions.set(sessionId, resumed);
         trackHttpSession(sessionId, resumed.keyStore);
         touchSession(resumed);
@@ -593,7 +613,9 @@ app.get("/mcp", async (req, res) => {
         error: { code: -32000, message: "Bad Request: No valid session for GET." },
         id: null,
     });
-});
+}
+app.get("/mcp", (req, res) => handleMcpGet("full", req, res));
+app.get("/mcp/copilot", (req, res) => handleMcpGet("copilot-full", req, res));
 app.post("/internal/brc-edu/resources/sync", (req, res) => {
     const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
     const normalizedSecret = Array.isArray(requestSecret) ? requestSecret[0] : requestSecret;
@@ -768,10 +790,19 @@ app.all("/internal/brc-edu/youtube/webhook", async (req, res) => {
     }
     res.status(handled.status).send(handled.body ?? "");
 });
-app.delete("/mcp", async (req, res) => {
+async function handleMcpDelete(profile, req, res) {
     const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
-        const { server, transport } = sessions.get(sessionId);
+        const session = sessions.get(sessionId);
+        if (session.profile !== profile) {
+            res.status(404).json({
+                jsonrpc: "2.0",
+                error: { code: -32000, message: "Session not found." },
+                id: null,
+            });
+            return;
+        }
+        const { server, transport } = session;
         await transport.close();
         await server.close();
         sessions.delete(sessionId);
@@ -783,7 +814,9 @@ app.delete("/mcp", async (req, res) => {
         error: { code: -32000, message: "Session not found." },
         id: null,
     });
-});
+}
+app.delete("/mcp", (req, res) => handleMcpDelete("full", req, res));
+app.delete("/mcp/copilot", (req, res) => handleMcpDelete("copilot-full", req, res));
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const httpServer = app.listen(PORT);
 httpServer.on("listening", () => {

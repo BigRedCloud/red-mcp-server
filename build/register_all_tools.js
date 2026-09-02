@@ -128,8 +128,8 @@ export function createFilteredServer(server, options = {}) {
     };
     return filteredServer;
 }
-export function registerAllTools(server) {
-    const profile = resolveRedMcpToolProfile();
+export function registerAllTools(server, options = {}) {
+    const profile = options.profile ?? resolveRedMcpToolProfile();
     const advertisedToolNames = new Set();
     const filteredServer = createFilteredServer(server, {
         profile,

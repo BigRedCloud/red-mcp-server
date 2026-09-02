@@ -220,8 +220,16 @@ export function createFilteredServer(
   return filteredServer as McpServer;
 }
 
-export function registerAllTools(server: McpServer): void {
-  const profile = resolveRedMcpToolProfile();
+export type RegisterAllToolsOptions = {
+  /** Explicit profile for production routing; environment remains a local/test fallback. */
+  profile?: RedMcpToolProfile;
+};
+
+export function registerAllTools(
+  server: McpServer,
+  options: RegisterAllToolsOptions = {},
+): void {
+  const profile = options.profile ?? resolveRedMcpToolProfile();
   const advertisedToolNames = new Set<string>();
   const filteredServer = createFilteredServer(server, {
     profile,

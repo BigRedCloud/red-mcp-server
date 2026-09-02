@@ -134,13 +134,16 @@ import {
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
-function createMcpServer(): McpServer {
+type HttpMcpProfile = "full" | "copilot-full";
+
+function createMcpServer(profile: HttpMcpProfile): McpServer {
   const server = createBrcMcpServer();
-  registerAllTools(server);
+  registerAllTools(server, { profile });
   return server;
 }
 
 interface Session {
+  profile: HttpMcpProfile;
   server: McpServer;
   transport: StreamableHTTPServerTransport;
   keyStore: Map<string, CompanyApiContext>;
@@ -202,9 +205,12 @@ function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiCon
   registerHttpSessionKeyStore(sessionId, keyStore);
 }
 
-async function createResumedMcpSession(sessionId: string): Promise<Session> {
+async function createResumedMcpSession(
+  sessionId: string,
+  profile: HttpMcpProfile,
+): Promise<Session> {
   const keyStore = new Map<string, CompanyApiContext>();
-  const server = createMcpServer();
+  const server = createMcpServer(profile);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => sessionId,
   });
@@ -221,6 +227,7 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
   const clientPlatform = getStoredSessionPlatform(sessionId);
 
   return {
+    profile,
     server,
     transport,
     keyStore,
@@ -723,12 +730,24 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   });
 });
 
-app.post("/mcp", async (req: Request, res: Response) => {
+async function handleMcpPost(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
   await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+        id: null,
+      });
+      return;
+    }
     touchSession(session);
 
     await handleMcpRequest(session, sessionId, req, res, req.body);
@@ -736,7 +755,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   }
 
   if (sessionId && !isInitializeRequest(req.body)) {
-    const resumed = await createResumedMcpSession(sessionId);
+    const resumed = await createResumedMcpSession(sessionId, profile);
     sessions.set(sessionId, resumed);
     trackHttpSession(sessionId, resumed.keyStore);
     touchSession(resumed);
@@ -763,7 +782,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   );
 
   const keyStore = new Map<string, CompanyApiContext>();
-  const server = createMcpServer();
+  const server = createMcpServer(profile);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
   });
@@ -780,6 +799,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   await server.connect(transport);
 
   const provisionalSession: Session = {
+    profile,
     server,
     transport,
     keyStore,
@@ -819,7 +839,14 @@ app.post("/mcp", async (req: Request, res: Response) => {
     );
     await ensureMcpSessionReady(sid, keyStore);
   }
-});
+}
+
+app.post("/mcp", (req: Request, res: Response) =>
+  handleMcpPost("full", req, res),
+);
+app.post("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpPost("copilot-full", req, res),
+);
 
 
 app.get("/connect", async (req, res) => {
@@ -893,19 +920,31 @@ app.get("/connect/success/:successId", async (req, res) => {
 });
 
 
-app.get("/mcp", async (req: Request, res: Response) => {
+async function handleMcpGet(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
   await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+        id: null,
+      });
+      return;
+    }
     touchSession(session);
     await handleMcpRequest(session, sessionId, req, res);
     return;
   }
 
   if (sessionId) {
-    const resumed = await createResumedMcpSession(sessionId);
+    const resumed = await createResumedMcpSession(sessionId, profile);
     sessions.set(sessionId, resumed);
     trackHttpSession(sessionId, resumed.keyStore);
     touchSession(resumed);
@@ -918,7 +957,14 @@ app.get("/mcp", async (req: Request, res: Response) => {
     error: { code: -32000, message: "Bad Request: No valid session for GET." },
     id: null,
   });
-});
+}
+
+app.get("/mcp", (req: Request, res: Response) =>
+  handleMcpGet("full", req, res),
+);
+app.get("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpGet("copilot-full", req, res),
+);
 
 app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
   const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
@@ -1144,10 +1190,23 @@ app.all("/internal/brc-edu/youtube/webhook", async (req: Request, res: Response)
   res.status(handled.status).send(handled.body ?? "");
 });
 
-app.delete("/mcp", async (req: Request, res: Response) => {
+async function handleMcpDelete(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
-    const { server, transport } = sessions.get(sessionId)!;
+    const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session not found." },
+        id: null,
+      });
+      return;
+    }
+    const { server, transport } = session;
     await transport.close();
     await server.close();
     sessions.delete(sessionId);
@@ -1159,7 +1218,14 @@ app.delete("/mcp", async (req: Request, res: Response) => {
     error: { code: -32000, message: "Session not found." },
     id: null,
   });
-});
+}
+
+app.delete("/mcp", (req: Request, res: Response) =>
+  handleMcpDelete("full", req, res),
+);
+app.delete("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpDelete("copilot-full", req, res),
+);
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 

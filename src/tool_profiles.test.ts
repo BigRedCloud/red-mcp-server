@@ -228,6 +228,31 @@ test("Copilot Full filtering prevents excluded tools from reaching SDK registrat
   assert.equal(registrations, 0);
 });
 
+test("an explicit registration profile does not depend on the environment fallback", () => {
+  const previous = process.env[RED_MCP_TOOL_PROFILE_ENV];
+  process.env[RED_MCP_TOOL_PROFILE_ENV] = "unexpected";
+  const names: string[] = [];
+  try {
+    registerAllTools(
+      {
+        registerTool(name: string) {
+          names.push(name);
+        },
+        registerResource() {},
+        registerPrompt() {},
+      } as never,
+      { profile: "copilot-full" },
+    );
+    assert.deepEqual(names.sort(), [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
+  } finally {
+    if (previous === undefined) {
+      delete process.env[RED_MCP_TOOL_PROFILE_ENV];
+    } else {
+      process.env[RED_MCP_TOOL_PROFILE_ENV] = previous;
+    }
+  }
+});
+
 test("unknown profile fails closed before any tool is registered", () => {
   const previous = process.env[RED_MCP_TOOL_PROFILE_ENV];
   process.env[RED_MCP_TOOL_PROFILE_ENV] = "unexpected";
