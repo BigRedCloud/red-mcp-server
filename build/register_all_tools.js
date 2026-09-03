@@ -150,7 +150,10 @@ export function registerAllTools(server, options = {}) {
     registerProductTools(filteredServer);
     registerBatchTools(filteredServer);
     registerSalesVatTools(filteredServer);
-    registerDeploymentTools(filteredServer);
+    registerDeploymentTools(filteredServer, {
+        profile,
+        getRegisteredToolCount: () => advertisedToolNames.size,
+    });
     registerRouteRequestTools(filteredServer);
     registerHelpResourcesTools(filteredServer);
     registerEduAdminTools(filteredServer);

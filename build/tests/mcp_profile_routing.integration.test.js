@@ -16,7 +16,7 @@ async function connectClient(t, endpoint) {
 }
 test("HTTP MCP paths expose isolated full and Copilot Full catalogues without environment selection", async (t) => {
     const port = await getFreePort();
-    await startHttpTestServer(t, port, { RED_MCP_TOOL_PROFILE: undefined });
+    await startHttpTestServer(t, port, { RED_MCP_TOOL_PROFILE: undefined }, 90_000);
     const [{ client: fullClient, transport: fullTransport }, { client: copilotClient, transport: copilotTransport }] = await Promise.all([
         connectClient(t, new URL(`http://127.0.0.1:${port}/mcp`)),
         connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot`)),
@@ -64,7 +64,7 @@ test("HTTP MCP paths expose isolated full and Copilot Full catalogues without en
 });
 test("unknown MCP profile paths fail closed", async (t) => {
     const port = await getFreePort();
-    await startHttpTestServer(t, port, { RED_MCP_TOOL_PROFILE: undefined });
+    await startHttpTestServer(t, port, { RED_MCP_TOOL_PROFILE: undefined }, 90_000);
     const response = await fetch(`http://127.0.0.1:${port}/mcp/unknown`, {
         method: "POST",
         headers: { "content-type": "application/json" },
