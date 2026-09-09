@@ -6,7 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createFilteredServer, registerAllTools } from "./register_all_tools.js";
 import { requiresRouteToken } from "./routing/route-token.js";
 import { createBrcMcpServer } from "./server.js";
-import { COPILOT_TOOL_ALLOWLIST, COPILOT_FULL_TOOL_ALLOWLIST, RED_MCP_TOOL_PROFILE_ENV, } from "./tool_profiles.js";
+import { COPILOT_TOOL_ALLOWLIST, COPILOT_FULL_TOOL_ALLOWLIST, COPILOT_READ_ONLY_TOOL_ALLOWLIST, RED_MCP_TOOL_PROFILE_ENV, } from "./tool_profiles.js";
 const ACCOUNTING_PLUS_ADDITIONS = [
     "brc_list_suppliers",
     "brc_get_supplier",
@@ -97,21 +97,21 @@ test("full, default, and Copilot profiles expose the expected descriptors", asyn
         assert.deepEqual(tool.annotations, fullTool.annotations, `${tool.name}: annotations`);
     }
 });
-test("Copilot Full exposes the audited 80-tool catalogue without changing descriptors", async () => {
+test("Copilot Read Only exposes the audited 80-tool catalogue without changing descriptors", async () => {
     const fullTools = await listRegisteredTools("full");
     const copilotTools = await listRegisteredTools("copilot");
-    const copilotFullTools = await listRegisteredTools("copilot-full");
+    const copilotReadOnlyTools = await listRegisteredTools("copilot-read-only");
     assert.equal(fullTools.length, 159);
     assert.equal(copilotTools.length, 17);
-    assert.equal(COPILOT_FULL_TOOL_ALLOWLIST.length, 80);
-    assert.equal(copilotFullTools.length, 80);
+    assert.equal(COPILOT_READ_ONLY_TOOL_ALLOWLIST.length, 80);
+    assert.equal(copilotReadOnlyTools.length, 80);
     const fullNames = fullTools.map((tool) => tool.name).sort();
     const auditedCatalogueHash = createHash("sha256")
         .update(fullNames.join("\n"))
         .digest("hex");
     assert.equal(auditedCatalogueHash, "11820efba083f309fce8029d8310e178c5f84fd7d7d903b5379590f4a0dd9fdb", "the 159-tool production catalogue changed; revisit the Copilot Full audit");
-    const expectedNames = [...COPILOT_FULL_TOOL_ALLOWLIST].sort();
-    const actualNames = copilotFullTools.map((tool) => tool.name).sort();
+    const expectedNames = [...COPILOT_READ_ONLY_TOOL_ALLOWLIST].sort();
+    const actualNames = copilotReadOnlyTools.map((tool) => tool.name).sort();
     const actualNameSet = new Set(actualNames);
     assert.deepEqual(actualNames, expectedNames);
     assert.equal(new Set(actualNames).size, 80);
@@ -163,7 +163,7 @@ test("Copilot Full exposes the audited 80-tool catalogue without changing descri
         "brc_start_company_connection",
         "brc_confirm_company_connection",
     ]);
-    for (const tool of copilotFullTools) {
+    for (const tool of copilotReadOnlyTools) {
         assert.equal(requiresRouteToken(tool.name), false, `${tool.name}: route token`);
         assert.equal(tool.annotations?.destructiveHint, false, `${tool.name}: destructive`);
         assert.equal(tool.annotations?.openWorldHint, false, `${tool.name}: open world`);
@@ -172,17 +172,51 @@ test("Copilot Full exposes the audited 80-tool catalogue without changing descri
         }
     }
     const fullByName = new Map(fullTools.map((tool) => [tool.name, tool]));
-    for (const tool of copilotFullTools) {
+    for (const tool of copilotReadOnlyTools) {
         assert.deepEqual(tool, fullByName.get(tool.name), `${tool.name}: descriptor`);
     }
 });
-test("Copilot Full filtering prevents excluded tools from reaching SDK registration", () => {
+test("Copilot Full exposes all 158 non-router production tools without route-token dependencies", async () => {
+    const fullTools = await listRegisteredTools("full");
+    const copilotFullTools = await listRegisteredTools("copilot-full");
+    assert.equal(fullTools.length, 159);
+    assert.equal(COPILOT_FULL_TOOL_ALLOWLIST.length, 158);
+    assert.equal(copilotFullTools.length, 158);
+    const expectedNames = fullTools
+        .map((tool) => tool.name)
+        .filter((name) => name !== "brc_route_request")
+        .sort();
+    const actualNames = copilotFullTools.map((tool) => tool.name).sort();
+    assert.deepEqual(actualNames, expectedNames);
+    assert.deepEqual(actualNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
+    assert.equal(new Set(actualNames).size, 158);
+    assert.equal(actualNames.includes("brc_route_request"), false);
+    const fullByName = new Map(fullTools.map((tool) => [tool.name, tool]));
+    for (const tool of copilotFullTools) {
+        const fullTool = fullByName.get(tool.name);
+        assert.ok(fullTool, tool.name);
+        assert.equal(tool.title, fullTool.title, `${tool.name}: title`);
+        assert.deepEqual(tool.annotations, fullTool.annotations, `${tool.name}: annotations`);
+        const properties = tool.inputSchema.properties ?? {};
+        assert.equal(Object.hasOwn(properties, "routeToken"), false, `${tool.name}: routeToken`);
+        if (requiresRouteToken(tool.name)) {
+            assert.doesNotMatch(tool.description ?? "", /Requires a valid routeToken/);
+            if (Object.hasOwn(fullTool.inputSchema.properties ?? {}, "confirmWrite")) {
+                assert.ok(Object.hasOwn(properties, "confirmWrite"), `${tool.name}: confirmWrite`);
+            }
+        }
+        else {
+            assert.deepEqual(tool, fullTool, `${tool.name}: unchanged descriptor`);
+        }
+    }
+});
+test("Copilot Read Only filtering prevents excluded tools from reaching SDK registration", () => {
     let registrations = 0;
     const filtered = createFilteredServer({
         registerTool() {
             registrations += 1;
         },
-    }, { profile: "copilot-full" });
+    }, { profile: "copilot-read-only" });
     const result = filtered.tool("brc_route_request", "excluded", () => undefined);
     assert.equal(result, undefined);
     assert.equal(registrations, 0);
@@ -198,8 +232,8 @@ test("an explicit registration profile does not depend on the environment fallba
             },
             registerResource() { },
             registerPrompt() { },
-        }, { profile: "copilot-full" });
-        assert.deepEqual(names.sort(), [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
+        }, { profile: "copilot-read-only" });
+        assert.deepEqual(names.sort(), [...COPILOT_READ_ONLY_TOOL_ALLOWLIST].sort());
     }
     finally {
         if (previous === undefined) {

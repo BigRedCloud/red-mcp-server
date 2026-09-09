@@ -149,7 +149,8 @@ export function createFilteredServer(
       ? schema
       : withConnectionRefSchema(schema);
 
-    const needsRouteToken = requiresRouteToken(toolName);
+    const needsRouteToken =
+      profile !== "copilot-full" && requiresRouteToken(toolName);
     const schemaWithRouteToken = needsRouteToken
       ? {
           ...schemaWithConnectionRef,
@@ -195,10 +196,9 @@ export function createFilteredServer(
     // Order (outer → inner): HTTP session / connectionRef → routeToken guard →
     // write confirmation. Route token fails before any company lookup or write.
     const writeWrappedHandler = wrapWriteToolHandler(toolName, handler);
-    const routeWrappedHandler = wrapRouteTokenHandler(
-      toolName,
-      writeWrappedHandler
-    );
+    const routeWrappedHandler = needsRouteToken
+      ? wrapRouteTokenHandler(toolName, writeWrappedHandler)
+      : writeWrappedHandler;
     const httpAwareHandler = wrapHttpSessionAwareToolHandler(routeWrappedHandler, {
       toolName,
     });

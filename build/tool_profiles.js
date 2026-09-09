@@ -1,3 +1,4 @@
+import { TOOL_ANNOTATIONS } from "./tool_annotations.js";
 export const RED_MCP_TOOL_PROFILE_ENV = "RED_MCP_TOOL_PROFILE";
 /**
  * Minimal customer-account workflow exposed to Microsoft Copilot Studio.
@@ -29,7 +30,7 @@ const COPILOT_TOOL_NAMES = new Set(COPILOT_TOOL_ALLOWLIST);
  * Copilot Studio. New production tools remain excluded until deliberately
  * reviewed and added here.
  */
-export const COPILOT_FULL_TOOL_ALLOWLIST = [
+export const COPILOT_READ_ONLY_TOOL_ALLOWLIST = [
     "brc_check_transaction_settings",
     "brc_company_readiness_check",
     "brc_confirm_company_connection",
@@ -111,6 +112,19 @@ export const COPILOT_FULL_TOOL_ALLOWLIST = [
     "brc_start_company_connection",
     "brc_validate_transaction_date",
 ];
+const COPILOT_READ_ONLY_TOOL_NAMES = new Set(COPILOT_READ_ONLY_TOOL_ALLOWLIST);
+const DEVELOPMENT_ONLY_TOOL_NAMES = new Set([
+    "brc_set_company_api_key",
+    "brc_get_dev_mode_details",
+    "brc_dev_diagnose_company_processing_settings",
+    "brc_get_connection_store_diagnostics",
+]);
+/**
+ * All current production tools except the generic router. This profile is
+ * intentionally kept in lockstep with the central fail-closed tool registry.
+ */
+export const COPILOT_FULL_TOOL_ALLOWLIST = Object.freeze(Object.keys(TOOL_ANNOTATIONS).filter((toolName) => toolName !== "brc_route_request" &&
+    !DEVELOPMENT_ONLY_TOOL_NAMES.has(toolName)));
 const COPILOT_FULL_TOOL_NAMES = new Set(COPILOT_FULL_TOOL_ALLOWLIST);
 export function resolveRedMcpToolProfile(env = process.env) {
     const configured = env[RED_MCP_TOOL_PROFILE_ENV]?.trim();
@@ -120,16 +134,22 @@ export function resolveRedMcpToolProfile(env = process.env) {
     if (configured === "copilot") {
         return "copilot";
     }
+    if (configured === "copilot-read-only") {
+        return "copilot-read-only";
+    }
     if (configured === "copilot-full") {
         return "copilot-full";
     }
-    throw new Error(`Invalid ${RED_MCP_TOOL_PROFILE_ENV} value ${JSON.stringify(configured)}. Expected "full", "copilot", or "copilot-full".`);
+    throw new Error(`Invalid ${RED_MCP_TOOL_PROFILE_ENV} value ${JSON.stringify(configured)}. Expected "full", "copilot", "copilot-read-only", or "copilot-full".`);
 }
 export function isToolAllowedByProfile(toolName, profile) {
     if (profile === "full") {
         return true;
     }
-    return profile === "copilot"
-        ? COPILOT_TOOL_NAMES.has(toolName)
+    if (profile === "copilot") {
+        return COPILOT_TOOL_NAMES.has(toolName);
+    }
+    return profile === "copilot-read-only"
+        ? COPILOT_READ_ONLY_TOOL_NAMES.has(toolName)
         : COPILOT_FULL_TOOL_NAMES.has(toolName);
 }

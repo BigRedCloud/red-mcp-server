@@ -5,7 +5,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { requiresRouteToken } from "../routing/route-token.js";
-import { COPILOT_FULL_TOOL_ALLOWLIST } from "../tool_profiles.js";
+import {
+  COPILOT_FULL_TOOL_ALLOWLIST,
+  COPILOT_READ_ONLY_TOOL_ALLOWLIST,
+} from "../tool_profiles.js";
 import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 
 async function connectClient(t: TestContext, endpoint: URL) {
@@ -18,7 +21,7 @@ async function connectClient(t: TestContext, endpoint: URL) {
   return { client, transport };
 }
 
-test("HTTP MCP paths expose isolated full and Copilot Full catalogues without environment selection", async (t) => {
+test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot catalogues", async (t) => {
   const port = await getFreePort();
   await startHttpTestServer(
     t,
@@ -27,34 +30,51 @@ test("HTTP MCP paths expose isolated full and Copilot Full catalogues without en
     90_000,
   );
 
-  const [{ client: fullClient, transport: fullTransport }, { client: copilotClient, transport: copilotTransport }] =
+  const [
+    { client: fullClient, transport: fullTransport },
+    { client: readOnlyClient, transport: readOnlyTransport },
+    { client: copilotFullClient, transport: copilotFullTransport },
+  ] =
     await Promise.all([
       connectClient(t, new URL(`http://127.0.0.1:${port}/mcp`)),
-      connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot`)),
+      connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot/read-only`)),
+      connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot-full`)),
     ]);
 
-  const [fullResponse, copilotResponse] = await Promise.all([
+  const [fullResponse, readOnlyResponse, copilotFullResponse] = await Promise.all([
     fullClient.listTools(),
-    copilotClient.listTools(),
+    readOnlyClient.listTools(),
+    copilotFullClient.listTools(),
   ]);
   const fullNames: string[] = fullResponse.tools.map((tool) => tool.name).sort();
-  const copilotNames: string[] = copilotResponse.tools.map((tool) => tool.name).sort();
+  const readOnlyNames = readOnlyResponse.tools.map((tool) => tool.name).sort();
+  const copilotFullNames = copilotFullResponse.tools.map((tool) => tool.name).sort();
   const routeToolName: string = "brc_route_request";
 
   assert.equal(fullNames.length, 159);
   assert.equal(new Set(fullNames).size, 159);
-  assert.equal(copilotNames.length, 80);
+  assert.equal(readOnlyNames.length, 80);
+  assert.equal(copilotFullNames.length, 158);
   assert.ok(fullNames.includes(routeToolName));
-  assert.ok(copilotNames.some((name) => name === "brc_list_nominal_accounts"));
-  assert.equal(copilotNames.includes(routeToolName), false);
+  assert.ok(readOnlyNames.includes("brc_list_nominal_accounts"));
+  assert.equal(readOnlyNames.includes(routeToolName), false);
+  assert.equal(copilotFullNames.includes(routeToolName), false);
   assert.ok(
     fullNames
       .filter(requiresRouteToken)
-      .every((name) => !copilotNames.some((candidate) => candidate === name)),
+      .every((name) => copilotFullNames.includes(name)),
   );
-  assert.deepEqual(copilotNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
+  assert.deepEqual(readOnlyNames, [...COPILOT_READ_ONLY_TOOL_ALLOWLIST].sort());
+  assert.deepEqual(copilotFullNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
+  for (const tool of copilotFullResponse.tools) {
+    assert.equal(
+      Object.hasOwn(tool.inputSchema.properties ?? {}, "routeToken"),
+      false,
+      tool.name,
+    );
+  }
 
-  const excludedCall = await copilotClient.callTool({
+  const excludedCall = await copilotFullClient.callTool({
     name: "brc_route_request",
     arguments: { message: "test" },
   });
@@ -62,8 +82,9 @@ test("HTTP MCP paths expose isolated full and Copilot Full catalogues without en
   assert.match(JSON.stringify(excludedCall.content), /not found|unknown tool/i);
 
   for (const [transport, otherPath] of [
-    [fullTransport, "/mcp/copilot"],
-    [copilotTransport, "/mcp"],
+    [fullTransport, "/mcp/copilot-full"],
+    [readOnlyTransport, "/mcp/copilot-full"],
+    [copilotFullTransport, "/mcp"],
   ] as const) {
     assert.ok(transport.sessionId);
     const crossed = await fetch(`http://127.0.0.1:${port}${otherPath}`, {

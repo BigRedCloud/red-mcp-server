@@ -134,7 +134,7 @@ import {
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
-type HttpMcpProfile = "full" | "copilot-full";
+type HttpMcpProfile = "full" | "copilot-read-only" | "copilot-full";
 
 function createMcpServer(profile: HttpMcpProfile): McpServer {
   const server = createBrcMcpServer();
@@ -845,6 +845,12 @@ app.post("/mcp", (req: Request, res: Response) =>
   handleMcpPost("full", req, res),
 );
 app.post("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpPost("copilot-read-only", req, res),
+);
+app.post("/mcp/copilot/read-only", (req: Request, res: Response) =>
+  handleMcpPost("copilot-read-only", req, res),
+);
+app.post("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpPost("copilot-full", req, res),
 );
 
@@ -963,6 +969,12 @@ app.get("/mcp", (req: Request, res: Response) =>
   handleMcpGet("full", req, res),
 );
 app.get("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpGet("copilot-read-only", req, res),
+);
+app.get("/mcp/copilot/read-only", (req: Request, res: Response) =>
+  handleMcpGet("copilot-read-only", req, res),
+);
+app.get("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpGet("copilot-full", req, res),
 );
 
@@ -1224,6 +1236,12 @@ app.delete("/mcp", (req: Request, res: Response) =>
   handleMcpDelete("full", req, res),
 );
 app.delete("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpDelete("copilot-read-only", req, res),
+);
+app.delete("/mcp/copilot/read-only", (req: Request, res: Response) =>
+  handleMcpDelete("copilot-read-only", req, res),
+);
+app.delete("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpDelete("copilot-full", req, res),
 );
 

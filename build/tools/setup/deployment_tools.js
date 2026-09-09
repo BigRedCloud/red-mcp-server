@@ -106,7 +106,7 @@ function deploymentPolicy() {
 function customerDeploymentPolicyText(profile = "full", registeredToolCount = 159) {
     const capabilities = getCustomerDeploymentCapabilities();
     const availability = (enabled) => enabled ? "available" : "not available";
-    const endpointCapabilities = profile === "copilot-full"
+    const endpointCapabilities = profile === "copilot-read-only"
         ? `- Read-only accounting operations: available
 - Company connection operations: available
 - Create operations: unavailable on this endpoint
@@ -123,9 +123,9 @@ function customerDeploymentPolicyText(profile = "full", registeredToolCount = 15
 - Post and allocate operations: ${availability(capabilities.canCreateOrUpdateRecords)}
 - Batch-write operations: ${availability(capabilities.canBatchProcessRecords)}
 - Email operations: ${availability(capabilities.canSendEmails)}
-- Route-request orchestration: available`;
-    if (profile === "copilot-full") {
-        return `Current endpoint profile: copilot-full
+- Route-request orchestration: ${profile === "copilot-full" ? "unavailable on this endpoint" : "available"}`;
+    if (profile === "copilot-read-only") {
+        return `Current endpoint profile: copilot-read-only
 Registered tools: ${registeredToolCount}
 
 Effective endpoint capabilities:
