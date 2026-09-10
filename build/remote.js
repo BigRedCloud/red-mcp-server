@@ -536,7 +536,6 @@ async function handleMcpPost(profile, req, res) {
 }
 app.post("/mcp", (req, res) => handleMcpPost("full", req, res));
 app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-read-only", req, res));
-app.post("/mcp/copilot/read-only", (req, res) => handleMcpPost("copilot-read-only", req, res));
 app.post("/mcp/copilot-full", (req, res) => handleMcpPost("copilot-full", req, res));
 app.get("/connect", async (req, res) => {
     await ensureConnectionStoreInitialized();
@@ -618,7 +617,6 @@ async function handleMcpGet(profile, req, res) {
 }
 app.get("/mcp", (req, res) => handleMcpGet("full", req, res));
 app.get("/mcp/copilot", (req, res) => handleMcpGet("copilot-read-only", req, res));
-app.get("/mcp/copilot/read-only", (req, res) => handleMcpGet("copilot-read-only", req, res));
 app.get("/mcp/copilot-full", (req, res) => handleMcpGet("copilot-full", req, res));
 app.post("/internal/brc-edu/resources/sync", (req, res) => {
     const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
@@ -821,7 +819,6 @@ async function handleMcpDelete(profile, req, res) {
 }
 app.delete("/mcp", (req, res) => handleMcpDelete("full", req, res));
 app.delete("/mcp/copilot", (req, res) => handleMcpDelete("copilot-read-only", req, res));
-app.delete("/mcp/copilot/read-only", (req, res) => handleMcpDelete("copilot-read-only", req, res));
 app.delete("/mcp/copilot-full", (req, res) => handleMcpDelete("copilot-full", req, res));
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const httpServer = app.listen(PORT);

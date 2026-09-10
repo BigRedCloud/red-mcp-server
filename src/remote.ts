@@ -847,9 +847,6 @@ app.post("/mcp", (req: Request, res: Response) =>
 app.post("/mcp/copilot", (req: Request, res: Response) =>
   handleMcpPost("copilot-read-only", req, res),
 );
-app.post("/mcp/copilot/read-only", (req: Request, res: Response) =>
-  handleMcpPost("copilot-read-only", req, res),
-);
 app.post("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpPost("copilot-full", req, res),
 );
@@ -969,9 +966,6 @@ app.get("/mcp", (req: Request, res: Response) =>
   handleMcpGet("full", req, res),
 );
 app.get("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpGet("copilot-read-only", req, res),
-);
-app.get("/mcp/copilot/read-only", (req: Request, res: Response) =>
   handleMcpGet("copilot-read-only", req, res),
 );
 app.get("/mcp/copilot-full", (req: Request, res: Response) =>
@@ -1236,9 +1230,6 @@ app.delete("/mcp", (req: Request, res: Response) =>
   handleMcpDelete("full", req, res),
 );
 app.delete("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpDelete("copilot-read-only", req, res),
-);
-app.delete("/mcp/copilot/read-only", (req: Request, res: Response) =>
   handleMcpDelete("copilot-read-only", req, res),
 );
 app.delete("/mcp/copilot-full", (req: Request, res: Response) =>

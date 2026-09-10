@@ -19,7 +19,7 @@ test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot ca
     await startHttpTestServer(t, port, { RED_MCP_TOOL_PROFILE: undefined }, 90_000);
     const [{ client: fullClient, transport: fullTransport }, { client: readOnlyClient, transport: readOnlyTransport }, { client: copilotFullClient, transport: copilotFullTransport },] = await Promise.all([
         connectClient(t, new URL(`http://127.0.0.1:${port}/mcp`)),
-        connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot/read-only`)),
+        connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot`)),
         connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot-full`)),
     ]);
     const [fullResponse, readOnlyResponse, copilotFullResponse] = await Promise.all([
@@ -81,4 +81,10 @@ test("unknown MCP profile paths fail closed", async (t) => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
     });
     assert.equal(response.status, 404);
+    const removedAliasResponse = await fetch(`http://127.0.0.1:${port}/mcp/copilot/read-only`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} }),
+    });
+    assert.equal(removedAliasResponse.status, 404);
 });
