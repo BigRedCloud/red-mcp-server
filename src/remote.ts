@@ -14,6 +14,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import {
@@ -134,11 +135,15 @@ import {
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
-type HttpMcpProfile = "full" | "copilot-read-only" | "copilot-full";
+type HttpMcpProfile = "copilot-diagnostic" | "full" | "copilot-read-only" | "copilot-full";
 
 function createMcpServer(profile: HttpMcpProfile): McpServer {
   const server = createBrcMcpServer();
-  registerAllTools(server, { profile });
+  if (profile === "copilot-diagnostic") {
+    registerCopilotDiagnosticTools(server);
+  } else {
+    registerAllTools(server, { profile });
+  }
   return server;
 }
 
@@ -259,6 +264,10 @@ async function handleMcpRequest(
   res: Response,
   body?: unknown
 ): Promise<void> {
+  if (session.profile === "copilot-diagnostic") {
+    await session.transport.handleRequest(req, res, body);
+    return;
+  }
   const normalizedSessionId = sessionId.trim();
   const clientKeyResolution = resolveHttpClientKeyFromRequest(req);
   const clientKey = clientKeyResolution.clientKey;
@@ -735,7 +744,7 @@ async function handleMcpPost(
   req: Request,
   res: Response,
 ): Promise<void> {
-  await ensureConnectionStoreInitialized();
+  if (profile !== "copilot-diagnostic") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
@@ -837,7 +846,7 @@ async function handleMcpPost(
       sid,
       initializePlatform.platform
     );
-    await ensureMcpSessionReady(sid, keyStore);
+    if (profile !== "copilot-diagnostic") await ensureMcpSessionReady(sid, keyStore);
   }
 }
 
@@ -845,7 +854,7 @@ app.post("/mcp", (req: Request, res: Response) =>
   handleMcpPost("full", req, res),
 );
 app.post("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpPost("copilot-read-only", req, res),
+  handleMcpPost("copilot-diagnostic", req, res),
 );
 app.post("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpPost("copilot-full", req, res),
@@ -928,7 +937,7 @@ async function handleMcpGet(
   req: Request,
   res: Response,
 ): Promise<void> {
-  await ensureConnectionStoreInitialized();
+  if (profile !== "copilot-diagnostic") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
@@ -966,7 +975,7 @@ app.get("/mcp", (req: Request, res: Response) =>
   handleMcpGet("full", req, res),
 );
 app.get("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpGet("copilot-read-only", req, res),
+  handleMcpGet("copilot-diagnostic", req, res),
 );
 app.get("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpGet("copilot-full", req, res),
@@ -1230,7 +1239,7 @@ app.delete("/mcp", (req: Request, res: Response) =>
   handleMcpDelete("full", req, res),
 );
 app.delete("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpDelete("copilot-read-only", req, res),
+  handleMcpDelete("copilot-diagnostic", req, res),
 );
 app.delete("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpDelete("copilot-full", req, res),

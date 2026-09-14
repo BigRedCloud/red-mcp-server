@@ -7,7 +7,6 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { requiresRouteToken } from "../routing/route-token.js";
 import {
   COPILOT_FULL_TOOL_ALLOWLIST,
-  COPILOT_READ_ONLY_TOOL_ALLOWLIST,
 } from "../tool_profiles.js";
 import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 
@@ -21,7 +20,7 @@ async function connectClient(t: TestContext, endpoint: URL) {
   return { client, transport };
 }
 
-test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot catalogues", async (t) => {
+test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot catalogues", async (t) => {
   const port = await getFreePort();
   await startHttpTestServer(
     t,
@@ -32,7 +31,7 @@ test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot ca
 
   const [
     { client: fullClient, transport: fullTransport },
-    { client: readOnlyClient, transport: readOnlyTransport },
+    { client: diagnosticClient, transport: diagnosticTransport },
     { client: copilotFullClient, transport: copilotFullTransport },
   ] =
     await Promise.all([
@@ -41,30 +40,47 @@ test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot ca
       connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot-full`)),
     ]);
 
-  const [fullResponse, readOnlyResponse, copilotFullResponse] = await Promise.all([
+  const [fullResponse, diagnosticResponse, copilotFullResponse] = await Promise.all([
     fullClient.listTools(),
-    readOnlyClient.listTools(),
+    diagnosticClient.listTools(),
     copilotFullClient.listTools(),
   ]);
   const fullNames: string[] = fullResponse.tools.map((tool) => tool.name).sort();
-  const readOnlyNames = readOnlyResponse.tools.map((tool) => tool.name).sort();
+  const diagnosticNames = diagnosticResponse.tools.map((tool) => tool.name).sort();
   const copilotFullNames = copilotFullResponse.tools.map((tool) => tool.name).sort();
   const routeToolName: string = "brc_route_request";
 
   assert.equal(fullNames.length, 159);
   assert.equal(new Set(fullNames).size, 159);
-  assert.equal(readOnlyNames.length, 80);
+  assert.deepEqual(diagnosticNames, [
+    "brc_copilot_connector_status",
+    "brc_find_help_resources",
+  ]);
   assert.equal(copilotFullNames.length, 158);
   assert.ok(fullNames.includes(routeToolName));
-  assert.ok(readOnlyNames.includes("brc_list_nominal_accounts"));
-  assert.equal(readOnlyNames.includes(routeToolName), false);
+  for (const name of [
+    "brc_start_company_connection",
+    "brc_confirm_company_connection",
+    "brc_list_company_contexts",
+    "brc_list_nominal_accounts",
+    "brc_list_customers",
+    "brc_create_customer",
+  ]) {
+    assert.equal(diagnosticNames.includes(name), false, name);
+  }
+  for (const tool of diagnosticResponse.tools) {
+    assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
+    assert.equal(tool.annotations?.destructiveHint, false, tool.name);
+    assert.equal(tool.annotations?.idempotentHint, true, tool.name);
+    assert.equal(tool.annotations?.openWorldHint, false, tool.name);
+  }
+  assert.equal(diagnosticNames.includes(routeToolName), false);
   assert.equal(copilotFullNames.includes(routeToolName), false);
   assert.ok(
     fullNames
       .filter(requiresRouteToken)
       .every((name) => copilotFullNames.includes(name)),
   );
-  assert.deepEqual(readOnlyNames, [...COPILOT_READ_ONLY_TOOL_ALLOWLIST].sort());
   assert.deepEqual(copilotFullNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
   for (const tool of copilotFullResponse.tools) {
     assert.equal(
@@ -83,7 +99,7 @@ test("HTTP MCP paths expose isolated full, read-only, and router-free Copilot ca
 
   for (const [transport, otherPath] of [
     [fullTransport, "/mcp/copilot-full"],
-    [readOnlyTransport, "/mcp/copilot-full"],
+    [diagnosticTransport, "/mcp/copilot-full"],
     [copilotFullTransport, "/mcp"],
   ] as const) {
     assert.ok(transport.sessionId);

@@ -7,6 +7,7 @@ import "./telemetry.js";
 import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
@@ -36,7 +37,12 @@ import { handleContentOverview } from "./brc-edu/content/content-overview-http.j
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 function createMcpServer(profile) {
     const server = createBrcMcpServer();
-    registerAllTools(server, { profile });
+    if (profile === "copilot-diagnostic") {
+        registerCopilotDiagnosticTools(server);
+    }
+    else {
+        registerAllTools(server, { profile });
+    }
     return server;
 }
 const sessions = new Map();
@@ -112,6 +118,10 @@ setInterval(() => {
     cleanupExpiredSessions().catch(() => { });
 }, 60 * 1000).unref();
 async function handleMcpRequest(session, sessionId, req, res, body) {
+    if (session.profile === "copilot-diagnostic") {
+        await session.transport.handleRequest(req, res, body);
+        return;
+    }
     const normalizedSessionId = sessionId.trim();
     const clientKeyResolution = resolveHttpClientKeyFromRequest(req);
     const clientKey = clientKeyResolution.clientKey;
@@ -452,7 +462,8 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
     });
 });
 async function handleMcpPost(profile, req, res) {
-    await ensureConnectionStoreInitialized();
+    if (profile !== "copilot-diagnostic")
+        await ensureConnectionStoreInitialized();
     const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
@@ -531,11 +542,12 @@ async function handleMcpPost(profile, req, res) {
         sessions.set(sid, provisionalSession);
         trackHttpSession(sid, keyStore);
         rememberSessionPlatform(provisionalSession, sid, initializePlatform.platform);
-        await ensureMcpSessionReady(sid, keyStore);
+        if (profile !== "copilot-diagnostic")
+            await ensureMcpSessionReady(sid, keyStore);
     }
 }
 app.post("/mcp", (req, res) => handleMcpPost("full", req, res));
-app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-read-only", req, res));
+app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-diagnostic", req, res));
 app.post("/mcp/copilot-full", (req, res) => handleMcpPost("copilot-full", req, res));
 app.get("/connect", async (req, res) => {
     await ensureConnectionStoreInitialized();
@@ -585,7 +597,8 @@ app.get("/connect/success/:successId", async (req, res) => {
         .send(renderSuccessPage(successPage.connectedNames, successPage.confirmationCode, successPage.failedCompanies));
 });
 async function handleMcpGet(profile, req, res) {
-    await ensureConnectionStoreInitialized();
+    if (profile !== "copilot-diagnostic")
+        await ensureConnectionStoreInitialized();
     const sessionId = resolveMcpSessionIdFromRequest(req);
     if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId);
@@ -616,7 +629,7 @@ async function handleMcpGet(profile, req, res) {
     });
 }
 app.get("/mcp", (req, res) => handleMcpGet("full", req, res));
-app.get("/mcp/copilot", (req, res) => handleMcpGet("copilot-read-only", req, res));
+app.get("/mcp/copilot", (req, res) => handleMcpGet("copilot-diagnostic", req, res));
 app.get("/mcp/copilot-full", (req, res) => handleMcpGet("copilot-full", req, res));
 app.post("/internal/brc-edu/resources/sync", (req, res) => {
     const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
@@ -818,7 +831,7 @@ async function handleMcpDelete(profile, req, res) {
     });
 }
 app.delete("/mcp", (req, res) => handleMcpDelete("full", req, res));
-app.delete("/mcp/copilot", (req, res) => handleMcpDelete("copilot-read-only", req, res));
+app.delete("/mcp/copilot", (req, res) => handleMcpDelete("copilot-diagnostic", req, res));
 app.delete("/mcp/copilot-full", (req, res) => handleMcpDelete("copilot-full", req, res));
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const httpServer = app.listen(PORT);

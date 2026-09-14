@@ -28,7 +28,8 @@
     "leftovers:scan": "node scripts/tests/dev-only/dev_test_cleanup.mjs scan",
     "leftovers:delete": "node scripts/tests/dev-only/dev_test_cleanup.mjs delete",
     "test": "npm run build && node scripts/run_node_tests.mjs && npm test --prefix functions/brc-edu-resource-processor",
-    "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs"
+    "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs",
+    "demo:copilot-diagnostic": "node scripts/demo_copilot_diagnostic.mjs"
   },
   "dependencies": {
     "@azure/cosmos": "^4.9.3",
