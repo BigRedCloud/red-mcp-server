@@ -1,5 +1,9 @@
 # Temporary Copilot diagnostic profile
 
+This describes the previous public diagnostic profile. The current branch uses
+the [minimal Entra SSO profile](copilot-entra-sso.md); see that document for
+restoring this two-public-tool profile.
+
 The existing `/mcp/copilot` URL exposes only `brc_copilot_connector_status`
 and `brc_find_help_resources`. No connector configuration change is needed.
 This is a source-level temporary switch, not an environment flag: wherever

@@ -1,3 +1,4 @@
+import { EntraConnectionStore } from "./entra_store.js";
 import { CosmosClient } from "@azure/cosmos";
 import { isPendingConnectionExpired } from "./connection_pending.js";
 import { redServerConfig } from "../config/server_config.js";
@@ -70,6 +71,50 @@ function buildConnectionTelemetryDocument(record, pk, ttl) {
     return doc;
 }
 export class CosmosConnectionStore {
+    entra = new EntraConnectionStore({
+        read: async (pk, id) => {
+            try {
+                return (await this.getContainer().item(id, pk).read()).resource ?? null;
+            }
+            catch (error) {
+                if (isCosmosNotFoundError(error))
+                    return null;
+                throw new Error("SSO storage unavailable.");
+            }
+        },
+        create: async (record) => {
+            try {
+                await this.getContainer().items.create(record);
+                return true;
+            }
+            catch (error) {
+                if (error.code === 409)
+                    return false;
+                throw new Error("SSO storage unavailable.");
+            }
+        },
+        replace: async (record, etag) => {
+            if (!etag)
+                return false;
+            try {
+                await this.getContainer().item(record.id, record.pk).replace(record, { accessCondition: { type: "IfMatch", condition: etag } });
+                return true;
+            }
+            catch (error) {
+                if ([404, 412].includes(error.code))
+                    return false;
+                throw new Error("SSO storage unavailable.");
+            }
+        },
+        list: async (pk) => {
+            try {
+                return (await this.getContainer().items.query({ query: "SELECT * FROM c WHERE c.pk = @pk AND c.type = 'entraCompany'", parameters: [{ name: "@pk", value: pk }] }, { partitionKey: pk }).fetchAll()).resources;
+            }
+            catch {
+                throw new Error("SSO storage unavailable.");
+            }
+        },
+    });
     client;
     databaseId;
     containerId;

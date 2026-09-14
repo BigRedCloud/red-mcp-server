@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { brcFetch, companyNameSchema, jsonResponse } from "../../shared.js";
 import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "./payloads_tools.js";
-function buildListQuery(args) {
+export function buildListQuery(args) {
     const params = new URLSearchParams();
     if (args.page !== undefined)
         params.set("page", String(args.page));
@@ -17,6 +17,9 @@ function buildListQuery(args) {
         params.set("$skip", String(args.skip));
     const query = params.toString();
     return query ? `?${query}` : "";
+}
+export async function listBrcCustomers(companyName, page, pageSize) {
+    return brcFetch(companyName, `/v1/customers${buildListQuery({ page, pageSize })}`, { signal: AbortSignal.timeout(15_000) });
 }
 export function registerListTool(server, toolName, description, path) {
     server.tool(toolName, description, {

@@ -1,3 +1,4 @@
+import { entraRequestOwner } from "./entra_auth.js";
 import { assertApiKeyAllowed } from "../config/server_config.js";
 import type { FailedCompanyConnection } from "./connection_store_types.js";
 
@@ -58,7 +59,7 @@ export function logCompanyCredentialValidation(details: {
   validationSucceeded: boolean;
   failureReason?: CompanyCredentialValidationReason;
 }): void {
-  if (!validationDebugEnabled()) {
+  if (entraRequestOwner.getStore() || !validationDebugEnabled()) {
     return;
   }
 

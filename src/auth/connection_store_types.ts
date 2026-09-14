@@ -1,3 +1,4 @@
+import type { EntraConnectionStore } from "./entra_store.js";
 export type StoredCompanyCredential = {
   connectionId: string;
   companyName: string;
@@ -100,6 +101,7 @@ export type PendingActionRecord = {
 };
 
 export interface ConnectionStore {
+  readonly entra: EntraConnectionStore;
   getStoreType(): string;
 
   createPendingConnection(args: {

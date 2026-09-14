@@ -1,3 +1,4 @@
+import { entraRequestOwner } from "./entra_auth.js";
 import { assertApiKeyAllowed } from "../config/server_config.js";
 const BRC_API_BASE_URL = (process.env.BRC_API_BASE_URL ?? "https://app.bigredcloud.com/api").replace(/\/$/, "");
 /** Primary validation — same class of read access Red tools use. */
@@ -16,7 +17,7 @@ function validationDebugEnabled() {
     return process.env.RED_CONNECT_HTTP_MODE === "true";
 }
 export function logCompanyCredentialValidation(details) {
-    if (!validationDebugEnabled()) {
+    if (entraRequestOwner.getStore() || !validationDebugEnabled()) {
         return;
     }
     console.info("Red company credential validation:", JSON.stringify(details));

@@ -1,3 +1,4 @@
+import { entraRequestOwner } from "./auth/entra_auth.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -22,6 +23,8 @@ function credentialDebugEnabled() {
     return process.env.RED_CONNECT_CREDENTIAL_DEBUG?.trim().toLowerCase() === "true";
 }
 function logCredentialDebug(details) {
+    if (entraRequestOwner.getStore())
+        return;
     if (!credentialDebugEnabled()) {
         return;
     }
@@ -1201,6 +1204,8 @@ export async function brcFetch(companyName, path, init = {}) {
                 failedPath: safePath,
             });
         }
+        if (entraRequestOwner.getStore())
+            throw new Error("BRC customer request failed.");
         throw new Error(`BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`);
     }
     let parsedBody;

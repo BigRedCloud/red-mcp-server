@@ -35,7 +35,7 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
     assert.equal(new Set(fullNames).size, 159);
     assert.deepEqual(diagnosticNames, [
         "brc_copilot_connector_status",
-        "brc_find_help_resources",
+        "brc_copilot_list_all_customers",
     ]);
     assert.equal(copilotFullNames.length, 158);
     assert.ok(fullNames.includes(routeToolName));

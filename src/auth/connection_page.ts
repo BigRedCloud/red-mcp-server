@@ -509,8 +509,12 @@ function brandBar(): string {
 
 export function renderConnectPage(
   code: string,
-  options: { telemetryClientId?: string } = {}
+  options: { telemetryClientId?: string; sso?: boolean } = {}
 ): string {
+  if (options.sso) {
+    const rows = Array.from({length:5}, (_,i) => `<fieldset><legend>Company ${i+1}</legend><label>Company name <input type="text" name="companyName" maxlength="200" autocomplete="off"></label><label>API key <input name="apiKey" type="password" maxlength="4096" autocomplete="off"></label></fieldset>`).join("");
+    return pageShell("Connect — Red", brandBar(), `<div class="card"><p>Connect up to five companies to your Microsoft sign-in. Enter credentials only on this page. Existing linked companies are kept.</p><form method="post" action="/connect/sso/complete"><input type="hidden" name="code" value="${escapeHtml(code)}">${rows}<button type="submit" class="btn-primary">Connect companies</button></form></div>`, "", {noReferrer:true});
+  }
   const clientId =
     options.telemetryClientId &&
     options.telemetryClientId.trim().length > 0

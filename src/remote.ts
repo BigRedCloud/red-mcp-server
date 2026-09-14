@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import "dotenv/config";
+import { registerEntraBrowserRoutes } from "./auth/entra_browser.js";
+import { entraRequestOwner, verifyEntraAuthorization } from "./auth/entra_auth.js";
 process.env.RED_CONNECT_HTTP_MODE = "true";
 
 import { randomUUID } from "node:crypto";
@@ -135,12 +137,12 @@ import {
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
-type HttpMcpProfile = "copilot-diagnostic" | "full" | "copilot-read-only" | "copilot-full";
+type HttpMcpProfile = "copilot-sso" | "full" | "copilot-read-only" | "copilot-full";
 
 function createMcpServer(profile: HttpMcpProfile): McpServer {
   const server = createBrcMcpServer();
-  if (profile === "copilot-diagnostic") {
-    registerCopilotDiagnosticTools(server);
+  if (profile === "copilot-sso") {
+    registerCopilotDiagnosticTools(server, true);
   } else {
     registerAllTools(server, { profile });
   }
@@ -264,8 +266,21 @@ async function handleMcpRequest(
   res: Response,
   body?: unknown
 ): Promise<void> {
-  if (session.profile === "copilot-diagnostic") {
-    await session.transport.handleRequest(req, res, body);
+  if (session.profile === "copilot-sso") {
+    const requestBody = body as { method?: string; params?: { name?: string } } | undefined;
+    if (requestBody?.method === "tools/call" && requestBody.params?.name === "brc_copilot_list_all_customers") {
+      let owner;
+      try {
+        owner = await verifyEntraAuthorization(req.headers.authorization);
+      } catch {
+        res.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
+        res.status(401).json({jsonrpc:"2.0", id:(body as {id?: unknown})?.id ?? null, error:{code:-32001,message:"Microsoft sign-in is required or the token is not valid."}});
+        return;
+      }
+      await entraRequestOwner.run(owner, () => session.transport.handleRequest(req, res, body));
+    } else {
+      await session.transport.handleRequest(req, res, body);
+    }
     return;
   }
   const normalizedSessionId = sessionId.trim();
@@ -500,8 +515,18 @@ app.use(
   express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }),
 );
 app.use(express.json());
+// Body-parser errors can include submitted text. Never surface that text on
+// the SSO credential or MCP boundary; preserve existing routes' error handling.
+app.use((error: unknown, req: Request, res: Response, next: (error?: unknown) => void) => {
+  if (req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/")) {
+    res.status(400).json({ error: "Invalid request body." });
+    return;
+  }
+  next(error);
+});
 
 registerFreshdeskPublicImageRoute(app);
+registerEntraBrowserRoutes(app);
 
 function isInitializeRequest(body: unknown): boolean {
   if (Array.isArray(body)) {
@@ -744,7 +769,7 @@ async function handleMcpPost(
   req: Request,
   res: Response,
 ): Promise<void> {
-  if (profile !== "copilot-diagnostic") await ensureConnectionStoreInitialized();
+  if (profile !== "copilot-sso") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
@@ -846,7 +871,7 @@ async function handleMcpPost(
       sid,
       initializePlatform.platform
     );
-    if (profile !== "copilot-diagnostic") await ensureMcpSessionReady(sid, keyStore);
+    if (profile !== "copilot-sso") await ensureMcpSessionReady(sid, keyStore);
   }
 }
 
@@ -854,7 +879,7 @@ app.post("/mcp", (req: Request, res: Response) =>
   handleMcpPost("full", req, res),
 );
 app.post("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpPost("copilot-diagnostic", req, res),
+  handleMcpPost("copilot-sso", req, res),
 );
 app.post("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpPost("copilot-full", req, res),
@@ -937,7 +962,7 @@ async function handleMcpGet(
   req: Request,
   res: Response,
 ): Promise<void> {
-  if (profile !== "copilot-diagnostic") await ensureConnectionStoreInitialized();
+  if (profile !== "copilot-sso") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
@@ -975,7 +1000,7 @@ app.get("/mcp", (req: Request, res: Response) =>
   handleMcpGet("full", req, res),
 );
 app.get("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpGet("copilot-diagnostic", req, res),
+  handleMcpGet("copilot-sso", req, res),
 );
 app.get("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpGet("copilot-full", req, res),
@@ -1239,7 +1264,7 @@ app.delete("/mcp", (req: Request, res: Response) =>
   handleMcpDelete("full", req, res),
 );
 app.delete("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpDelete("copilot-diagnostic", req, res),
+  handleMcpDelete("copilot-sso", req, res),
 );
 app.delete("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpDelete("copilot-full", req, res),

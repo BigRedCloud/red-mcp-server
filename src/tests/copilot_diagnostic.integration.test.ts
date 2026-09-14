@@ -22,15 +22,13 @@ test("Copilot diagnostic initializes, exposes only public read-only tools, and p
   await client.connect(transport);
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-    "brc_copilot_connector_status", "brc_find_help_resources",
+    "brc_copilot_connector_status", "brc_copilot_list_all_customers",
   ]);
   for (const tool of listed.tools) assert.deepEqual(tool.annotations, COPILOT_DIAGNOSTIC_ANNOTATIONS);
   assert.deepEqual(listed.tools[0].inputSchema.properties, {});
   const result = await client.callTool({ name: "brc_copilot_connector_status", arguments: {} });
   assert.deepEqual(result.structuredContent, COPILOT_DIAGNOSTIC_STATUS);
   assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(COPILOT_DIAGNOSTIC_STATUS) }]);
-  const help = await client.callTool({ name: "brc_find_help_resources", arguments: { question: "bank feeds" } });
-  assert.notEqual(help.isError, true);
   for (const name of ["brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_list_customers", "brc_create_customer"]) {
     assert.equal((await client.callTool({ name, arguments: {} })).isError, true, name);
   }

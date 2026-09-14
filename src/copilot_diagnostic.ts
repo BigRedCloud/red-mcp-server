@@ -1,3 +1,4 @@
+import { registerCopilotCustomers } from "./copilot_customers.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.js";
 
@@ -16,7 +17,7 @@ export const COPILOT_DIAGNOSTIC_STATUS = {
 } as const;
 
 /** Temporary HTTP-only registry. Deliberately bypasses company-aware wrappers. */
-export function registerCopilotDiagnosticTools(server: McpServer): void {
+export function registerCopilotDiagnosticTools(server: McpServer, authenticated = false): void {
   server.registerTool("brc_copilot_connector_status", {
     description: "Check Microsoft 365 Copilot connectivity to RED. No company connection required.",
     inputSchema: {},
@@ -25,6 +26,8 @@ export function registerCopilotDiagnosticTools(server: McpServer): void {
     content: [{ type: "text", text: JSON.stringify(COPILOT_DIAGNOSTIC_STATUS) }],
     structuredContent: { ...COPILOT_DIAGNOSTIC_STATUS },
   }));
+
+  if (authenticated) { registerCopilotCustomers(server); return; }
 
   // Reuse the existing tool's schema and handler with profile-local annotations.
   const publicHelpServer = Object.create(server) as McpServer;

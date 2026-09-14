@@ -1,0 +1,195 @@
+# Copilot Entra SSO proof of concept
+
+This revision keeps `/mcp/copilot` and exposes exactly the public
+`brc_copilot_connector_status` and authenticated
+`brc_copilot_list_all_customers`. The main `/mcp` registry is unchanged.
+Nothing in this work deploys code or changes Microsoft configuration.
+
+## Identity and storage
+
+Every customer-tool HTTP call verifies its own bearer token with `jose`.
+Only RS256, configured tenants/audiences, the exact tenant-specific v2 issuer,
+valid time claims, a GUID `tid`/`oid`, and a delegated scope are accepted.
+App-only tokens are rejected. An optional authorized-client allowlist checks `azp`.
+Discovery/JWKS are obtained from Microsoft over HTTPS and cached with key rotation.
+Identity headers, MCP session IDs, connection references and cookies cannot
+authorize accounting calls. No Microsoft tokens are persisted.
+
+The normalized verified `(tid, oid)` pair is hashed into an owner key. An
+`entra:<owner-key>` partition contains an `entraOwner` record with a random
+connection UUID, `entraLink` records, and encrypted `entraCompany` records.
+The existing Cosmos container's `/pk` partition key and `(pk,id)` uniqueness
+are sufficient: create, never upsert, arbitrates owner creation; link consumption
+uses an ETag `IfMatch` replacement. Memory uses the same ownership service with
+atomic synchronous map operations. Owner records contain no credentials or tokens.
+Existing anonymous `connection:*`, `pending:*`, session/ref/claim records remain
+unchanged. Their records are never searched or migrated into Entra ownership.
+
+Links have 256 bits of randomness, ten-minute expiry, and one-time consumption.
+Only a SHA-256 link digest is stored. The link is placed in a URL fragment so
+access logs do not receive it. The browser performs authorization code flow with
+PKCE, state and nonce; its ID token must identify the same owner as the link.
+The credential form uses the existing RED page, with up to five manual company
+entries and no file upload. Encrypted Secure/HttpOnly host-only cookies carry
+short-lived flow state; origin and CSRF checks protect submission. Consumption
+happens before BRC validation: failed validation requires a new link.
+Credentials use the existing AES-GCM encoder; SSO refuses its unencrypted memory
+fallback. Multiple links can add/update companies; existing companies are retained.
+
+## Customer results and limits
+
+The tool accepts only optional `pageSize` (1–50) and `cursor`. It uses the existing
+customer endpoint/query builder and BRC client in a request-local credential map.
+Each call makes at most three page requests, each with a 15-second timeout.
+Each company-page payload is capped at 128 KB; an oversized page is reported
+as a company failure rather than truncated. An encrypted ten-minute continuation
+cursor binds owner, company snapshot, page and page size. A full page always
+requires another page check; no row is silently dropped. A changed company
+snapshot invalidates the cursor and requires restarting. The result has company
+groups and explicit per-company failure entries; later companies still proceed.
+The public result projects common customer identity/contact/balance fields from
+the existing response, strips secret fields and credential values, and rejects
+oversized/unrecognized pages with an explicit company failure. It does not return
+raw BRC errors, internal connection IDs, Entra IDs, or credential metadata.
+Results are bounded by pages, not a consistent BRC database snapshot: source
+changes during pagination can still affect results.
+
+## Manual staging configuration
+
+Decide the allowed pilot tenant(s), API app ID, browser app ID, public staging
+origin and authorized Microsoft caller IDs. Values below are placeholders.
+Configure only staging; this document is not authorization to modify production.
+
+1. In Entra register the API application and expose delegated `access_as_user`.
+   Set `api.requestedAccessTokenVersion` to `2`. Use organizational accounts,
+   not personal Microsoft accounts. Use a tenant allowlist even with multitenancy.
+2. In Teams Developer Portal, Tools → Microsoft Entra SSO client ID registration,
+   register the API client ID, existing MCP URL, organization/app restrictions,
+   and delegated scope. Copy its SSO registration ID and generated Application
+   ID URI. Add that URI to the API app's `identifierUris`; preauthorize the
+   Microsoft Enterprise token-store client for the delegated scope. Add the Web
+   redirect `https://teams.microsoft.com/api/platform/v1.0/oAuthConsentRedirect`.
+   Use the current Microsoft-documented token-store client ID when setting the
+   optional caller allowlist; do not invent a tenant-specific ID.
+   [Microsoft SSO setup](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-authentication-entra-sso)
+3. In the existing federated connector, select Microsoft Entra SSO and supply
+   the Teams SSO registration ID. Keep
+   `https://brc-live-mcp-app-staging.azurewebsites.net/mcp/copilot` as the endpoint.
+   Restrict rollout to pilot users. No new connector or MCP route is needed.
+   [Federated connector configuration](https://learn.microsoft.com/en-us/microsoft-365/copilot/connectors/set-up-custom-federated-connectors)
+4. Register a confidential Web app for the connection page (or deliberately use
+   the same registration). Set its exact redirect to
+   `https://<staging-host>/connect/sso/callback`; allow authorization code flow.
+   Do not enable implicit grants. Store its client secret through staging secret
+   configuration/Key Vault references, never in source. This implementation uses
+   the `organizations` authority: configure the browser app for organizational
+   multi-tenant sign-in and restrict admitted tenants in server configuration.
+   It requests only `openid profile`, with no Graph or offline-access permission.
+5. For eventual cross-tenant distribution, use organizational multi-tenant app
+   registrations and explicit tenant onboarding. A single-tenant API can serve
+   an initial single-tenant pilot, but not general customer distribution.
+   Tenant administrators must approve scope consent where admin-only scope or
+   tenant user-consent policy requires it; connector setup also requires the
+   appropriate Microsoft 365/Entra administrative roles. Plan customer-tenant
+   consent before rollout. [Account types](https://learn.microsoft.com/en-us/entra/identity-platform/single-and-multi-tenant-apps)
+
+Set these Azure staging environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `RED_ENTRA_ALLOWED_TENANTS` | `<pilot-tenant-guid>[,<approved-customer-tenant-guid>]` |
+| `RED_ENTRA_AUDIENCES` | `<API-client-id>,<Teams-generated-application-ID-URI>`; explicit accepted audiences only |
+| `RED_ENTRA_REQUIRED_SCOPE` | `access_as_user` (scope claim value, not full URI) |
+| `RED_ENTRA_ALLOWED_CLIENTS` | `<authorized-Microsoft-client-id>[,...]`; optional additional restriction |
+| `RED_ENTRA_PUBLIC_BASE_URL` | `https://brc-live-mcp-app-staging.azurewebsites.net` |
+| `RED_ENTRA_WEB_CLIENT_ID` | `<browser-app-client-id>` |
+| `RED_ENTRA_WEB_CLIENT_SECRET` | `<Key-Vault-reference-or-secret-setting>` |
+| `RED_CONNECT_CONNECTION_STORE` | `cosmos` for durable staging; memory is ephemeral |
+| `RED_CONNECT_COSMOS_CONNECTION_STRING` | existing secure staging Cosmos setting |
+| `RED_CONNECT_COSMOS_DATABASE` / `RED_CONNECT_COSMOS_CONTAINER` | existing staging database/container |
+| `RED_CONNECT_ENCRYPTION_KEY` | secure existing encryption material; shared across instances |
+
+No BRC company credentials belong in these settings. Missing Entra configuration
+fails closed for customers while the status tool remains public. Configure HTTPS
+at the public ingress; do not configure Easy Auth to redirect anonymous MCP
+status/initialize calls. The application does not trust Easy Auth identity headers.
+Use v2 tokens: v1 tokens are intentionally unsupported. Confirm actual connector
+token audiences during the pilot without logging or copying tokens into chat.
+
+## Verification and security assumptions
+
+Run `npm run build`, then `npm run demo:copilot-sso`. The demo generates ephemeral
+test JWT keys, uses explicit test-only discovery/token/BRC mocks, exercises the
+browser form, and shows `connection_required` followed by two-company results.
+It prints neither the token nor the connection link. Never set its
+`RED_ENTRA_TEST_PRIVATE_JWK` or preload in a deployment. The status-only
+`npm run demo:copilot-diagnostic` still works against the current profile.
+
+Focused commands: `node --test build/auth/entra_auth.test.js build/auth/entra_store.test.js`
+and `node --test build/tests/entra_sso.integration.test.js build/tests/mcp_profile_routing.integration.test.js build/tests/copilot_diagnostic.integration.test.js`.
+Run the existing connection-isolation tests and `npm test` as regressions.
+
+This is a local proof of concept, not customer-ready certification. Cosmos
+concurrency is exercised through a mocked Cosmos adapter, not a live account.
+Browser tests exercise the HTTP protocol, not Microsoft's real sign-in UI.
+Trust requires HTTPS, protected encryption/application secrets, correct admin
+configuration, and trusted application/storage administrators. Do not enable
+request-body, Authorization/Cookie/header, response-body or credential-form
+logging at the proxy or APM layer. The code does not emit those secrets, but
+cannot control a separately configured external logger. Connection URLs are
+intentionally returned only when linking is required; treat them as sensitive.
+
+## Restore the previous diagnostic profile
+
+In `src/remote.ts`, change only `registerCopilotDiagnosticTools(server, true)`
+to `registerCopilotDiagnosticTools(server)` in the `copilot-sso` branch. The
+existing default registrar restores status plus `brc_find_help_resources`;
+`/mcp` remains unchanged. In the routing and diagnostic integration tests restore
+the second tool name to `brc_find_help_resources`; restore its help invocation
+in the diagnostic test. Remove/disable the SSO integration test and demo command
+when deliberately rolling back that feature. Rebuild. Owner records may remain
+inert in Cosmos; do not reinterpret or migrate them into anonymous connections.
+If rolling back all SSO changes, also remove the browser-route registration and
+SSO-specific modules after reviewing unrelated working-tree edits. Any later
+deployment or connector authentication change is a separate manual action.
+
+## Implementation file inventory
+
+New files:
+
+- `src/auth/entra_auth.ts`
+- `src/auth/entra_store.ts`
+- `src/auth/entra_browser.ts`
+- `src/copilot_customers.ts`
+- `src/auth/entra_auth.test.ts`
+- `src/auth/entra_store.test.ts`
+- `src/copilot_customers.test.ts`
+- `src/tests/entra_fixture.ts`
+- `src/tests/entra_mock_server.ts`
+- `src/tests/entra_sso.integration.test.ts`
+- `scripts/demo_copilot_sso.mjs`
+- `docs/copilot-entra-sso.md`
+
+Updated files:
+
+- `package.json` and `package-lock.json`: direct `jose` dependency; SSO demo command.
+- `src/remote.ts`: profile selection, per-request bearer verification, browser
+  routes and generic SSO body-parser errors.
+- `src/copilot_diagnostic.ts`: retain public diagnostic registrar and select the
+  authenticated customer tool for the current profile.
+- `src/auth/connection_store_types.ts`, `src/auth/memory_connection_store.ts`,
+  `src/auth/cosmos_connection_store.ts`: additive owner-store integration.
+- `src/auth/connection_page.ts`: SSO manual-entry form within the existing page.
+- `src/auth/credential_validation.ts`, `src/shared.ts`: suppress credential
+  debugging/raw BRC errors in the SSO request context only.
+- `src/tools/general/list_tools.ts`: reuse customer endpoint, query builder and
+  existing BRC client with a bounded request timeout.
+- `src/tests/mcp_profile_routing.integration.test.ts` and
+  `src/tests/copilot_diagnostic.integration.test.ts`: exact minimal profile and
+  public status regression coverage.
+- `scripts/tests/lib/diagnostic_guards.mjs`: detect Entra-store access too.
+- `docs/copilot-diagnostic.md`: identify the diagnostic document as historical
+  and link to the current profile/rollback instructions.
+
+Corresponding `build/` outputs are generated only by `npm run build`. Existing
+unrelated working-tree changes are not reverted or included as SSO source edits.
