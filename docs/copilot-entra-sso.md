@@ -17,7 +17,8 @@ authorize accounting calls. No Microsoft tokens are persisted.
 
 The normalized verified `(tid, oid)` pair is hashed into an owner key. An
 `entra:<owner-key>` partition contains an `entraOwner` record with a random
-connection UUID, `entraLink` records, and encrypted `entraCompany` records.
+connection UUID, legacy `entraLink` records, new `entraPendingRequest` records,
+and encrypted `entraCompany` records.
 The existing Cosmos container's `/pk` partition key and `(pk,id)` uniqueness
 are sufficient: create, never upsert, arbitrates owner creation; link consumption
 uses an ETag `IfMatch` replacement. Memory uses the same ownership service with
@@ -25,10 +26,21 @@ atomic synchronous map operations. Owner records contain no credentials or token
 Existing anonymous `connection:*`, `pending:*`, session/ref/claim records remain
 unchanged. Their records are never searched or migrated into Entra ownership.
 
-Links have 256 bits of randomness, ten-minute expiry, and one-time consumption.
-Only a SHA-256 link digest is stored. The link is placed in a URL fragment so
-access logs do not receive it. The browser performs authorization code flow with
-PKCE, state and nonce; its ID token must identify the same owner as the link.
+New connection URLs use `/connect?request=req_<random-handle>`. The handle is
+public, contains 256 random bits and no identity, claims or credentials.
+Its SHA-256 digest identifies a distinct `request:` record, never a legacy
+secret-link record. Possession grants no access: only the verified Microsoft
+owner can resolve it within their partition. Initial GETs perform no lookup,
+reveal no existence information and never consume state; scanners are harmless.
+The query is copied into a hidden POST field and optionally removed from browser
+history. No fragment is required.
+
+The original ten-minute database deadline remains authoritative through sign-in
+and retries. The authenticated cookie is capped to that deadline. Completion
+uses atomic ETag consumption; wrong users, unknown handles, expired requests
+and replays receive the same generic failure. The browser preserves authorization
+code flow with PKCE, state and nonce. Old secret link records are not exposed in
+URLs or reinterpreted as public requests.
 The credential form uses the existing RED page, with up to five manual company
 entries and no file upload. Encrypted Secure/HttpOnly host-only cookies carry
 short-lived flow state; origin and CSRF checks protect submission. Consumption
@@ -137,7 +149,8 @@ configuration, and trusted application/storage administrators. Do not enable
 request-body, Authorization/Cookie/header, response-body or credential-form
 logging at the proxy or APM layer. The code does not emit those secrets, but
 cannot control a separately configured external logger. Connection URLs are
-intentionally returned only when linking is required; treat them as sensitive.
+intentionally returned only when linking is required. New request handles are
+public locators, not authorization credentials; avoid unnecessary diagnostic logging.
 
 ## Restore the previous diagnostic profile
 
@@ -197,7 +210,7 @@ unrelated working-tree changes are not reverted or included as SSO source edits.
 ### SSO browser regression prerequisites
 
 The SSO integration test uses Playwright to exercise native browser form POSTs,
-including the fragment-to-hidden-field handoff and browser-generated Origin.
+including the public-query-to-hidden-field handoff and browser-generated Origin.
 Windows runs use installed Microsoft Edge in headless mode. On other platforms,
 install the test browser with `npx playwright install --with-deps chromium` before
 running `npm test`. No real Microsoft sign-in or BRC credentials are used.
@@ -205,6 +218,6 @@ running `npm test`. No real Microsoft sign-in or BRC credentials are used.
 SSO pages use `Referrer-Policy: strict-origin` so native form POSTs retain Origin
 without sending URL paths, queries or fragments as referrers. The company-entry
 page must not override this with a `no-referrer` meta policy. Anonymous connection
-pages retain their existing privacy policy. Connection links remain fragments;
-the landing page enables sign-in only after capturing a valid link into the POST
-field and removes the fragment from browser history.
+pages retain their existing privacy policy. The landing page enables sign-in
+only for a syntactically valid public request handle. Infrastructure URL logs
+may contain that non-secret locator; application diagnostics do not emit it.

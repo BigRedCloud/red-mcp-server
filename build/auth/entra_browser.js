@@ -2,8 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { decryptCredentialSecret, encryptCredentialSecret } from "./credential_encryption.js";
 import { ensureConnectionStoreInitialized, getConnectionStore } from "./connection_store.js";
 import { entraRequestOwner, verifyEntraToken } from "./entra_auth.js";
-import { ownerKey } from "./entra_store.js";
-import { renderConnectPage } from "./connection_page.js";
+import { isPendingRequestHandle, ownerKey } from "./entra_store.js";
+import { escapeHtml, renderConnectPage } from "./connection_page.js";
 import { validateCompanyApiKeyCredential } from "./credential_validation.js";
 import { getApiKeyExpirationMs } from "../config/server_config.js";
 const COOKIE = "__Host-red-sso";
@@ -51,7 +51,7 @@ function safe(handler) {
     } };
 }
 export function registerEntraBrowserRoutes(app) {
-    // The fragment is never sent in the HTTP URL or an access log.
+    // Public handles disclose no owner or credentials; GET never resolves or consumes state.
     app.get("/connect", (req, res, next) => {
         if (req.query.code !== undefined) {
             next();
@@ -59,7 +59,8 @@ export function registerEntraBrowserRoutes(app) {
         } // Existing anonymous flow.
         headers(res);
         if (req.query.sso !== "1") {
-            res.type("html").send(`<!doctype html><title>Connect RED</title><p>Continue with Microsoft to connect your companies.</p><p id="link-error">Return to Copilot and request a new connection link.</p><form method="post" action="/connect/sso/start"><input type="hidden" name="link" id="link"><button id="sign-in" disabled>Sign in with Microsoft</button></form><script>const link=new URLSearchParams(location.hash.slice(1)).get('sso')||'';history.replaceState(null,'','/connect');if(/^[A-Za-z0-9_-]{43}$/.test(link)){document.getElementById('link').value=link;document.getElementById('sign-in').disabled=false;document.getElementById('link-error').hidden=true;}</script>`);
+            const request = isPendingRequestHandle(req.query.request) ? req.query.request : "";
+            res.type("html").send(`<!doctype html><title>Connect RED</title><p>Continue with Microsoft to connect your companies.</p><p id="link-error" ${request ? "hidden" : ""}>Return to Copilot and request a new connection link.</p><form method="post" action="/connect/sso/start"><input type="hidden" name="request" id="request" value="${escapeHtml(request)}"><button id="sign-in" ${request ? "" : "disabled"}>Sign in with Microsoft</button></form><script>history.replaceState(null,'','/connect');</script>`);
             return;
         }
         void safe(async (request, response) => {
@@ -67,20 +68,20 @@ export function registerEntraBrowserRoutes(app) {
             if (session.purpose !== "connected" || !session.owner)
                 throw new Error();
             await ensureConnectionStoreInitialized();
-            if (!await getConnectionStore().entra.checkLink(session.owner, session.link))
+            if (!await getConnectionStore().entra.checkPendingRequest(session.owner, session.request))
                 throw new Error();
             response.type("html").send(renderConnectPage(session.state, { sso: true }));
         })(req, res);
     });
     app.post("/connect/sso/start", safe(async (req, res) => {
         sameOrigin(req);
-        const link = req.body.link;
-        if (typeof link !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(link))
+        const request = req.body.request;
+        if (!isPendingRequestHandle(request))
             throw new Error();
         const client = process.env.RED_ENTRA_WEB_CLIENT_ID;
         if (!client)
             throw new Error();
-        const session = { purpose: "oauth", exp: Date.now() + 600_000, link, state: random(), nonce: random(), verifier: random() };
+        const session = { purpose: "oauth", exp: Date.now() + 600_000, request, state: random(), nonce: random(), verifier: random() };
         cookie(res, session);
         const url = new URL("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize");
         url.search = new URLSearchParams({ client_id: client, response_type: "code", response_mode: "form_post", redirect_uri: `${ssoPublicBase()}/connect/sso/callback`, scope: "openid profile", state: session.state, nonce: session.nonce, code_challenge: createHash("sha256").update(session.verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
@@ -104,9 +105,10 @@ export function registerEntraBrowserRoutes(app) {
             throw new Error();
         const owner = await verifyEntraToken(result.id_token, { audience: client, nonce: session.nonce });
         await ensureConnectionStoreInitialized();
-        if (!await getConnectionStore().entra.checkLink(owner, session.link))
+        const expiresAt = await getConnectionStore().entra.pendingRequestExpiry(owner, session.request);
+        if (!expiresAt)
             throw new Error();
-        cookie(res, { purpose: "connected", exp: session.exp, link: session.link, owner, state: random() });
+        cookie(res, { purpose: "connected", exp: Math.min(session.exp, expiresAt), request: session.request, owner, state: random() });
         res.redirect(303, "/connect?sso=1");
     }));
     app.post("/connect/sso/complete", safe(async (req, res) => {
@@ -131,7 +133,7 @@ export function registerEntraBrowserRoutes(app) {
             throw new Error();
         await ensureConnectionStoreInitialized();
         const store = getConnectionStore().entra;
-        if (!await store.checkLink(session.owner, session.link, true))
+        if (!await store.checkPendingRequest(session.owner, session.request, true))
             throw new Error();
         const validated = [];
         for (const company of companies) {

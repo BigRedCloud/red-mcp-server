@@ -16,6 +16,8 @@ export interface SsoBackend {
   list(pk: string): Promise<SsoRecord[]>;
 }
 export const SSO_LINK_TTL_MS = 10 * 60_000;
+export const isPendingRequestHandle = (value: unknown): value is string =>
+  typeof value === "string" && /^req_[A-Za-z0-9_-]{43}$/.test(value);
 export function ownerKey(owner: EntraOwner): string {
   const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!guid.test(owner.tenantId) || !guid.test(owner.objectId)) throw new Error("Invalid owner identity.");
@@ -53,6 +55,42 @@ export class EntraConnectionStore {
     if (!link || link.type !== "entraLink" || link.ownerKey !== record.ownerKey || link.connectionId !== record.connectionId || link.used || !link.expiresAt || link.expiresAt <= this.now()) return false;
     if (!consume) return true;
     return this.backend.replace({ ...link, used: true }, link._etag!);
+  }
+  /** Public locator only. Authorization always requires the verified owner. */
+  async createPendingRequest(owner: EntraOwner): Promise<string> {
+    const record = await this.owner(owner, true);
+    if (!record) throw new Error("Connection unavailable.");
+    const handle = "req_" + randomBytes(32).toString("base64url");
+    const created = await this.backend.create({
+      pk: record.pk, id: this.requestId(handle), type: "entraPendingRequest",
+      connectionId: record.connectionId, ownerKey: record.ownerKey,
+      used: false, expiresAt: this.now() + SSO_LINK_TTL_MS, ttl: SSO_LINK_TTL_MS / 1000,
+    });
+    if (!created) throw new Error("Connection unavailable.");
+    return handle;
+  }
+  private requestId(handle: string): string {
+    return "request:" + createHash("sha256").update(handle).digest("hex");
+  }
+  private async pendingRequest(owner: EntraOwner, handle: string): Promise<SsoRecord | null> {
+    if (!isPendingRequestHandle(handle)) return null;
+    const record = await this.owner(owner);
+    if (!record) return null;
+    // Never search other partitions or resolve an owner from a public handle.
+    const request = await this.backend.read(record.pk, this.requestId(handle));
+    if (!request || request.type !== "entraPendingRequest" ||
+        request.ownerKey !== record.ownerKey || request.connectionId !== record.connectionId ||
+        request.used || !request.expiresAt || request.expiresAt <= this.now()) return null;
+    return request;
+  }
+  async pendingRequestExpiry(owner: EntraOwner, handle: string): Promise<number | null> {
+    return (await this.pendingRequest(owner, handle))?.expiresAt ?? null;
+  }
+  async checkPendingRequest(owner: EntraOwner, handle: string, consume = false): Promise<boolean> {
+    const request = await this.pendingRequest(owner, handle);
+    if (!request) return false;
+    if (!consume) return true;
+    return this.backend.replace({ ...request, used: true }, request._etag!);
   }
   async listCompanies(owner: EntraOwner): Promise<StoredCompanyCredential[]> {
     const record = await this.owner(owner);

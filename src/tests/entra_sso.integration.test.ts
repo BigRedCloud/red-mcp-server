@@ -31,8 +31,8 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   assert.equal(JSON.stringify(invalidArguments).includes("must-never-be-used"),false);
   const needed: any=await a.callTool({name:"brc_copilot_list_all_customers",arguments:{}});
   assert.equal(needed.structuredContent?.status,"connection_required");
-  const link=new URL(String(needed.structuredContent?.connectionUrl));assert.equal(link.origin,"https://red.example.test");assert.equal(link.pathname,"/connect");assert.equal(link.search,"");
-  const linkToken=new URLSearchParams(link.hash.slice(1)).get("sso")!;
+  const link=new URL(String(needed.structuredContent?.connectionUrl));assert.equal(link.origin,"https://red.example.test");assert.equal(link.pathname,"/connect");assert.equal(link.hash,"");
+  const linkToken=link.searchParams.get("request")!;
   // Use a real browser: manually supplying Origin masks referrer-policy defects.
   const browser=await chromium.launch({channel:process.platform==="win32"?"msedge":undefined,headless:true});
   t.after(()=>browser.close());
@@ -52,18 +52,18 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     });
     await route.fulfill({status:upstream.status,headers:Object.fromEntries(upstream.headers),body:Buffer.from(await upstream.arrayBuffer())});
   });
-  for(const fragment of ["","#sso=invalid","#sso="+"a".repeat(44)]) {
+  for(const fragment of ["","?request=invalid","?request=req_"+"a".repeat(44)]) {
     await browserPage.goto("about:blank");
     await browserPage.goto("https://red.example.test/connect"+fragment);
     assert.equal(await browserPage.locator("#sign-in").isDisabled(),true);
-    assert.equal(await browserPage.locator("#link").inputValue(),"");
+    assert.equal(await browserPage.locator("#request").inputValue(),"");
     assert.equal(await browserPage.locator("#link-error").isVisible(),true);
     assert.equal(new URL(browserPage.url()).hash,"");
   }
   await browserPage.goto("about:blank");
   await browserPage.goto(link.toString());
   assert.equal(await browserPage.locator("#sign-in").isEnabled(),true);
-  assert.ok((await browserPage.locator("#link").inputValue())===linkToken);
+  assert.ok((await browserPage.locator("#request").inputValue())===linkToken);
   assert.equal(browserPage.url(),"https://red.example.test/connect");
   const nativeStart=browserPage.waitForResponse(r=>r.url()==="https://red.example.test/connect/sso/start");
   await browserPage.locator("#sign-in").click();
@@ -72,18 +72,29 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   await browserPage.waitForLoadState("load");
   assert.equal(started.status(),303);
   assert.equal((await started.request().allHeaders()).origin,"https://red.example.test");
-  assert.ok(new URLSearchParams(started.request().postData()!).get("link")===linkToken);
+  assert.ok(new URLSearchParams(started.request().postData()!).get("request")===linkToken);
   for(const origin of ["null","https://evil.example"]) {
-    const denied=await fetch(base+"/connect/sso/start",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded",origin},body:new URLSearchParams({link:linkToken})});
+    const denied=await fetch(base+"/connect/sso/start",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded",origin},body:new URLSearchParams({request:linkToken})});
     assert.equal(denied.status,401);
     assert.ok(!(await denied.text()).includes(linkToken));
   }
-  async function signIn(other=false) {
-    const start=await fetch(`${base}/connect/sso/start`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",origin:"https://red.example.test"},body:new URLSearchParams({link:linkToken})});
+  async function signIn(other=false,handle=linkToken,badState=false,badCookie=false) {
+    const start=await fetch(`${base}/connect/sso/start`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",origin:"https://red.example.test"},body:new URLSearchParams({request:handle})});
     assert.equal(start.status,303);const auth=new URL(start.headers.get("location")!);const cookie=start.headers.get("set-cookie")!.split(";")[0];
-    const callback=await fetch(`${base}/connect/sso/callback`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",cookie},body:new URLSearchParams({state:auth.searchParams.get("state")!,code:(other?"other:":"")+auth.searchParams.get("nonce")!})});
+    const callback=await fetch(`${base}/connect/sso/callback`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",cookie:badCookie?cookie+"tampered":cookie},body:new URLSearchParams({state:badState?"wrong":auth.searchParams.get("state")!,code:(other?"other:":"")+auth.searchParams.get("nonce")!})});
     return callback;
   }
+  for(let i=0;i<3;i++) {
+    const scan:Response=await fetch(base+link.pathname+link.search);
+    assert.equal(scan.status,200);
+    assert.equal(scan.headers.get("set-cookie"),null);
+  }
+  const unknown="req_"+"x".repeat(43);
+  const unknownPage=await fetch(base+"/connect?request="+unknown);
+  assert.equal(unknownPage.status,200);
+  assert.equal((await signIn(false,unknown)).status,401);
+  assert.equal((await signIn(false,linkToken,true)).status,401);
+  assert.equal((await signIn(false,linkToken,false,true)).status,401);
   assert.equal((await signIn(true)).status,401,"another Microsoft user cannot open this link");
   const callback=await signIn();assert.equal(callback.status,303);const cookie=callback.headers.get("set-cookie")!.split(";")[0];
   const page=await fetch(`${base}/connect?sso=1`,{headers:{cookie}});assert.equal(page.status,200);
@@ -113,6 +124,7 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   const complete=()=>fetch(`${base}/connect/sso/complete`,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded",cookie,origin:"https://red.example.test"},body:form});
   const submissions=await Promise.all([complete(),complete()]);assert.deepEqual(submissions.map(r=>r.status).sort(),[200,401]);
   assert.equal((await fetch(`${base}/connect?sso=1`,{headers:{cookie}})).status,401);
+  assert.equal((await signIn()).status,401,"consumed request cannot reopen");
   const first: any=await a.callTool({name:"brc_copilot_list_all_customers",arguments:{pageSize:2}});
   assert.ok(first.structuredContent?.nextCursor);
   const stolen: any=await b.callTool({name:"brc_copilot_list_all_customers",arguments:{cursor:first.structuredContent!.nextCursor}});

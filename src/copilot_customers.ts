@@ -23,8 +23,8 @@ export async function listCopilotCustomers(args: {cursor?:string;pageSize?:numbe
     const companies = await store.listCompanies(owner);
     if (!companies.length) {
       const base = ssoPublicBase();
-      const link = await store.createLink(owner);
-      return response({status:"connection_required",message:"Connect your Big Red Cloud companies securely using your Microsoft sign-in. Enter credentials only on the connection page.",connectionUrl:`${base}/connect#sso=${link}`});
+      const request = await store.createPendingRequest(owner);
+      return response({status:"connection_required",message:"Connect your Big Red Cloud companies securely using your Microsoft sign-in. Enter credentials only on the connection page.",connectionUrl:`${base}/connect?request=${request}`});
     }
     const snapshot = createHash("sha256").update(JSON.stringify(companies.map(c=>[c.companyName,c.updatedAt]))).digest("hex");
     let cursor: Cursor = {owner:ownerKey(owner),snapshot,index:0,page:1,pageSize:args.pageSize??20,exp:Date.now()+600_000};

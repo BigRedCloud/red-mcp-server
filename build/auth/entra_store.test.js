@@ -7,7 +7,7 @@ else
 import { randomUUID } from "node:crypto";
 import { CosmosConnectionStore } from "./cosmos_connection_store.js";
 import { MemoryConnectionStore } from "./memory_connection_store.js";
-import { EntraConnectionStore, createMemorySsoBackend, SSO_LINK_TTL_MS } from "./entra_store.js";
+import { EntraConnectionStore, createMemorySsoBackend, SSO_LINK_TTL_MS, ownerKey } from "./entra_store.js";
 import { decodeStoredApiKey } from "./credential_secret.js";
 function cosmosFixture() {
     const backend = createMemorySsoBackend();
@@ -75,4 +75,42 @@ test("SSO links expire at the exact deadline and unencrypted persistence fails c
     env(t, "RED_CONNECT_COSMOS_CONNECTION_STRING", "");
     await assert.rejects(store.saveCompanies(owner, [{ companyName: "A", apiKey: "test-only", expiresAt: now + 1000 }]));
     assert.deepEqual(await store.listCompanies(owner), []);
+});
+for (const kind of ["memory", "cosmos"])
+    test(`${kind}: public pending requests require owner and consume atomically`, async () => {
+        const store = (kind === "memory" ? new MemoryConnectionStore() : cosmosFixture()).entra;
+        const owner = { tenantId: randomUUID(), objectId: randomUUID() }, other = { ...owner, objectId: randomUUID() };
+        const handle = await store.createPendingRequest(owner);
+        assert.match(handle, /^req_[A-Za-z0-9_-]{43}$/);
+        assert.equal(await store.checkLink(owner, handle, true), false);
+        const secret = await store.createLink(owner);
+        assert.equal(await store.checkPendingRequest(owner, secret, true), false);
+        assert.equal(await store.checkPendingRequest(other, handle, true), false);
+        assert.equal(await store.checkPendingRequest({ ...owner, tenantId: randomUUID() }, handle, true), false);
+        assert.equal(await store.checkPendingRequest(owner, "req_" + "x".repeat(43), true), false);
+        assert.equal(await store.checkPendingRequest(owner, "malformed", true), false);
+        const expiry = await store.pendingRequestExpiry(owner, handle);
+        for (let i = 0; i < 3; i++)
+            assert.equal(await store.checkPendingRequest(owner, handle), true);
+        assert.equal(await store.pendingRequestExpiry(owner, handle), expiry);
+        const results = await Promise.all(Array.from({ length: 10 }, () => store.checkPendingRequest(owner, handle, true)));
+        assert.equal(results.filter(Boolean).length, 1);
+        assert.equal(await store.checkPendingRequest(owner, handle), false);
+    });
+test("pending request original deadline is authoritative and records contain no credentials", async () => {
+    let now = 1000;
+    const backend = createMemorySsoBackend(), store = new EntraConnectionStore(backend, () => now);
+    const owner = { tenantId: randomUUID(), objectId: randomUUID() }, handle = await store.createPendingRequest(owner);
+    const records = await backend.list("entra:" + ownerKey(owner));
+    const pending = records.find(r => r.type === "entraPendingRequest");
+    assert.deepEqual(Object.keys(pending).sort(), ["_etag", "connectionId", "expiresAt", "id", "ownerKey", "pk", "ttl", "type", "used"].sort());
+    assert.ok(pending.id.startsWith("request:"));
+    for (const value of [handle, owner.tenantId, owner.objectId])
+        assert.equal(JSON.stringify(records).includes(value), false);
+    now += SSO_LINK_TTL_MS - 1;
+    assert.equal(await store.checkPendingRequest(owner, handle), true);
+    assert.equal(await store.pendingRequestExpiry(owner, handle), 1000 + SSO_LINK_TTL_MS);
+    now++;
+    assert.equal(await store.checkPendingRequest(owner, handle, true), false);
+    assert.equal(await store.pendingRequestExpiry(owner, handle), null);
 });

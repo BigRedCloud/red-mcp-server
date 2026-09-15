@@ -16,9 +16,9 @@ try {
   const needed=await client.callTool({name:"brc_copilot_list_all_customers",arguments:{}});
   assert.equal(needed.structuredContent.status,"connection_required");
   console.log("Before linking:",needed.structuredContent.status,"(secure link omitted from console)");
-  const link=new URLSearchParams(new URL(needed.structuredContent.connectionUrl).hash.slice(1)).get("sso");
+  const request=new URL(needed.structuredContent.connectionUrl).searchParams.get("request");
   const post=(path,body,cookie)=>fetch(`${base}${path}`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",origin:"https://red.example.test",...(cookie?{cookie}:{})},body});
-  const start=await post("/connect/sso/start",new URLSearchParams({link}));
+  const start=await post("/connect/sso/start",new URLSearchParams({request}));
   assert.equal(start.status,303);
   const auth=new URL(start.headers.get("location"));
   const callback=await post("/connect/sso/callback",new URLSearchParams({state:auth.searchParams.get("state"),code:auth.searchParams.get("nonce")}),start.headers.get("set-cookie").split(";")[0]);
