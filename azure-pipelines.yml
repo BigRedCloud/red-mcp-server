@@ -39,6 +39,7 @@ stages:
         npm install
         npm install --prefix functions/brc-edu-resource-processor
         npm run build --if-present
+        npx playwright install --with-deps chromium
         npm run test --if-present
       displayName: 'npm install, build and test'
 
