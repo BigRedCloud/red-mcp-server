@@ -193,3 +193,18 @@ Updated files:
 
 Corresponding `build/` outputs are generated only by `npm run build`. Existing
 unrelated working-tree changes are not reverted or included as SSO source edits.
+
+### SSO browser regression prerequisites
+
+The SSO integration test uses Playwright to exercise native browser form POSTs,
+including the fragment-to-hidden-field handoff and browser-generated Origin.
+Windows runs use installed Microsoft Edge in headless mode. On other platforms,
+install the test browser with `npx playwright install --with-deps chromium` before
+running `npm test`. No real Microsoft sign-in or BRC credentials are used.
+
+SSO pages use `Referrer-Policy: strict-origin` so native form POSTs retain Origin
+without sending URL paths, queries or fragments as referrers. The company-entry
+page must not override this with a `no-referrer` meta policy. Anonymous connection
+pages retain their existing privacy policy. Connection links remain fragments;
+the landing page enables sign-in only after capturing a valid link into the POST
+field and removes the fragment from browser history.

@@ -17,7 +17,8 @@ export function ssoPublicBase(): string {
   return url.origin;
 }
 function headers(res: Response) {
-  res.setHeader("Cache-Control", "no-store"); res.setHeader("Referrer-Policy", "no-referrer");
+  // Native form POSTs need a non-null Origin for the strict same-origin check.
+  res.setHeader("Cache-Control", "no-store"); res.setHeader("Referrer-Policy", "strict-origin");
   res.setHeader("X-Frame-Options", "DENY"); res.setHeader("X-Content-Type-Options", "nosniff");
 }
 function cookie(res: Response, value: BrowserState) {
@@ -46,7 +47,7 @@ export function registerEntraBrowserRoutes(app: Express): void {
     if (req.query.code !== undefined) { next(); return; } // Existing anonymous flow.
     headers(res);
     if (req.query.sso !== "1") {
-      res.type("html").send(`<!doctype html><title>Connect RED</title><p>Continue with Microsoft to connect your companies.</p><form method="post" action="/connect/sso/start"><input type="hidden" name="link" id="link"><button>Sign in with Microsoft</button></form><script>document.getElementById('link').value=new URLSearchParams(location.hash.slice(1)).get('sso')||'';history.replaceState(null,'','/connect');</script>`);
+      res.type("html").send(`<!doctype html><title>Connect RED</title><p>Continue with Microsoft to connect your companies.</p><p id="link-error">Return to Copilot and request a new connection link.</p><form method="post" action="/connect/sso/start"><input type="hidden" name="link" id="link"><button id="sign-in" disabled>Sign in with Microsoft</button></form><script>const link=new URLSearchParams(location.hash.slice(1)).get('sso')||'';history.replaceState(null,'','/connect');if(/^[A-Za-z0-9_-]{43}$/.test(link)){document.getElementById('link').value=link;document.getElementById('sign-in').disabled=false;document.getElementById('link-error').hidden=true;}</script>`);
       return;
     }
     void safe(async (request,response) => {

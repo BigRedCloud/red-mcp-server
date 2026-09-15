@@ -43,6 +43,8 @@ for (const kind of ["memory", "cosmos"])
         assert.ok((await Promise.all(links.map(link => store.checkLink(a, link)))).every(Boolean));
         assert.equal(await store.checkLink({ ...a, tenantId: randomUUID() }, links[0], true), false);
         assert.equal(await store.checkLink(b, links[0], true), false);
+        const tampered = (links[0][0] === "a" ? "b" : "a") + links[0].slice(1);
+        assert.equal(await store.checkLink(a, tampered, true), false);
         const used = await Promise.all(Array.from({ length: 10 }, () => store.checkLink(a, links[0], true)));
         assert.equal(used.filter(Boolean).length, 1);
         assert.equal(await store.checkLink(a, links[0]), false);

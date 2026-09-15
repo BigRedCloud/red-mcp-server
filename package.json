@@ -42,11 +42,11 @@
     "csv-parse": "^7.0.1",
     "dotenv": "latest",
     "express": "^5.2.1",
+    "jose": "^6.2.3",
     "multer": "^2.2.0",
     "readline-sync": "^1.4.10",
     "typescript": "latest",
-    "zod": "latest",
-    "jose": "^6.2.3"
+    "zod": "latest"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -54,6 +54,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "latest",
     "@types/readline-sync": "^1.4.8",
+    "playwright": "^1.63.0",
     "tsx": "latest"
   },
   "allowScripts": {

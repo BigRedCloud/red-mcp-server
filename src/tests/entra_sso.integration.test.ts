@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chromium } from "playwright";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createEntraFixture, TEST_OTHER, TEST_USER } from "./entra_fixture.js";
@@ -32,6 +33,51 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   assert.equal(needed.structuredContent?.status,"connection_required");
   const link=new URL(String(needed.structuredContent?.connectionUrl));assert.equal(link.origin,"https://red.example.test");assert.equal(link.pathname,"/connect");assert.equal(link.search,"");
   const linkToken=new URLSearchParams(link.hash.slice(1)).get("sso")!;
+  // Use a real browser: manually supplying Origin masks referrer-policy defects.
+  const browser=await chromium.launch({channel:process.platform==="win32"?"msedge":undefined,headless:true});
+  t.after(()=>browser.close());
+  const pageContext=await browser.newContext();
+  const browserPage=await pageContext.newPage();
+  const browserErrors:string[]=[];
+  browserPage.on("console",m=>browserErrors.push(m.text()));
+  browserPage.on("pageerror",e=>browserErrors.push(e.message));
+  await browserPage.route("https://login.microsoftonline.com/**",route=>route.fulfill({status:200,body:"Microsoft sign-in"}));
+  await browserPage.route("https://red.example.test/**",async route=>{
+    const request=route.request();
+    if(request.resourceType()!=="document") { await route.fulfill({status:204,body:""}); return; }
+    const url=new URL(request.url());
+    const upstream=await fetch(base+url.pathname+url.search,{
+      method:request.method(),headers:await request.allHeaders(),
+      body:request.postData()??undefined,redirect:"manual"
+    });
+    await route.fulfill({status:upstream.status,headers:Object.fromEntries(upstream.headers),body:Buffer.from(await upstream.arrayBuffer())});
+  });
+  for(const fragment of ["","#sso=invalid","#sso="+"a".repeat(44)]) {
+    await browserPage.goto("about:blank");
+    await browserPage.goto("https://red.example.test/connect"+fragment);
+    assert.equal(await browserPage.locator("#sign-in").isDisabled(),true);
+    assert.equal(await browserPage.locator("#link").inputValue(),"");
+    assert.equal(await browserPage.locator("#link-error").isVisible(),true);
+    assert.equal(new URL(browserPage.url()).hash,"");
+  }
+  await browserPage.goto("about:blank");
+  await browserPage.goto(link.toString());
+  assert.equal(await browserPage.locator("#sign-in").isEnabled(),true);
+  assert.ok((await browserPage.locator("#link").inputValue())===linkToken);
+  assert.equal(browserPage.url(),"https://red.example.test/connect");
+  const nativeStart=browserPage.waitForResponse(r=>r.url()==="https://red.example.test/connect/sso/start");
+  await browserPage.locator("#sign-in").click();
+  const started=await nativeStart;
+  await browserPage.waitForURL("https://login.microsoftonline.com/**");
+  await browserPage.waitForLoadState("load");
+  assert.equal(started.status(),303);
+  assert.equal((await started.request().allHeaders()).origin,"https://red.example.test");
+  assert.ok(new URLSearchParams(started.request().postData()!).get("link")===linkToken);
+  for(const origin of ["null","https://evil.example"]) {
+    const denied=await fetch(base+"/connect/sso/start",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded",origin},body:new URLSearchParams({link:linkToken})});
+    assert.equal(denied.status,401);
+    assert.ok(!(await denied.text()).includes(linkToken));
+  }
   async function signIn(other=false) {
     const start=await fetch(`${base}/connect/sso/start`,{method:"POST",redirect:"manual",headers:{"content-type":"application/x-www-form-urlencoded",origin:"https://red.example.test"},body:new URLSearchParams({link:linkToken})});
     assert.equal(start.status,303);const auth=new URL(start.headers.get("location")!);const cookie=start.headers.get("set-cookie")!.split(";")[0];
@@ -42,6 +88,23 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   const callback=await signIn();assert.equal(callback.status,303);const cookie=callback.headers.get("set-cookie")!.split(";")[0];
   const page=await fetch(`${base}/connect?sso=1`,{headers:{cookie}});assert.equal(page.status,200);
   const html=await page.text();assert.doesNotMatch(html,/companyFile|<input[^>]*type="file"|telemetryClientId/);
+  assert.equal(page.headers.get("referrer-policy"),"strict-origin");
+  assert.doesNotMatch(html,/<meta[^>]+content="no-referrer"/);
+  // Submit the actual rendered company form and verify browser-generated Origin.
+  const companyPage=await pageContext.newPage();
+  await companyPage.route("**/*",async route=>{
+    if(route.request().resourceType()!=="document") { await route.fulfill({status:204,body:""}); return; }
+    if(route.request().method()==="POST") {
+      assert.equal((await route.request().allHeaders()).origin,"https://red.example.test");
+      await route.fulfill({status:200,body:"Submission checked"});
+    } else await route.fulfill({status:200,contentType:"text/html",headers:{"referrer-policy":page.headers.get("referrer-policy")!},body:html});
+  });
+  await companyPage.goto("https://red.example.test/connect?sso=1");
+  const nativeComplete=companyPage.waitForResponse(r=>r.url().endsWith("/connect/sso/complete"));
+  await companyPage.locator("form").evaluate((form:HTMLFormElement)=>form.submit());
+  assert.equal((await nativeComplete).status(),200);
+  const anonymousPage=await fetch(base+"/connect?code=invalid-code");
+  assert.doesNotMatch(await anonymousPage.text(),/id="sign-in"|Continue with Microsoft/);
   const csrf=/name="code" value="([^"]+)"/.exec(html)![1];
   assert.equal((await fetch(`${base}/connect?sso=1`,{headers:{cookie:cookie+"tampered"}})).status,401);
   assert.equal((await fetch(`${base}/connect/sso/complete`,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded",cookie,origin:"https://evil.example"},body:new URLSearchParams({code:csrf})})).status,401);
@@ -62,5 +125,6 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   const replay = await fetch(`${base}/mcp/copilot`,{method:"POST",headers:{"content-type":"application/json",accept:"application/json, text/event-stream","mcp-session-id":transports.get(a)!.sessionId!,authorization:`Bearer ${await fixture.token(TEST_OTHER)}`},body:JSON.stringify({jsonrpc:"2.0",id:99,method:"tools/call",params:{name:"brc_copilot_list_all_customers",arguments:{}}})});
   const replayBody=await replay.text();assert.match(replayBody,/connection_required/);assert.doesNotMatch(replayBody,/Customer 1/);
   const output=JSON.stringify([first,second,logs]);for(const secret of [token,TEST_USER,"test-only-a","test-only-b","test-only-fail","must-not-return","synthetic-parser-secret"]) assert.equal(output.includes(secret),false);
+  for(const secret of [linkToken,token,TEST_USER,TEST_OTHER,"test-only-a","test-only-b"]) assert.equal((logs+browserErrors.join("\n")).includes(secret),false);
   assert.equal(((await b.callTool({name:"brc_copilot_list_all_customers",arguments:{}})).structuredContent as any)?.status,"connection_required");
 });
