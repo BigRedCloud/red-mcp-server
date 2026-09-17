@@ -878,9 +878,30 @@ async function handleMcpPost(
 app.post("/mcp", (req: Request, res: Response) =>
   handleMcpPost("full", req, res),
 );
-app.post("/mcp/copilot", (req: Request, res: Response) =>
-  handleMcpPost("copilot-sso", req, res),
-);
+app.post("/mcp/copilot", (req: Request, res: Response) => {
+  try {
+    const body = req.body as {
+      method?: unknown;
+      id?: unknown;
+      params?: { clientInfo?: { name?: unknown } };
+    } | undefined;
+    console.info(
+      "COPILOT MCP REQUEST",
+      JSON.stringify({
+        path: req.path,
+        method: body?.method ?? null,
+        id: body?.id ?? null,
+        clientInfoName: body?.params?.clientInfo?.name ?? null,
+        mcpSessionIdPresent: Boolean(req.headers["mcp-session-id"]),
+        authorizationPresent: Boolean(req.headers.authorization),
+        userAgent: req.headers["user-agent"] ?? null,
+      }),
+    );
+  } catch {
+    // Temporary Copilot diagnostics must never affect MCP handling.
+  }
+  handleMcpPost("copilot-sso", req, res);
+});
 app.post("/mcp/copilot-full", (req: Request, res: Response) =>
   handleMcpPost("copilot-full", req, res),
 );
