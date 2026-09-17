@@ -16,7 +16,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
+import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import {
@@ -140,7 +140,7 @@ import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-se
 type HttpMcpProfile = "copilot-sso" | "full" | "copilot-read-only" | "copilot-full";
 
 function createMcpServer(profile: HttpMcpProfile): McpServer {
-  const server = createBrcMcpServer();
+  const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
   if (profile === "copilot-sso") {
     registerCopilotDiagnosticTools(server, true);
   } else {

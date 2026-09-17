@@ -9,7 +9,7 @@ import "./telemetry.js";
 import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
+import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import { ensureMcpSessionReady, registerHttpSessionKeyStore, reloadSessionCredentialsFromConnectionStore, runWithSessionKeyStore, unregisterHttpSessionKeyStore, } from "./shared.js";
@@ -38,7 +38,7 @@ import { authorizeFreshdeskServiceSyncSecret, handleFreshdeskAdminListArticles, 
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 function createMcpServer(profile) {
-    const server = createBrcMcpServer();
+    const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
     if (profile === "copilot-sso") {
         registerCopilotDiagnosticTools(server, true);
     }

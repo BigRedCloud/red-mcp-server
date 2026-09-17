@@ -2,6 +2,13 @@ import { registerCopilotCustomers } from "./copilot_customers.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.js";
 
+export const COPILOT_INSTRUCTIONS = [
+  "RED by Big Red Cloud is exposed in Microsoft 365 as the Red For Excel federated source.",
+  "Use brc_copilot_connector_status to check whether Microsoft 365 Copilot can reach RED. No BRC company connection is required.",
+  "Use brc_copilot_list_all_customers to retrieve Big Red Cloud customers for companies linked to the verified signed-in Microsoft user.",
+  "Start the customer tool without a cursor. If it returns nextCursor, pass that value as cursor to continue.",
+].join("\n");
+
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -19,6 +26,7 @@ export const COPILOT_DIAGNOSTIC_STATUS = {
 /** Temporary HTTP-only registry. Deliberately bypasses company-aware wrappers. */
 export function registerCopilotDiagnosticTools(server: McpServer, authenticated = false): void {
   server.registerTool("brc_copilot_connector_status", {
+    title: "Check RED connectivity",
     description: "Check Microsoft 365 Copilot connectivity to RED. No company connection required.",
     inputSchema: {},
     annotations: COPILOT_DIAGNOSTIC_ANNOTATIONS,

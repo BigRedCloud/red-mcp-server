@@ -5,6 +5,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { requiresRouteToken } from "../routing/route-token.js";
+import { COPILOT_INSTRUCTIONS } from "../copilot_diagnostic.js";
+import { getBrcMcpServerInstructions } from "../config/mcp_config.js";
+import { getMaxBatchItems } from "../config/server_config.js";
 import {
   COPILOT_FULL_TOOL_ALLOWLIST,
 } from "../tool_profiles.js";
@@ -52,9 +55,36 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
 
   assert.equal(fullNames.length, 159);
   assert.equal(new Set(fullNames).size, 159);
+  assert.equal(fullClient.getInstructions(), getBrcMcpServerInstructions(getMaxBatchItems(), false));
+  assert.equal(copilotFullClient.getInstructions(), fullClient.getInstructions());
+  const instructions = diagnosticClient.getInstructions();
+  assert.equal(instructions, COPILOT_INSTRUCTIONS);
+  assert.ok(instructions && instructions.length < 1000);
+  assert.match(instructions, /Red For Excel federated source/);
+  assert.match(instructions, /verified signed-in Microsoft user/);
+  assert.match(instructions, /without a cursor/);
+  assert.match(instructions, /nextCursor, pass that value as cursor/);
+  assert.doesNotMatch(instructions, /connectionRef/);
   assert.deepEqual(diagnosticNames, [
     "brc_copilot_connector_status",
     "brc_copilot_list_all_customers",
+  ]);
+  assert.deepEqual([...new Set(instructions.match(/brc_[a-z0-9_]+/g))].sort(), diagnosticNames);
+  assert.deepEqual(diagnosticResponse.tools.map(({ name, title }) => ({ name, title })), [
+    { name: "brc_copilot_connector_status", title: "Check RED connectivity" },
+    { name: "brc_copilot_list_all_customers", title: "List Big Red Cloud customers" },
+  ]);
+  assert.deepEqual(diagnosticResponse.tools.map((tool) => tool.inputSchema), [
+    { $schema: "http://json-schema.org/draft-07/schema#", type: "object", properties: {} },
+    {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        cursor: { type: "string", maxLength: 4096 },
+        pageSize: { type: "integer", minimum: 1, maximum: 50 },
+      },
+      additionalProperties: false,
+    },
   ]);
   assert.equal(copilotFullNames.length, 158);
   assert.ok(fullNames.includes(routeToolName));

@@ -2,14 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getBrcMcpServerInstructions } from "./config/mcp_config.js";
 import { getMaxBatchItems, redServerConfig } from "./config/server_config.js";
 
-export function createBrcMcpServer(): McpServer {
+export function createBrcMcpServer(instructions?: string): McpServer {
   return new McpServer(
     {
       name: "Red",
       version: "1.6.1",
     },
     {
-      instructions: getBrcMcpServerInstructions(
+      instructions: instructions ?? getBrcMcpServerInstructions(
         getMaxBatchItems(),
         redServerConfig.allowDevMode
       ),

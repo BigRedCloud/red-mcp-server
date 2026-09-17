@@ -96,5 +96,5 @@ export async function listCopilotCustomers(args) {
     }
 }
 export function registerCopilotCustomers(server) {
-    server.registerTool("brc_copilot_list_all_customers", { description: "List customers across companies linked to your Microsoft sign-in. Returns bounded pages grouped by company; pass nextCursor to continue.", annotations, inputSchema: z.object({ cursor: z.string().max(4096).optional(), pageSize: z.number().int().min(1).max(50).optional() }).strict() }, listCopilotCustomers);
+    server.registerTool("brc_copilot_list_all_customers", { title: "List Big Red Cloud customers", description: "List customers across companies linked to your Microsoft sign-in. Returns bounded pages grouped by company; pass nextCursor to continue.", annotations, inputSchema: z.object({ cursor: z.string().max(4096).optional(), pageSize: z.number().int().min(1).max(50).optional() }).strict() }, listCopilotCustomers);
 }
