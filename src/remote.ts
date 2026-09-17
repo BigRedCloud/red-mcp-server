@@ -15,6 +15,7 @@ import type { Request, Response } from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
@@ -142,6 +143,30 @@ type HttpMcpProfile = "copilot-sso" | "full" | "copilot-read-only" | "copilot-fu
 function createMcpServer(profile: HttpMcpProfile): McpServer {
   const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
   if (profile === "copilot-sso") {
+    // Temporary diagnostics around the SDK's actual tools/list response.
+    const setRequestHandler = server.server.setRequestHandler.bind(server.server);
+    server.server.setRequestHandler = (schema, handler) => {
+      setRequestHandler(schema, async (request, extra) => {
+        const result = await handler(request, extra);
+        if (request.method === "tools/list") {
+          try {
+            const parsed = ListToolsResultSchema.safeParse(result);
+            if (parsed.success) {
+              console.log("COPILOT TOOLS LIST RESPONSE", JSON.stringify(parsed.data.tools.map((tool) => ({
+                name: tool.name,
+                title: tool.title ?? null,
+                description: tool.description ?? null,
+                inputSchemaPresent: tool.inputSchema !== undefined,
+                readOnlyHint: tool.annotations?.readOnlyHint ?? null,
+              }))));
+            }
+          } catch {
+            // Diagnostics must not affect the MCP response.
+          }
+        }
+        return result;
+      });
+    };
     registerCopilotDiagnosticTools(server, true);
   } else {
     registerAllTools(server, { profile });
