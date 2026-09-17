@@ -18,11 +18,15 @@ globalThis.fetch=async (input,init)=>{
     const key=Buffer.from(authorization.replace(/^Basic /,""),"base64").toString().replace(/:$/,"");
     if(!key.startsWith("test-only-")) return json({error:"invalid"},401);
     if(url.pathname.includes("getFinancialYear")) return json({Id:1});
+    if (/\/customers\/\d+$/.test(url.pathname)) {
+      const Id=Number(url.pathname.split("/").at(-1));
+      return json({Id,Name: `Customer ${Id}`,apiKey:key});
+    }
     if(url.pathname.endsWith("/customers")) {
       const page=Number(url.searchParams.get("page")??1),size=Number(url.searchParams.get("pageSize")??20);
       if(key==="test-only-fail" && size!==1) return json({error:`never echo ${key}`},500);
-      const all=[1,2,3].map(Id=>({Id,Name:`Customer ${Id}`,Email:`customer${Id}@example.test`,apiKey:key,Token:"must-not-return"}));
-      return json({Items:all.slice((page-1)*size,page*size),Count:3});
+      const all=Array.from({length:21},(_,i)=>i+1).map(Id=>({Id,Name:`Customer ${Id}`,Email:`customer${Id}@example.test`,apiKey:key,Token:"must-not-return"}));
+      return json({Items:all.slice((page-1)*size,page*size),Count:21});
     }
   }
   throw new Error("Unexpected outbound request in SSO fixture.");

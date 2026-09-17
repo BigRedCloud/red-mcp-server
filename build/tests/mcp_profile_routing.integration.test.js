@@ -41,32 +41,28 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
     const instructions = diagnosticClient.getInstructions();
     assert.equal(instructions, COPILOT_INSTRUCTIONS);
     assert.ok(instructions && instructions.length < 1000);
-    assert.match(instructions, /Red For Excel federated source/);
+    assert.match(instructions, /Microsoft 365 through a federated connector/);
     assert.match(instructions, /verified signed-in Microsoft user/);
-    assert.match(instructions, /without a cursor/);
-    assert.match(instructions, /nextCursor, pass that value as cursor/);
+    assert.match(instructions, /without nextCursor/);
+    assert.match(instructions, /same query to continue/);
     assert.doesNotMatch(instructions, /connectionRef/);
     assert.deepEqual(diagnosticNames, [
-        "brc_copilot_connector_status",
-        "brc_copilot_list_all_customers",
+        "fetch_customer",
+        "search_customers",
     ]);
-    assert.deepEqual([...new Set(instructions.match(/brc_[a-z0-9_]+/g))].sort(), diagnosticNames);
+    assert.deepEqual([...new Set(instructions.match(/(?:search_customers|fetch_customer)/g))].sort(), diagnosticNames);
     assert.deepEqual(diagnosticResponse.tools.map(({ name, title }) => ({ name, title })), [
-        { name: "brc_copilot_connector_status", title: "Check RED connectivity" },
-        { name: "brc_copilot_list_all_customers", title: "List Big Red Cloud customers" },
+        { name: "search_customers", title: "Search Big Red Cloud customers" },
+        { name: "fetch_customer", title: "Fetch Big Red Cloud customer" },
     ]);
-    assert.deepEqual(diagnosticResponse.tools.map((tool) => tool.inputSchema), [
-        { $schema: "http://json-schema.org/draft-07/schema#", type: "object", properties: {} },
-        {
-            $schema: "http://json-schema.org/draft-07/schema#",
-            type: "object",
-            properties: {
-                cursor: { type: "string", maxLength: 4096 },
-                pageSize: { type: "integer", minimum: 1, maximum: 50 },
-            },
-            additionalProperties: false,
-        },
-    ]);
+    assert.doesNotMatch(instructions, /brc_[a-z0-9_]+/);
+    const [search, fetchCustomer] = diagnosticResponse.tools;
+    assert.deepEqual(Object.keys(search.inputSchema.properties ?? {}), ["query", "nextCursor"]);
+    assert.deepEqual(search.inputSchema.required, ["query"]);
+    assert.deepEqual(Object.keys(fetchCustomer.inputSchema.properties ?? {}), ["customerId", "companyName"]);
+    assert.deepEqual(fetchCustomer.inputSchema.required, ["customerId", "companyName"]);
+    for (const tool of diagnosticResponse.tools)
+        assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(copilotFullNames.length, 158);
     assert.ok(fullNames.includes(routeToolName));
     for (const name of [

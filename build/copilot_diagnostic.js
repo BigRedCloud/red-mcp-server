@@ -1,10 +1,10 @@
 import { registerCopilotCustomers } from "./copilot_customers.js";
 import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.js";
 export const COPILOT_INSTRUCTIONS = [
-    "RED by Big Red Cloud is exposed in Microsoft 365 as the Red For Excel federated source.",
-    "Use brc_copilot_connector_status to check whether Microsoft 365 Copilot can reach RED. No BRC company connection is required.",
-    "Use brc_copilot_list_all_customers to retrieve Big Red Cloud customers for companies linked to the verified signed-in Microsoft user.",
-    "Start the customer tool without a cursor. If it returns nextCursor, pass that value as cursor to continue.",
+    "RED by Big Red Cloud is exposed in Microsoft 365 through a federated connector.",
+    "Use search_customers to search customers in companies linked to the verified signed-in Microsoft user. Use an empty query to list customers.",
+    "Start without nextCursor. If a response returns nextCursor, pass it with the same query to continue, even when the current page has no matches.",
+    "Use fetch_customer with the exact customerId and companyName from search results to retrieve one customer. Customer IDs are company-scoped.",
 ].join("\n");
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
     readOnlyHint: true,
@@ -20,6 +20,10 @@ export const COPILOT_DIAGNOSTIC_STATUS = {
 };
 /** Temporary HTTP-only registry. Deliberately bypasses company-aware wrappers. */
 export function registerCopilotDiagnosticTools(server, authenticated = false) {
+    if (authenticated) {
+        registerCopilotCustomers(server);
+        return;
+    }
     server.registerTool("brc_copilot_connector_status", {
         title: "Check RED connectivity",
         description: "Check Microsoft 365 Copilot connectivity to RED. No company connection required.",
@@ -29,10 +33,6 @@ export function registerCopilotDiagnosticTools(server, authenticated = false) {
         content: [{ type: "text", text: JSON.stringify(COPILOT_DIAGNOSTIC_STATUS) }],
         structuredContent: { ...COPILOT_DIAGNOSTIC_STATUS },
     }));
-    if (authenticated) {
-        registerCopilotCustomers(server);
-        return;
-    }
     // Reuse the existing tool's schema and handler with profile-local annotations.
     const publicHelpServer = Object.create(server);
     publicHelpServer.tool = ((name, description, inputSchema, handler) => {

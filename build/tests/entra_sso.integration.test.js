@@ -28,15 +28,18 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
         return c;
     }
     const anon = await client();
-    assert.deepEqual((await anon.listTools()).tools.map(t => t.name).sort(), ["brc_copilot_connector_status", "brc_copilot_list_all_customers"]);
-    await assert.rejects(anon.callTool({ name: "brc_copilot_list_all_customers", arguments: {} }));
+    assert.deepEqual((await anon.listTools()).tools.map(t => t.name).sort(), ["fetch_customer", "search_customers"]);
+    await assert.rejects(anon.callTool({ name: "search_customers", arguments: { query: "" } }));
     const invalid = await client("invalid-token");
-    await assert.rejects(invalid.callTool({ name: "brc_copilot_list_all_customers", arguments: {} }));
+    await assert.rejects(invalid.callTool({ name: "search_customers", arguments: { query: "" } }));
     const token = await fixture.token(), a = await client(token), b = await client(await fixture.token(TEST_OTHER));
-    const invalidArguments = await a.callTool({ name: "brc_copilot_list_all_customers", arguments: { apiKey: "must-never-be-used", tenantId: TEST_USER, connectionRef: "untrusted" } });
+    for (const caller of [anon, invalid]) {
+        await assert.rejects(caller.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } }));
+    }
+    const invalidArguments = await a.callTool({ name: "search_customers", arguments: { apiKey: "must-never-be-used", tenantId: TEST_USER, connectionRef: "untrusted" } });
     assert.equal(invalidArguments.isError, true);
     assert.equal(JSON.stringify(invalidArguments).includes("must-never-be-used"), false);
-    const needed = await a.callTool({ name: "brc_copilot_list_all_customers", arguments: {} });
+    const needed = await a.callTool({ name: "search_customers", arguments: { query: "" } });
     assert.equal(needed.structuredContent?.status, "connection_required");
     const link = new URL(String(needed.structuredContent?.connectionUrl));
     assert.equal(link.origin, "https://red.example.test");
@@ -51,7 +54,7 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     const browserErrors = [];
     browserPage.on("console", m => browserErrors.push(m.text()));
     browserPage.on("pageerror", e => browserErrors.push(e.message));
-    await browserPage.route("https://login.microsoftonline.com/**", route => route.fulfill({ status: 200, body: "Microsoft sign-in" }));
+    await browserPage.route("https://login.microsoftonline.com/**", route => route.fulfill({ status: 200, contentType: "text/html", body: "Microsoft sign-in" }));
     await browserPage.route("https://red.example.test/**", async (route) => {
         const request = route.request();
         if (request.resourceType() !== "document") {
@@ -59,11 +62,8 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
             return;
         }
         const url = new URL(request.url());
-        const upstream = await fetch(base + url.pathname + url.search, {
-            method: request.method(), headers: await request.allHeaders(),
-            body: request.postData() ?? undefined, redirect: "manual"
-        });
-        await route.fulfill({ status: upstream.status, headers: Object.fromEntries(upstream.headers), body: Buffer.from(await upstream.arrayBuffer()) });
+        const upstream = await route.fetch({ url: base + url.pathname + url.search, maxRedirects: 0 });
+        await route.fulfill({ response: upstream });
     });
     for (const fragment of ["", "?request=invalid", "?request=req_" + "a".repeat(44)]) {
         await browserPage.goto("about:blank");
@@ -79,11 +79,12 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     assert.ok((await browserPage.locator("#request").inputValue()) === linkToken);
     assert.equal(browserPage.url(), "https://red.example.test/connect");
     const nativeStart = browserPage.waitForResponse(r => r.url() === "https://red.example.test/connect/sso/start");
+    const redirected = browserPage.waitForURL(url => url.hostname === "login.microsoftonline.com", { waitUntil: "commit" });
     await browserPage.locator("#sign-in").click();
     const started = await nativeStart;
-    await browserPage.waitForURL("https://login.microsoftonline.com/**");
-    await browserPage.waitForLoadState("load");
     assert.equal(started.status(), 303);
+    await redirected;
+    await browserPage.waitForLoadState("load");
     assert.equal((await started.request().allHeaders()).origin, "https://red.example.test");
     assert.ok(new URLSearchParams(started.request().postData()).get("request") === linkToken);
     for (const origin of ["null", "https://evil.example"]) {
@@ -154,17 +155,24 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     assert.deepEqual(submissions.map(r => r.status).sort(), [200, 401]);
     assert.equal((await fetch(`${base}/connect?sso=1`, { headers: { cookie } })).status, 401);
     assert.equal((await signIn()).status, 401, "consumed request cannot reopen");
-    const first = await a.callTool({ name: "brc_copilot_list_all_customers", arguments: { pageSize: 2 } });
+    const first = await a.callTool({ name: "search_customers", arguments: { query: "" } });
     assert.ok(first.structuredContent?.nextCursor);
-    const stolen = await b.callTool({ name: "brc_copilot_list_all_customers", arguments: { cursor: first.structuredContent.nextCursor } });
+    const stolen = await b.callTool({ name: "search_customers", arguments: { query: "", nextCursor: first.structuredContent.nextCursor } });
     assert.equal(stolen.structuredContent?.status, "connection_required");
-    const second = await a.callTool({ name: "brc_copilot_list_all_customers", arguments: { cursor: first.structuredContent.nextCursor } });
+    const second = await a.callTool({ name: "search_customers", arguments: { query: "", nextCursor: first.structuredContent.nextCursor } });
     const groups = [...first.structuredContent.companies, ...second.structuredContent.companies];
-    assert.equal(groups.filter(g => g.companyName === "A").flatMap(g => g.customers).length, 3);
-    assert.equal(groups.filter(g => g.companyName === "B").flatMap(g => g.customers).length, 3);
+    assert.equal(groups.filter(g => g.companyName === "A").flatMap(g => g.customers).length, 21);
+    assert.equal(groups.filter(g => g.companyName === "B").flatMap(g => g.customers).length, 21);
     assert.equal(groups.find(g => g.companyName === "C")?.status, "company_unavailable");
     assert.equal(second.structuredContent.complete, true);
-    const replay = await fetch(`${base}/mcp/copilot`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-session-id": transports.get(a).sessionId, authorization: `Bearer ${await fixture.token(TEST_OTHER)}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/call", params: { name: "brc_copilot_list_all_customers", arguments: {} } }) });
+    const fetched = await a.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } });
+    assert.equal(fetched.structuredContent?.status, "ok");
+    assert.equal(fetched.structuredContent.customer.Id, 1);
+    assert.doesNotMatch(JSON.stringify(fetched), /test-only-|apiKey/);
+    const forbidden = await b.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } });
+    assert.equal(forbidden.structuredContent?.status, "customer_unavailable");
+    assert.equal(forbidden.isError, true);
+    const replay = await fetch(`${base}/mcp/copilot`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-session-id": transports.get(a).sessionId, authorization: `Bearer ${await fixture.token(TEST_OTHER)}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/call", params: { name: "search_customers", arguments: { query: "" } } }) });
     const replayBody = await replay.text();
     assert.match(replayBody, /connection_required/);
     assert.doesNotMatch(replayBody, /Customer 1/);
@@ -173,5 +181,5 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
         assert.equal(output.includes(secret), false);
     for (const secret of [linkToken, token, TEST_USER, TEST_OTHER, "test-only-a", "test-only-b"])
         assert.equal((logs + browserErrors.join("\n")).includes(secret), false);
-    assert.equal((await b.callTool({ name: "brc_copilot_list_all_customers", arguments: {} })).structuredContent?.status, "connection_required");
+    assert.equal((await b.callTool({ name: "search_customers", arguments: { query: "" } })).structuredContent?.status, "connection_required");
 });

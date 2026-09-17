@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { COPILOT_DIAGNOSTIC_ANNOTATIONS, COPILOT_DIAGNOSTIC_STATUS } from "../copilot_diagnostic.js";
+import { COPILOT_DIAGNOSTIC_ANNOTATIONS } from "../copilot_diagnostic.js";
 import { TOOL_ANNOTATIONS } from "../tool_annotations.js";
 import { getFreePort, startHttpTestServer } from "./http_test_server.js";
-test("Copilot diagnostic initializes, exposes only public read-only tools, and performs no company or BRC IO", async (t) => {
+test("Copilot diagnostic initializes, exposes only read-only search/fetch tools, and performs no company or BRC IO", async (t) => {
     const port = await getFreePort();
     const child = await startHttpTestServer(t, port, {
         NODE_OPTIONS: "--import=./scripts/tests/lib/diagnostic_guards.mjs",
@@ -21,15 +21,13 @@ test("Copilot diagnostic initializes, exposes only public read-only tools, and p
     await client.connect(transport);
     const listed = await client.listTools();
     assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-        "brc_copilot_connector_status", "brc_copilot_list_all_customers",
+        "fetch_customer", "search_customers",
     ]);
     for (const tool of listed.tools)
         assert.deepEqual(tool.annotations, COPILOT_DIAGNOSTIC_ANNOTATIONS);
-    assert.deepEqual(listed.tools[0].inputSchema.properties, {});
-    const result = await client.callTool({ name: "brc_copilot_connector_status", arguments: {} });
-    assert.deepEqual(result.structuredContent, COPILOT_DIAGNOSTIC_STATUS);
-    assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(COPILOT_DIAGNOSTIC_STATUS) }]);
-    for (const name of ["brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_list_customers", "brc_create_customer"]) {
+    await assert.rejects(client.callTool({ name: "search_customers", arguments: { query: "" } }));
+    await assert.rejects(client.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } }));
+    for (const name of ["brc_copilot_connector_status", "brc_copilot_list_all_customers", "brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_list_customers", "brc_create_customer"]) {
         assert.equal((await client.callTool({ name, arguments: {} })).isError, true, name);
     }
     // The same server still exposes the complete production registry on /mcp.

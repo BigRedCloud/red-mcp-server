@@ -293,7 +293,7 @@ async function handleMcpRequest(
 ): Promise<void> {
   if (session.profile === "copilot-sso") {
     const requestBody = body as { method?: string; params?: { name?: string } } | undefined;
-    if (requestBody?.method === "tools/call" && requestBody.params?.name === "brc_copilot_list_all_customers") {
+    if (requestBody?.method === "tools/call" && ["search_customers", "fetch_customer"].includes(requestBody.params?.name ?? "")) {
       let owner;
       try {
         owner = await verifyEntraAuthorization(req.headers.authorization);

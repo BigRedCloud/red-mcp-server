@@ -9,6 +9,7 @@ import "./telemetry.js";
 import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
@@ -40,6 +41,31 @@ import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-se
 function createMcpServer(profile) {
     const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
     if (profile === "copilot-sso") {
+        // Temporary diagnostics around the SDK's actual tools/list response.
+        const setRequestHandler = server.server.setRequestHandler.bind(server.server);
+        server.server.setRequestHandler = (schema, handler) => {
+            setRequestHandler(schema, async (request, extra) => {
+                const result = await handler(request, extra);
+                if (request.method === "tools/list") {
+                    try {
+                        const parsed = ListToolsResultSchema.safeParse(result);
+                        if (parsed.success) {
+                            console.log("COPILOT TOOLS LIST RESPONSE", JSON.stringify(parsed.data.tools.map((tool) => ({
+                                name: tool.name,
+                                title: tool.title ?? null,
+                                description: tool.description ?? null,
+                                inputSchemaPresent: tool.inputSchema !== undefined,
+                                readOnlyHint: tool.annotations?.readOnlyHint ?? null,
+                            }))));
+                        }
+                    }
+                    catch {
+                        // Diagnostics must not affect the MCP response.
+                    }
+                }
+                return result;
+            });
+        };
         registerCopilotDiagnosticTools(server, true);
     }
     else {
@@ -122,7 +148,7 @@ setInterval(() => {
 async function handleMcpRequest(session, sessionId, req, res, body) {
     if (session.profile === "copilot-sso") {
         const requestBody = body;
-        if (requestBody?.method === "tools/call" && requestBody.params?.name === "brc_copilot_list_all_customers") {
+        if (requestBody?.method === "tools/call" && ["search_customers", "fetch_customer"].includes(requestBody.params?.name ?? "")) {
             let owner;
             try {
                 owner = await verifyEntraAuthorization(req.headers.authorization);
@@ -574,7 +600,24 @@ async function handleMcpPost(profile, req, res) {
     }
 }
 app.post("/mcp", (req, res) => handleMcpPost("full", req, res));
-app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-sso", req, res));
+app.post("/mcp/copilot", (req, res) => {
+    try {
+        const body = req.body;
+        console.info("COPILOT MCP REQUEST", JSON.stringify({
+            path: req.path,
+            method: body?.method ?? null,
+            id: body?.id ?? null,
+            clientInfoName: body?.params?.clientInfo?.name ?? null,
+            mcpSessionIdPresent: Boolean(req.headers["mcp-session-id"]),
+            authorizationPresent: Boolean(req.headers.authorization),
+            userAgent: req.headers["user-agent"] ?? null,
+        }));
+    }
+    catch {
+        // Temporary Copilot diagnostics must never affect MCP handling.
+    }
+    handleMcpPost("copilot-sso", req, res);
+});
 app.post("/mcp/copilot-full", (req, res) => handleMcpPost("copilot-full", req, res));
 app.get("/connect", async (req, res) => {
     await ensureConnectionStoreInitialized();
