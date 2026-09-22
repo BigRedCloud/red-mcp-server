@@ -17,13 +17,16 @@ globalThis.fetch=async (input,init)=>{
     const authorization=new Headers(init?.headers).get("authorization")??"";
     const key=Buffer.from(authorization.replace(/^Basic /,""),"base64").toString().replace(/:$/,"");
     if(!key.startsWith("test-only-")) return json({error:"invalid"},401);
-    const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts|quotes|salesCreditNotes|bankAccounts|cashPayments|cashReceipts|payments)(?:\/(\d+))?$/.exec(url.pathname);
+    const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts|quotes|salesCreditNotes|bankAccounts|cashPayments|cashReceipts|payments|accruals|prepayments|vatRates|vatCategories|analysisCategories|nominalAccounts)(?:\/(\d+))?$/.exec(url.pathname);
     if (facadePath) {
       if (init?.method && init.method !== "GET") throw new Error("Facade must only read");
-      const row = {Id: 1, Code: "ONE", Name: "Record for " + key};
+      const row = {Id: 1, Code: "ONE", Name: "Record for " + key, Percentage: 23, AcCode: "4000", oBalance: 0};
       return json(facadePath[2] ? row : {Items: [row]});
     }
-    if(url.pathname.includes("getFinancialYear")) return json({Id:1});
+    if(url.pathname.includes("getFinancialYear")) return json({yearStart:"2026-01-01",yearEnd:"2026-12-31"});
+    if (/\/(customers|suppliers)\/\d+\/accountTrans$/.test(url.pathname)) {
+      return json({Items:[{Id:1,BookTranId:1,Reference:"INV-1",Debit:10,Credit:0,BookTypeDesc:"Sales Invoice",ApiKey:key}]});
+    }
     if (/\/customers\/\d+$/.test(url.pathname)) {
       const Id=Number(url.pathname.split("/").at(-1));
       return json({Id,Name: `Customer ${Id}`,apiKey:key});

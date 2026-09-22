@@ -5,6 +5,11 @@ import { registerTools } from "./tools/general/list_tools.js";
 import { registerProductTools } from "./tools/product_tools.js";
 import { registerBankListTools } from "./tools/bank-payments/bank_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
+import { registerAccrualTools } from "./tools/accrual_tools.js";
+import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
+import { registerCustomerTools } from "./tools/customer_tools.js";
+import { registerSupplierTools } from "./tools/purchases/supplier_tools.js";
+import { registerCompanySetupTools } from "./tools/setup/company_setup_tools.js";
 import { getToolMetadata } from "./tool_annotations.js";
 import { entraRequestOwner } from "./auth/entra_auth.js";
 import { ownerKey } from "./auth/entra_store.js";
@@ -26,11 +31,36 @@ export const COPILOT_ENTITIES = [
     { plural: "cash_payments", singular: "cash_payment", label: "cash payments", idField: "cashPaymentId", list: "brc_list_cash_payments", get: "brc_get_cash_payment", ids: ["id", "cashpaymentid", "booktranid"], codes: ["reference"], documents: true },
     { plural: "cash_receipts", singular: "cash_receipt", label: "cash receipts", idField: "cashReceiptId", list: "brc_list_cash_receipts", get: "brc_get_cash_receipt", ids: ["id", "cashreceiptid", "booktranid"], codes: ["reference"], documents: true },
     { plural: "payments", singular: "payment", label: "payments", idField: "paymentId", list: "brc_list_payments", get: "brc_get_payment", ids: ["id", "paymentid", "booktranid"], codes: ["reference"], documents: true },
+    { plural: "accruals", singular: "accrual", label: "accruals", idField: "accrualId", list: "brc_list_accruals", get: "brc_get_accrual", ids: ["id", "accrualid"], codes: ["accode", "code", "reference"], documents: false, dated: true },
+    { plural: "prepayments", singular: "prepayment", label: "prepayments", idField: "prepaymentId", list: "brc_list_prepayments", get: "brc_get_prepayment", ids: ["id", "prepaymentid"], codes: ["accode", "code", "reference"], documents: false, dated: true },
 ];
+export const COPILOT_SEARCH_ONLY = [
+    { plural: "vat_rates", singular: "vat_rate", label: "VAT rates", idField: "vatRateId", list: "brc_list_vat_rates", ids: ["id", "vatrateid"], codes: ["code", "name"], documents: false, searchOnly: true },
+    { plural: "vat_categories", singular: "vat_category", label: "VAT categories", idField: "vatCategoryId", list: "brc_list_vat_categories", ids: ["id", "vatcategoryid"], codes: ["code", "name"], documents: false, searchOnly: true },
+    { plural: "analysis_categories", singular: "analysis_category", label: "analysis categories", idField: "analysisCategoryId", list: "brc_list_analysis_categories", ids: ["id", "analysiscategoryid"], codes: ["code", "accountcode", "accode", "name"], documents: false, searchOnly: true },
+    { plural: "nominal_accounts", singular: "nominal_account", label: "nominal accounts", idField: "nominalAccountId", list: "brc_list_nominal_accounts", ids: ["id", "nominalaccountid"], codes: ["accode", "code", "accountcode"], documents: false, searchOnly: true },
+];
+const extraSearch = {
+    accruals: { title: "Search Big Red Cloud accrual journals", description: "Search period-end accrual journals by text, date or nominal code. Not purchases, invoices or nominal accounts. Empty query lists journals. Continue with nextCursor." },
+    prepayments: { title: "Search Big Red Cloud prepayment journals", description: "Search period-end prepayment journals by text, date or nominal code. Not payments, invoices or nominal accounts. Empty query lists journals. Continue with nextCursor." },
+    vat_rates: { title: "Search Big Red Cloud VAT rates", description: "Search company VAT rates and percentages. Distinct from VAT categories, analysis categories and products. Empty query lists rates. Continue with nextCursor." },
+    vat_categories: { title: "Search Big Red Cloud VAT categories", description: "Search Sales vs Purchase VAT categories used to interpret VAT rates. Distinct from analysis categories and VAT rates. Empty query lists categories. Continue with nextCursor." },
+    analysis_categories: { title: "Search Big Red Cloud analysis categories", description: "Search posting analysis categories for sales, purchase and cash books. Distinct from VAT categories, nominal accounts and bank accounts. Empty query lists categories. Continue with nextCursor." },
+    nominal_accounts: { title: "Search Big Red Cloud nominal accounts", description: "Search chart-of-accounts nominal codes and opening balances. Distinct from bank accounts and customer or supplier accounts. Empty query lists codes. Continue with nextCursor." },
+    customer_transactions: { title: "Search a customer ledger", description: "Search one customer's account ledger lines (invoices, receipts, credits). Requires customerId from search_customers. Distinct from search_sales_invoices, search_cash_receipts and search_customers. Continue with nextCursor." },
+    supplier_transactions: { title: "Search a supplier ledger", description: "Search one supplier's account ledger lines (purchases, payments). Requires supplierId from search_suppliers. Distinct from search_purchases, search_payments and search_suppliers. Continue with nextCursor." },
+};
+const extraFetch = {
+    accrual: { title: "Fetch Big Red Cloud accrual journal", description: "Retrieve one parent accrual journal using accrualId from search_accruals. Child reversing accruals are not returned." },
+    prepayment: { title: "Fetch Big Red Cloud prepayment journal", description: "Retrieve one parent prepayment journal using prepaymentId from search_prepayments. Child reversing prepayments are not returned." },
+    financial_year: { title: "Get Big Red Cloud financial year", description: "Return the linked company's financial year and period dates. Company-level setup, not a transaction search. Distinct from search_accruals and search_prepayments." },
+};
 const supplierLedgers = new Set(["purchase", "cash_payment", "payment"]);
 export const COPILOT_FEDERATED_TOOL_NAMES = new Set([
     "search_customers", "fetch_customer",
     ...COPILOT_ENTITIES.flatMap(entity => [`search_${entity.plural}`, `fetch_${entity.singular}`]),
+    ...COPILOT_SEARCH_ONLY.map(entity => `search_${entity.plural}`),
+    "search_customer_transactions", "search_supplier_transactions", "get_financial_year",
 ]);
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const MAX_PAGES = 3;
@@ -49,11 +79,32 @@ class FacadeError extends Error {
 const failure = (error) => error instanceof FacadeError
     ? reply({ status: error.status, message: error.message }, true)
     : reply({ status: "query_unavailable", message: "Could not query the accounting data. Retry the search or fetch." }, true);
+function parseReaderArgs(reader, args) {
+    const attempts = [args];
+    if ("page" in args || "pageSize" in args) {
+        const { page: _page, pageSize: _pageSize, ...rest } = args;
+        attempts.push(rest);
+    }
+    if (typeof args.id === "string" && /^\d+$/.test(args.id)) {
+        for (const attempt of [...attempts])
+            attempts.push({ ...attempt, id: Number(args.id) });
+    }
+    for (const attempt of attempts) {
+        const parsed = reader.schema.safeParse(attempt);
+        if (parsed.success)
+            return parsed.data;
+    }
+    return reader.schema.parse(args);
+}
 let redHandlers;
 function readers() {
     if (redHandlers)
         return redHandlers;
-    const selected = new Set(COPILOT_ENTITIES.flatMap(entity => entity.get ? [entity.list, entity.get] : [entity.list]));
+    const selected = new Set([
+        ...COPILOT_ENTITIES.flatMap(entity => entity.get ? [entity.list, entity.get] : [entity.list]),
+        ...COPILOT_SEARCH_ONLY.map(entity => entity.list),
+        "brc_list_customer_account_trans", "brc_list_supplier_account_trans", "brc_get_financial_year",
+    ]);
     const captured = new Map();
     // Capture original read callbacks into a private adapter. This object is never
     // passed to registerAllTools and never touches the normal SDK server.
@@ -69,6 +120,11 @@ function readers() {
     registerProductTools(collector);
     registerBankListTools(collector);
     registerCashPaymentTools(collector);
+    registerAccrualTools(collector);
+    registerPrepaymentTools(collector);
+    registerCustomerTools(collector);
+    registerSupplierTools(collector);
+    registerCompanySetupTools(collector);
     if (captured.size !== selected.size)
         throw new Error("Incomplete facade readers");
     redHandlers = captured;
@@ -154,18 +210,21 @@ async function read(context, index, tool, args) {
     const reader = readers().get(tool);
     if (!reader)
         throw new Error("Unknown reader");
-    const result = await runWithSessionKeyStore(contexts, () => reader.call(reader.schema.parse({ ...args, companyName: company.companyName })));
+    const result = await runWithSessionKeyStore(contexts, () => reader.call(parseReaderArgs(reader, { ...args, companyName: company.companyName })));
     const text = result.content.find(item => item.type === "text")?.text;
     if (!text || Buffer.byteLength(text) > 2_000_000)
         throw new Error("Unsupported response");
     return JSON.parse(text);
 }
-function items(data, pageSize) {
+function records(data, limit) {
     const object = data;
     const rows = Array.isArray(data) ? data : object?.Items ?? object?.items;
-    if (!Array.isArray(rows) || rows.length > pageSize || rows.some(row => !row || typeof row !== "object" || Array.isArray(row)))
+    if (!Array.isArray(rows) || rows.length > limit || rows.some(row => !row || typeof row !== "object" || Array.isArray(row)))
         throw new Error("Unsupported page");
     return rows;
+}
+function items(data, pageSize) {
+    return records(data, pageSize);
 }
 const summaryFields = new Set([
     "id", "supplierid", "customerid", "productid", "salesinvoiceid", "invoiceid", "purchaseid", "accountid", "booktranid",
@@ -174,8 +233,14 @@ const summaryFields = new Set([
     "reference", "invoicenumber", "purchasenumber", "entrydate", "procdate", "date", "invoicedate", "purchasedate", "duedate",
     "stockcode", "details", "price", "unitprice", "grossunitprice", "accountname", "netamount", "vatamount", "grossamount",
     "note", "comments", "customerownername", "bankaccountcode", "bankaccountname", "amount", "totalnet", "totalvat", "unallocated",
+    "percentage", "rate", "vatrateid", "vatcategoryid", "vattypeid", "analysiscategoryid", "categorytypeid",
+    "firstdetail", "seconddetail", "debit", "credit", "booktrantypeid", "booktypedesc", "obalance", "openingbalance", "accounttype",
     "email", "telephone", "phone", "balance", "total", "net", "vat", "gross", "unpaid", "dormant", "isdormant",
 ]);
+const monthlyMovement = /^month(?:[1-9]|1[0-2])$/i;
+function summariseRow(row, clean) {
+    return sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => summaryFields.has(key.toLowerCase()) && !monthlyMovement.test(key)).map(([key, item]) => [key, Array.isArray(item) ? item.filter(value => typeof value === "string").slice(0, 5).map(value => value.slice(0, 1000)) : item])), clean);
+}
 const privateFields = /^(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|password|secret|encryptedSecret|connectionRef|activeConnectionRef|connectionMetadata|connection|_meta|tenantId|objectId)$/i;
 function sanitize(data, clean, depth = 0) {
     if (depth > 12)
@@ -222,14 +287,14 @@ export async function searchCopilotEntity(entity, args) {
                 const progress = advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
                 const pageResults = [];
                 for (const row of progress.rows) {
-                    const summary = sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => summaryFields.has(key.toLowerCase())).map(([key, item]) => [key, Array.isArray(item) ? item.filter(value => typeof value === "string").slice(0, 5).map(value => value.slice(0, 1000)) : item])), context.clean);
+                    const summary = summariseRow(row, context.clean);
                     if (!matches(entity, summary, args))
                         continue;
                     const id = identifier(entity, row);
                     const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
                     pageResults.push({ companyName, ...(usableId ? { [entity.idField]: id } : {}),
-                        title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
-                        record: summary, fetchAvailable: usableId });
+                        title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "firstdetail", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
+                        record: summary, fetchAvailable: entity.searchOnly ? false : usableId });
                 }
                 if (Buffer.byteLength(JSON.stringify([...results, ...pageResults])) > MAX_BYTES) {
                     if (!results.length)
@@ -311,18 +376,79 @@ export async function fetchCopilotEntity(entity, args) {
         return failure(error);
     }
 }
+function ledgerEntity(party) {
+    return {
+        plural: `${party}_transactions`, singular: `${party}_transaction`, label: `${party} ledger lines`,
+        idField: "bookTranId", list: party === "customer" ? "brc_list_customer_account_trans" : "brc_list_supplier_account_trans",
+        ids: ["booktranid", "id"], codes: ["reference", "accode", "code"], documents: false, searchOnly: true,
+    };
+}
+export async function searchCopilotLedger(party, args) {
+    try {
+        const entity = ledgerEntity(party);
+        const itemId = party === "customer" ? args.customerId : args.supplierId;
+        if (!itemId)
+            throw new FacadeError("invalid_request", `Use the ${party} identifier from search_${party}s.`);
+        const context = await scope(args.companyName);
+        const pageSize = args.pageSize ?? 20;
+        const query = args.query ?? "";
+        const hash = binding(context, `search_${entity.plural}`, [itemId, fold(query), pageSize]);
+        const cursor = cursorFor(context, hash, args.nextCursor);
+        const rows = records(await read(context, 0, entity.list, { itemId }), 2_000);
+        const filtered = rows.filter(row => matches(entity, summariseRow(row, context.clean), { query }));
+        const slice = filtered.slice(cursor.paging.offset, cursor.paging.offset + pageSize);
+        const companyName = context.clean(context.companies[0].companyName);
+        const results = slice.map(row => {
+            const summary = summariseRow(row, context.clean);
+            const id = identifier(entity, row);
+            const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
+            return { companyName, ...(usableId ? { [entity.idField]: id } : {}),
+                title: context.clean(value(summary, ["booktypedesc", "reference", "firstdetail", "description", "note"]) ?? id ?? entity.singular),
+                record: summary, fetchAvailable: false };
+        });
+        cursor.paging = { ...cursor.paging, offset: cursor.paging.offset + slice.length, pages: cursor.paging.pages + 1 };
+        if (cursor.paging.offset >= filtered.length)
+            cursor.index = context.companies.length;
+        const nextCursor = cursor.index < context.companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
+        return reply({ status: "ok", results, unavailableCompanies: [], paginationWarnings: [],
+            ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor });
+    }
+    catch (error) {
+        return failure(error);
+    }
+}
+export async function getCopilotFinancialYear(args) {
+    try {
+        const context = await scope(args.companyName);
+        const record = sanitize(await read(context, 0, "brc_get_financial_year", {}), context.clean);
+        if (!record || typeof record !== "object" || Array.isArray(record))
+            throw new Error("Unsupported response");
+        if (Buffer.byteLength(JSON.stringify(record)) > MAX_BYTES)
+            throw new Error("Record too large");
+        return reply({ status: "ok", companyName: context.clean(context.companies[0].companyName), financial_year: record });
+    }
+    catch (error) {
+        return failure(error);
+    }
+}
 /** Called only by the separate /mcp/copilot registry. */
 export function registerCopilotAccountingFacade(server) {
     readers();
-    for (const entity of COPILOT_ENTITIES) {
+    for (const entity of [...COPILOT_ENTITIES, ...COPILOT_SEARCH_ONLY]) {
+        const searchExtra = extraSearch[entity.plural];
+        const fetchExtra = extraFetch[entity.singular];
         server.registerTool(`search_${entity.plural}`, {
-            title: `Search Big Red Cloud ${entity.label}`,
-            description: `Search ${entity.label} by text${entity.documents ? ", transaction date or counterparty code" : " or exact code"} in linked companies. Empty query lists records. Continue with nextCursor even after an empty page.`,
+            title: searchExtra?.title ?? `Search Big Red Cloud ${entity.label}`,
+            description: searchExtra?.description ?? `Search ${entity.label} by text${entity.documents ? ", transaction date or counterparty code" : " or exact code"} in linked companies. Empty query lists records. Continue with nextCursor even after an empty page.`,
             annotations,
             inputSchema: z.object({
                 query: z.string().max(1000).describe("Text to match in record summaries; empty string lists records."),
                 companyName: z.string().min(1).max(4000).optional().describe("Linked company name; omit to search all your linked companies."),
-                ...(entity.documents ? {
+                ...(entity.dated ? {
+                    code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity."),
+                    dateFrom: z.iso.date().optional().describe("Inclusive earliest transaction date, YYYY-MM-DD."),
+                    dateTo: z.iso.date().optional().describe("Inclusive latest transaction date, YYYY-MM-DD."),
+                } : entity.documents ? {
                     counterpartyCode: z.string().min(1).max(256).optional().describe(supplierLedgers.has(entity.singular) ? "Exact supplier account code." : "Exact customer account code."),
                     dateFrom: z.iso.date().optional().describe("Inclusive earliest transaction date, YYYY-MM-DD."),
                     dateTo: z.iso.date().optional().describe("Inclusive latest transaction date, YYYY-MM-DD."),
@@ -331,9 +457,11 @@ export function registerCopilotAccountingFacade(server) {
                 nextCursor: z.string().max(4096).optional().describe("Continuation from this search; keep the query, company, filters and pageSize unchanged."),
             }).strict(),
         }, args => searchCopilotEntity(entity, args));
+        if (entity.searchOnly)
+            continue;
         server.registerTool(`fetch_${entity.singular}`, {
-            title: `Fetch Big Red Cloud ${entity.label === "purchases" ? "purchase" : entity.label.replace(/s$/, "")}`,
-            description: `Retrieve one ${entity.label === "purchases" ? "purchase" : entity.label.replace(/s$/, "")} using its exact identifier and company from search_${entity.plural}.${entity.get ? "" : " Continue with nextCursor if an account lookup is incomplete."}`,
+            title: fetchExtra?.title ?? `Fetch Big Red Cloud ${entity.label === "purchases" ? "purchase" : entity.label.replace(/s$/, "")}`,
+            description: fetchExtra?.description ?? `Retrieve one ${entity.label === "purchases" ? "purchase" : entity.label.replace(/s$/, "")} using its exact identifier and company from search_${entity.plural}.${entity.get ? "" : " Continue with nextCursor if an account lookup is incomplete."}`,
             annotations,
             inputSchema: z.object({
                 [entity.idField]: z.string().min(1).max(256).describe(`Exact ${entity.idField} returned by search_${entity.plural}; not a document reference.${entity.get ? "" : " Accounts use id:... or code:... identifiers."}`),
@@ -342,4 +470,36 @@ export function registerCopilotAccountingFacade(server) {
             }).strict(),
         }, args => fetchCopilotEntity(entity, { companyName: args.companyName, recordId: args[entity.idField], nextCursor: args.nextCursor }));
     }
+    server.registerTool("search_customer_transactions", {
+        title: extraSearch.customer_transactions.title,
+        description: extraSearch.customer_transactions.description,
+        annotations,
+        inputSchema: z.object({
+            customerId: z.string().min(1).max(256).describe("Customer identifier from search_customers or fetch_customer; required because the customer ledger is a per-customer list."),
+            companyName: z.string().min(1).max(4000).describe("Company name that owns this customer."),
+            query: z.string().max(1000).optional().describe("Optional text to match in ledger lines; omit to list the customer ledger as returned."),
+            pageSize: z.number().int().min(1).max(50).optional().describe("Ledger rows returned per call; default 20."),
+            nextCursor: z.string().max(4096).optional().describe("Continuation from this customer ledger search."),
+        }).strict(),
+    }, args => searchCopilotLedger("customer", args));
+    server.registerTool("search_supplier_transactions", {
+        title: extraSearch.supplier_transactions.title,
+        description: extraSearch.supplier_transactions.description,
+        annotations,
+        inputSchema: z.object({
+            supplierId: z.string().min(1).max(256).describe("Supplier identifier from search_suppliers or fetch_supplier; required because the supplier ledger is a per-supplier list."),
+            companyName: z.string().min(1).max(4000).describe("Company name that owns this supplier."),
+            query: z.string().max(1000).optional().describe("Optional text to match in ledger lines; omit to list the supplier ledger as returned."),
+            pageSize: z.number().int().min(1).max(50).optional().describe("Ledger rows returned per call; default 20."),
+            nextCursor: z.string().max(4096).optional().describe("Continuation from this supplier ledger search."),
+        }).strict(),
+    }, args => searchCopilotLedger("supplier", args));
+    server.registerTool("get_financial_year", {
+        title: extraFetch.financial_year.title,
+        description: extraFetch.financial_year.description,
+        annotations,
+        inputSchema: z.object({
+            companyName: z.string().min(1).max(4000).describe("Linked company whose financial year and period information should be returned."),
+        }).strict(),
+    }, args => getCopilotFinancialYear(args));
 }

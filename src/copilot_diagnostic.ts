@@ -8,7 +8,7 @@ export const COPILOT_INSTRUCTIONS = [
   "Use search_customers to search customers in companies linked to the verified signed-in Microsoft user. Use an empty query to list customers.",
   "Start without nextCursor. If a response returns nextCursor, pass it with the same query to continue, even when the current page has no matches.",
   "Use fetch_customer with the exact customerId and companyName from search results to retrieve one customer. Customer IDs are company-scoped.",
-  "Use the other search tools for suppliers, products, quotes, sales invoices, sales credit notes, purchases, bank accounts, cash payments, cash receipts, payments and accounts. Omit companyName to search linked companies. Keep all filters unchanged with nextCursor. Fetch a result using its returned identifier and companyName.",
+  "Use the other search tools for suppliers, products, quotes, sales invoices, sales credit notes, purchases, bank accounts, cash payments, cash receipts, payments, accounts, VAT, analysis categories, nominal accounts, accruals, prepayments and ledgers. Omit companyName to search linked companies. Keep all filters unchanged with nextCursor. Fetch a result using its returned identifier and companyName, or use get_financial_year for period dates.",
 ].join("\n");
 
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {

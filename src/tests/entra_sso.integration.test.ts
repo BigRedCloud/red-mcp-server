@@ -161,6 +161,23 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     const denied = await b.callTool({name:`fetch_${singular}`,arguments:{[idField]:id,companyName:"A"}});
     assert.equal(denied.isError,true);
   }
+  for (const name of ["search_accruals", "search_prepayments", "search_vat_rates", "search_vat_categories", "search_analysis_categories", "search_nominal_accounts"]) {
+    const search: any = await a.callTool({name,arguments:{query:"",companyName:"A"}});
+    assert.equal(search.structuredContent.status,"ok",name);
+    assert.equal((await b.callTool({name,arguments:{query:"",companyName:"A"}})).isError,true);
+  }
+  const accrual: any = await a.callTool({name:"fetch_accrual",arguments:{accrualId:"1",companyName:"A"}});
+  assert.equal(accrual.structuredContent.status,"ok");
+  assert.equal(accrual.structuredContent.accrual.Id,1);
+  const ledger: any = await a.callTool({name:"search_customer_transactions",arguments:{customerId:"1",companyName:"A"}});
+  assert.equal(ledger.structuredContent.status,"ok");
+  assert.equal(ledger.structuredContent.results[0].bookTranId,"1");
+  assert.equal(ledger.structuredContent.results[0].fetchAvailable,false);
+  const year: any = await a.callTool({name:"get_financial_year",arguments:{companyName:"A"}});
+  assert.equal(year.structuredContent.status,"ok");
+  assert.equal(year.structuredContent.financial_year.yearStart,"2026-01-01");
+  assert.equal((await b.callTool({name:"get_financial_year",arguments:{companyName:"A"}})).isError,true);
+  assert.doesNotMatch(JSON.stringify([accrual,ledger,year]), /test-only-/);
   const fetched: any=await a.callTool({name:"fetch_customer",arguments:{customerId:"1",companyName:"A"}});
   assert.equal(fetched.structuredContent?.status,"ok");
   assert.equal(fetched.structuredContent.customer.Id,1);

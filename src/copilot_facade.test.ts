@@ -27,6 +27,23 @@ const added = [
 ] as const;
 const expected = [...original, ...added];
 const originalNames = ["search_customers", "fetch_customer", ...original.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])];
+const existingNames = ["search_customers", "fetch_customer", ...expected.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])];
+const tranchePairs = [["accruals", "accrual"], ["prepayments", "prepayment"]] as const;
+const searchOnly = ["vat_rates", "vat_categories", "analysis_categories", "nominal_accounts"] as const;
+const purposeNames = ["search_customer_transactions", "search_supplier_transactions", "get_financial_year"] as const;
+const existingMeta = [
+  ["suppliers", "supplier", "suppliers", false],
+  ["products", "product", "products", false],
+  ["sales_invoices", "sales_invoice", "sales invoices", true],
+  ["purchases", "purchase", "purchases", true],
+  ["accounts", "account", "accounts", false],
+  ["quotes", "quote", "quotes", true],
+  ["sales_credit_notes", "sales_credit_note", "sales credit notes", true],
+  ["bank_accounts", "bank_account", "bank accounts", false],
+  ["cash_payments", "cash_payment", "cash payments", true],
+  ["cash_receipts", "cash_receipt", "cash receipts", true],
+  ["payments", "payment", "payments", true],
+] as const;
 type Registered = { config: any; handler: (args: any) => Promise<any> };
 function registry() {
   const tools = new Map<string, Registered>();
@@ -55,25 +72,36 @@ async function fixture(t: TestContext) {
   return { a, b, c, store, tools, invoke };
 }
 
-test("normal 159 descriptors remain identical; Copilot advertises exactly 24 strict search/fetch tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 35 strict read-only tools", () => {
   const normal: any[] = [];
   registerAllTools({ registerTool(name: string, config: any) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() {}, registerPrompt() {} } as any, { profile: "full" });
   assert.equal(normal.length, 159);
   assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a,b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
   const tools = registry();
-  const names = ["search_customers", "fetch_customer", ...expected.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])].sort();
-  assert.equal(tools.size, 24);
+  const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames].sort();
+  assert.equal(tools.size, 35);
   assert.deepEqual([...tools.keys()].sort(), names);
   assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), names);
   for (const name of originalNames) assert.equal(tools.has(name), true, name);
+  for (const name of existingNames) assert.equal(tools.has(name), true, name);
+  assert.equal(tools.has("fetch_vat_rate"), false);
+  assert.equal(tools.has("fetch_nominal_account"), false);
   for (const [name, { config }] of tools) {
-    assert.match(name, /^(search|fetch)_/);
+    assert.match(name, /^(search|fetch|get)_/);
+    assert.doesNotMatch(name, /^brc_/);
     assert.ok(config.title.length > 10);
     assert.ok(config.description.length < 400);
     assert.deepEqual(config.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     const schema = z.toJSONSchema(config.inputSchema) as any;
     assert.equal(schema.additionalProperties, false);
     for (const field of ["apiKey", "connectionRef", "tenantId", "objectId", "confirmWrite", "routeToken", "filter"]) assert.equal(field in schema.properties, false, name);
+  }
+  for (const [plural, singular, label, documents] of existingMeta) {
+    const search = tools.get(`search_${plural}`)!;
+    assert.equal(search.config.title, `Search Big Red Cloud ${label}`);
+    assert.equal(search.config.description, `Search ${label} by text${documents ? ", transaction date or counterparty code" : " or exact code"} in linked companies. Empty query lists records. Continue with nextCursor even after an empty page.`);
+    const fetchTool = tools.get(`fetch_${singular}`)!;
+    assert.equal(fetchTool.config.title, `Fetch Big Red Cloud ${label === "purchases" ? "purchase" : label.replace(/s$/, "")}`);
   }
   assert.deepEqual(Object.keys(tools.get("search_customers")!.config.inputSchema.shape), ["query", "nextCursor"]);
   assert.deepEqual(Object.keys(tools.get("fetch_customer")!.config.inputSchema.shape), ["customerId", "companyName"]);
@@ -85,6 +113,11 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 24 str
   assert.deepEqual(Object.keys(tools.get("fetch_quote")!.config.inputSchema.shape), ["quoteId", "companyName"]);
   assert.deepEqual(Object.keys(tools.get("search_bank_accounts")!.config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
   assert.deepEqual(Object.keys(tools.get("fetch_bank_account")!.config.inputSchema.shape), ["bankAccountId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("search_accruals")!.config.inputSchema.shape), ["query", "companyName", "code", "dateFrom", "dateTo", "pageSize", "nextCursor"]);
+  assert.deepEqual(Object.keys(tools.get("fetch_accrual")!.config.inputSchema.shape), ["accrualId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("search_vat_rates")!.config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
+  assert.deepEqual(Object.keys(tools.get("search_customer_transactions")!.config.inputSchema.shape), ["customerId", "companyName", "query", "pageSize", "nextCursor"]);
+  assert.deepEqual(Object.keys(tools.get("get_financial_year")!.config.inputSchema.shape), ["companyName"]);
 });
 
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async t => {
@@ -354,4 +387,129 @@ test("maximum-sized continuation remains accepted and detects repetition across 
   const next=(await f.invoke(f.a,"search_accounts",{...args,nextCursor:first.nextCursor})).structuredContent;
   assert.equal(calls,4); assert.equal(next.nextCursor,undefined); assert.equal(next.complete,false);
   assert.equal(next.paginationWarnings[0].reason,"pagination_stalled");
+});
+
+test("tranche wrappers reuse the audited list/get handlers without fetch fan-out", async t => {
+  const f = await fixture(t);
+  const calls: Array<{ url: URL; key: string }> = [];
+  t.mock.method(globalThis, "fetch", async (input: any, init: any) => {
+    assert.equal(init.method ?? "GET", "GET");
+    const url = new URL(String(input));
+    const key = Buffer.from(init.headers.Authorization.replace("Basic ", ""), "base64").toString().slice(0, -1);
+    calls.push({ url, key });
+    if (url.pathname.endsWith("/accountTrans")) {
+      return new Response(JSON.stringify({ Items: [
+        { Id: 1, BookTranId: 11, Reference: "INV-1", Debit: 50, Credit: 0, BookTypeDesc: "Sales Invoice", ApiKey: key },
+        { Id: 2, BookTranId: 12, Reference: "REC-2", Debit: 0, Credit: 50, BookTypeDesc: "Cash Receipt" },
+      ] }));
+    }
+    if (url.pathname.includes("getFinancialYear")) return new Response(JSON.stringify({ yearStart: "2026-01-01", yearEnd: "2026-12-31", ApiKey: key }));
+    const row = { Id: 7, Code: "ABC", Name: "Rate 23", Percentage: 23, vatCategoryId: 1, AcCode: "4000", oBalance: 10, firstDetail: "March rent", EntryDate: "2026-03-01", Month1: 99, month2: 5, ApiKey: key };
+    return new Response(JSON.stringify(/\/7$/.test(url.pathname) ? row : { Items: [row] }));
+  });
+  for (const [plural, singular, path, idField] of [
+    ["accruals", "accrual", "accruals", "accrualId"],
+    ["prepayments", "prepayment", "prepayments", "prepaymentId"],
+  ] as const) {
+    const before = calls.length;
+    const search = await f.invoke(f.a, `search_${plural}`, { query: "rent", companyName: "Shared" });
+    assert.equal(search.structuredContent.status, "ok", plural);
+    assert.equal(search.structuredContent.results[0][idField], "7");
+    assert.equal(search.structuredContent.results[0].fetchAvailable, true);
+    assert.equal(search.structuredContent.results[0].record.Month1, undefined);
+    assert.equal(search.structuredContent.results[0].record.firstDetail, "March rent");
+    assert.equal(calls.length, before + 1, `${plural} search must not fan out`);
+    assert.equal(calls.at(-1)!.url.pathname, `/api/v1/${path}`);
+    assert.equal(calls.at(-1)!.url.searchParams.get("$top"), "20");
+    assert.equal(calls.at(-1)!.url.searchParams.get("$skip"), "0");
+    assert.equal(calls.at(-1)!.url.searchParams.has("page"), false);
+    const fetched = await f.invoke(f.a, `fetch_${singular}`, { [idField]: "7", companyName: "Shared" });
+    assert.equal(fetched.structuredContent.status, "ok", singular);
+    assert.equal(fetched.structuredContent[singular].Id, 7);
+    assert.equal(calls.at(-1)!.url.pathname, `/api/v1/${path}/7`);
+  }
+  for (const [plural, path, idField] of [
+    ["vat_rates", "vatRates", "vatRateId"],
+    ["vat_categories", "vatCategories", "vatCategoryId"],
+    ["analysis_categories", "analysisCategories", "analysisCategoryId"],
+    ["nominal_accounts", "nominalAccounts", "nominalAccountId"],
+  ] as const) {
+    const before = calls.length;
+    const search = await f.invoke(f.a, `search_${plural}`, { query: "", companyName: "Shared" });
+    assert.equal(search.structuredContent.status, "ok", plural);
+    assert.equal(search.structuredContent.results[0][idField], "7");
+    assert.equal(search.structuredContent.results[0].fetchAvailable, false);
+    assert.equal(search.structuredContent.results[0].record.month2, undefined);
+    assert.equal(calls.length, before + 1, `${plural} search must not fan out`);
+    assert.equal(calls.at(-1)!.url.pathname, `/api/v1/${path}`);
+    assert.equal(toolsMissingFetch(f.tools, plural), true);
+  }
+  const ledger = await f.invoke(f.a, "search_customer_transactions", { customerId: "42", companyName: "Shared" });
+  assert.equal(ledger.structuredContent.status, "ok");
+  assert.equal(ledger.structuredContent.results.length, 2);
+  assert.equal(ledger.structuredContent.results[0].fetchAvailable, false);
+  assert.equal(ledger.structuredContent.results[0].bookTranId, "11");
+  assert.equal(calls.filter(call => call.url.pathname === "/api/v1/customers/42/accountTrans").length, 1);
+  const year = await f.invoke(f.a, "get_financial_year", { companyName: "Shared" });
+  assert.equal(year.structuredContent.status, "ok");
+  assert.equal(year.structuredContent.financial_year.yearStart, "2026-01-01");
+  assert.doesNotMatch(JSON.stringify([ledger, year]), /owner-a-key|ApiKey/);
+  function toolsMissingFetch(tools: Map<string, Registered>, plural: string) {
+    return !tools.has(`fetch_${plural.replace(/s$/, "")}`) && !tools.has(`fetch_${plural.slice(0, -1)}`);
+  }
+});
+
+test("tranche tools stay owner-scoped and reject credential injection", async t => {
+  const f = await fixture(t);
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", async () => { requests++; throw new Error("No IO expected"); });
+  for (const [name, args] of [
+    ["search_accruals", { query: "", companyName: "Shared" }],
+    ["fetch_accrual", { accrualId: "7", companyName: "Shared" }],
+    ["search_vat_rates", { query: "", companyName: "Shared" }],
+    ["search_customer_transactions", { customerId: "42", companyName: "Shared" }],
+    ["search_supplier_transactions", { supplierId: "9", companyName: "Shared" }],
+    ["get_financial_year", { companyName: "Shared" }],
+  ] as const) {
+    assert.equal((await f.invoke(undefined, name, args)).structuredContent.status, "authentication_required");
+    assert.equal((await f.invoke(f.c, name, args)).structuredContent.status, "company_unavailable");
+    assert.equal((await f.invoke(f.a, name, { ...args, companyName: "Foreign" })).isError, true);
+    assert.throws(() => f.tools.get(name)!.config.inputSchema.parse({ ...args, connectionRef: "foreign", tenantId: f.a.tenantId }));
+  }
+  assert.equal(requests, 0);
+});
+
+test("accrual and VAT searches advance OData offsets; customer ledgers page locally from one GET", async t => {
+  const f = await fixture(t);
+  const offsets: number[] = [];
+  t.mock.method(globalThis, "fetch", async (input: any) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/accruals") || url.pathname.endsWith("/vatRates")) {
+      const skip = Number(url.searchParams.get("$skip")); offsets.push(skip);
+      assert.equal(url.searchParams.get("$top"), "2");
+      return new Response(JSON.stringify({ Items: Array.from({ length: Math.max(0, Math.min(2, 7 - skip)) }, (_, i) => ({ Id: skip + i + 1, Name: "Row", Code: "X" })) }));
+    }
+    if (url.pathname.endsWith("/accountTrans")) {
+      offsets.push(-1);
+      return new Response(JSON.stringify({ Items: Array.from({ length: 7 }, (_, i) => ({ Id: i + 1, BookTranId: i + 1, Reference: `INV-${i + 1}`, Debit: i + 1 })) }));
+    }
+    throw new Error(url.pathname);
+  });
+  const first = (await f.invoke(f.a, "search_accruals", { query: "", pageSize: 2 })).structuredContent;
+  const next = (await f.invoke(f.a, "search_accruals", { query: "", pageSize: 2, nextCursor: first.nextCursor })).structuredContent;
+  assert.equal([...first.results, ...next.results].length, 7);
+  assert.deepEqual(offsets, [0, 2, 4, 6]);
+  offsets.length = 0;
+  const vatFirst = (await f.invoke(f.a, "search_vat_rates", { query: "", pageSize: 2 })).structuredContent;
+  const vatNext = (await f.invoke(f.a, "search_vat_rates", { query: "", pageSize: 2, nextCursor: vatFirst.nextCursor })).structuredContent;
+  assert.equal([...vatFirst.results, ...vatNext.results].length, 7);
+  offsets.length = 0;
+  const ledgerFirst = (await f.invoke(f.a, "search_customer_transactions", { customerId: "42", companyName: "Shared", pageSize: 4 })).structuredContent;
+  const ledgerNext = (await f.invoke(f.a, "search_customer_transactions", { customerId: "42", companyName: "Shared", pageSize: 4, nextCursor: ledgerFirst.nextCursor })).structuredContent;
+  assert.equal(ledgerFirst.results.length, 4);
+  assert.equal([...ledgerFirst.results, ...ledgerNext.results].length, 7);
+  assert.equal(new Set([...ledgerFirst.results, ...ledgerNext.results].map((row: any) => row.bookTranId)).size, 7);
+  assert.deepEqual(offsets, [-1, -1]);
+  assert.equal(ledgerNext.complete, true);
+  assert.equal((await f.invoke(f.b, "search_customer_transactions", { customerId: "42", companyName: "Shared", pageSize: 4, nextCursor: ledgerFirst.nextCursor })).structuredContent.status, "invalid_cursor");
 });

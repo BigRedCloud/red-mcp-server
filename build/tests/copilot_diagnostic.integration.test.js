@@ -22,8 +22,8 @@ test("Copilot federated discovery exposes only audited read-only tools without c
     await client.connect(transport);
     const listed = await client.listTools();
     assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...COPILOT_FEDERATED_TOOL_NAMES].sort());
-    assert.equal(listed.tools.length, 24);
-    assert.ok(listed.tools.every(tool => /^(search|fetch)_/.test(tool.name)));
+    assert.equal(listed.tools.length, 35);
+    assert.ok(listed.tools.every(tool => /^(search|fetch|get)_/.test(tool.name)));
     for (const tool of listed.tools)
         assert.deepEqual(tool.annotations, COPILOT_DIAGNOSTIC_ANNOTATIONS);
     await assert.rejects(client.callTool({ name: "search_customers", arguments: { query: "" } }));
