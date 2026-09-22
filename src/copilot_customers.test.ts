@@ -17,7 +17,7 @@ test("customer cursors reject another connected owner, tampering and expiry; out
     await store.saveCompanies(owner,[{companyName:"A",apiKey:"synthetic-only-secret",expiresAt:Date.now()+60_000}]);
   }
   let calls=0;
-  t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(JSON.stringify({Items:[{Id:1,Name:`synthetic-only-secret ${a.objectId}`,apiKey:"synthetic-only-secret"}],Count:99}));});
+  t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(JSON.stringify({Items:[{Id:calls,Name:`synthetic-only-secret ${a.objectId}`,apiKey:"synthetic-only-secret"}],Count:99}));});
   const invoke=(owner:typeof a,args:{cursor?:string;pageSize?:number})=>entraRequestOwner.run(owner,()=>listCopilotCustomers(args));
   assert.equal((await listCopilotCustomers({})).structuredContent.status,"authentication_required");
   assert.equal(calls,0);
@@ -46,7 +46,7 @@ test("customer search bounds scans, lists with empty query and binds continuatio
   let calls=0;
   t.mock.method(globalThis,"fetch",async(input: RequestInfo | URL)=>{
     calls++;
-    const page=Number(new URL(String(input)).searchParams.get("page"));
+    const page=Number(new URL(String(input)).searchParams.get("$skip"))/20+1;
     return new Response(JSON.stringify({Items:page<=3?Array.from({length:20},(_,i)=>({Id:(page-1)*20+i+1,Name:"Other"})):[{Id:61,Name:"Needle"}]}));
   });
   const invoke=(args:{query:string;cursor?:string})=>entraRequestOwner.run(owner,()=>listCopilotCustomers(args));

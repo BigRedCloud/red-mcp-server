@@ -1,3 +1,4 @@
+import { advancePage, freshPaging, pagingArgs, pagingSchema } from "./copilot_paging.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,7 +16,7 @@ import { normaliseCompanyName, resolveActiveMcpSessionId, runWithSessionKeyStore
 /** Facade mappings only: these do not register, replace or wrap any /mcp tool. */
 export const COPILOT_ENTITIES = [
   { plural: "suppliers", singular: "supplier", label: "suppliers", idField: "supplierId", list: "brc_list_suppliers", get: "brc_get_supplier", ids: ["id", "supplierid"], codes: ["code", "suppliercode", "accode"], documents: false },
-  { plural: "products", singular: "product", label: "products", idField: "productId", list: "brc_list_products", get: "brc_get_product", ids: ["id", "productid"], codes: ["code", "productcode"], documents: false },
+  { plural: "products", singular: "product", label: "products", idField: "productId", list: "brc_list_products", get: "brc_get_product", ids: ["id", "productid"], codes: ["stockcode", "code", "productcode"], documents: false },
   { plural: "sales_invoices", singular: "sales_invoice", label: "sales invoices", idField: "salesInvoiceId", list: "brc_list_sales_invoices", get: "brc_get_sales_invoice", ids: ["id", "salesinvoiceid", "invoiceid", "booktranid"], codes: ["reference", "invoicenumber"], documents: true },
   { plural: "purchases", singular: "purchase", label: "purchases", idField: "purchaseId", list: "brc_list_purchases", get: "brc_get_purchase", ids: ["id", "purchaseid", "booktranid"], codes: ["reference", "purchasenumber"], documents: true },
   { plural: "accounts", singular: "account", label: "accounts", idField: "accountId", list: "brc_list_accounts", get: null, ids: ["id", "accountid"], codes: ["code", "accountcode", "accode"], documents: false },
@@ -61,8 +62,8 @@ function readers() {
 }
 
 const cursorSchema = z.object({
-  version: z.literal(1), binding: z.string(), index: z.number().int().nonnegative(),
-  page: z.number().int().positive(), exp: z.number(),
+  version: z.literal(2), binding: z.string(), index: z.number().int().nonnegative(),
+  page: z.number().int().positive(), exp: z.number(), paging: pagingSchema, incomplete: z.boolean(),
 }).strict();
 type Cursor = z.infer<typeof cursorSchema>;
 type SearchArgs = { query: string; companyName?: string; code?: string; counterpartyCode?: string; dateFrom?: string; dateTo?: string; pageSize?: number; nextCursor?: string };
@@ -73,6 +74,10 @@ function value(row: Record<string, unknown>, names: readonly string[]) {
     if ((typeof entry === "string" && entry.length > 0) || typeof entry === "number") return String(entry);
   }
   return undefined;
+}
+function detailTitle(row: Record<string, unknown>) {
+  const details = Object.entries(row).find(([key]) => key.toLowerCase() === "details")?.[1];
+  return typeof details === "string" ? details : Array.isArray(details) ? details.find(item => typeof item === "string" && item.trim()) : undefined;
 }
 function identifier(entity: Entity, row: Record<string, unknown>) {
   const id = value(row, entity.ids);
@@ -111,7 +116,7 @@ function binding(context: Scope, purpose: string, parameters: unknown) {
   ])).digest("hex");
 }
 function cursorFor(context: Scope, hash: string, supplied?: string): Cursor {
-  if (!supplied) return { version: 1, binding: hash, index: 0, page: 1, exp: Date.now() + 600_000 };
+  if (!supplied) return { version: 2, binding: hash, index: 0, page: 1, paging: freshPaging(), incomplete: false, exp: Date.now() + 600_000 };
   try {
     const cursor = cursorSchema.parse(JSON.parse(openSsoEnvelope(supplied)));
     if (cursor.binding !== hash || cursor.exp <= Date.now() || cursor.index >= context.companies.length) throw new Error("Invalid cursor");
@@ -141,7 +146,8 @@ const summaryFields = new Set([
   "id", "supplierid", "productid", "salesinvoiceid", "invoiceid", "purchaseid", "accountid", "booktranid",
   "code", "suppliercode", "productcode", "customercode", "accountcode", "accode", "name", "suppliername", "customername", "productname", "description",
   "reference", "invoicenumber", "purchasenumber", "entrydate", "date", "invoicedate", "purchasedate", "duedate",
-  "email", "balance", "total", "net", "vat", "gross", "unpaid", "dormant", "isdormant",
+  "stockcode", "details", "price", "unitprice", "grossunitprice", "accountname", "netamount", "vatamount", "grossamount",
+  "email", "telephone", "phone", "balance", "total", "net", "vat", "gross", "unpaid", "dormant", "isdormant",
 ]);
 const privateFields = /^(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|password|secret|encryptedSecret|connectionRef|activeConnectionRef|connectionMetadata|connection|_meta|tenantId|objectId)$/i;
 function sanitize(data: unknown, clean: Scope["clean"], depth = 0): unknown {
@@ -162,7 +168,7 @@ function matches(entity: Entity, row: Record<string, unknown>, args: SearchArgs)
     const date = value(row, ["entrydate", "invoicedate", "purchasedate", "date"])?.slice(0, 10);
     if (!date || !z.iso.date().safeParse(date).success || (args.dateFrom && date < args.dateFrom) || (args.dateTo && date > args.dateTo)) return false;
   }
-  return !args.query.trim() || Object.values(row).some(item => (typeof item === "string" || typeof item === "number") && fold(String(item)).includes(fold(args.query)));
+  return !args.query.trim() || Object.values(row).flatMap(item => Array.isArray(item) ? item : [item]).some(item => (typeof item === "string" || typeof item === "number") && fold(String(item)).includes(fold(args.query)));
 }
 
 export async function searchCopilotEntity(entity: Entity, args: SearchArgs) {
@@ -174,18 +180,20 @@ export async function searchCopilotEntity(entity: Entity, args: SearchArgs) {
     const cursor = cursorFor(context, hash, args.nextCursor);
     const results: Record<string, unknown>[] = [];
     const unavailableCompanies: string[] = [];
+    const paginationWarnings: Record<string, string>[] = [];
     for (let count = 0; count < MAX_PAGES && cursor.index < context.companies.length; count++) {
       const companyName = context.clean(context.companies[cursor.index].companyName);
       try {
-        const rows = items(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize }), pageSize);
+        const rows = items(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) }), pageSize);
+        const progress = advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
         const pageResults = [];
-        for (const row of rows) {
-          const summary = sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => summaryFields.has(key.toLowerCase()))), context.clean) as Record<string, unknown>;
+        for (const row of progress.rows) {
+          const summary = sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => summaryFields.has(key.toLowerCase())).map(([key, item]) => [key, Array.isArray(item) ? item.filter(value => typeof value === "string").slice(0, 5).map(value => value.slice(0, 1000)) : item])), context.clean) as Record<string, unknown>;
           if (!matches(entity, summary, args)) continue;
           const id = identifier(entity, row);
           const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
           pageResults.push({ companyName, ...(usableId ? { [entity.idField]: id } : {}),
-            title: context.clean(value(row, ["name", "suppliername", "productname", "description", "reference", ...entity.codes]) ?? id ?? entity.singular),
+            title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
             record: summary, fetchAvailable: usableId });
         }
         if (Buffer.byteLength(JSON.stringify([...results, ...pageResults])) > MAX_BYTES) {
@@ -193,15 +201,17 @@ export async function searchCopilotEntity(entity: Entity, args: SearchArgs) {
           break; // Retry this unconsumed page on the next invocation.
         }
         results.push(...pageResults);
-        if (rows.length === pageSize) cursor.page++; else { cursor.index++; cursor.page = 1; }
+        cursor.paging = progress.state;
+        if (progress.warning) { paginationWarnings.push({ companyName, reason: progress.warning }); cursor.incomplete = true; }
+        if (!progress.done) cursor.page++; else { cursor.index++; cursor.page = 1; cursor.paging = freshPaging(); }
       } catch {
         unavailableCompanies.push(companyName);
-        cursor.index++; cursor.page = 1;
+        cursor.index++; cursor.page = 1; cursor.paging = freshPaging();
       }
     }
     const nextCursor = cursor.index < context.companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
-    return reply({ status: unavailableCompanies.length ? "partial_failure" : "ok", results, unavailableCompanies,
-      ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor });
+    return reply({ status: cursor.incomplete || unavailableCompanies.length ? "partial_failure" : "ok", results, unavailableCompanies, paginationWarnings,
+      ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
   } catch (error) { return failure(error); }
 }
 
@@ -215,15 +225,18 @@ export async function fetchCopilotEntity(entity: Entity, args: { companyName: st
       if (!record || typeof record !== "object" || Array.isArray(record) || identifier(entity, record as Record<string, unknown>) !== args.recordId) throw new Error("Unexpected record identity");
     } else {
       // /accounts has no audited get-by-ID tool. Look up an exact ID/code using
-      // its existing paged list handler; do not assume OData or invent an API.
+      // its existing list handler with documented OData offsets.
       if (!/^(?:id|code):.+/.test(args.recordId)) throw new FacadeError("invalid_request", "Use the accountId returned by search_accounts (id:... or code:...).");
       const cursor = cursorFor(context, binding(context, "fetch_account", args.recordId), args.nextCursor);
       for (let count = 0; count < MAX_PAGES; count++) {
-        const rows = items(await read(context, 0, entity.list, { page: cursor.page, pageSize: 50 }), 50);
+        const rows = items(await read(context, 0, entity.list, { page: cursor.page, pageSize: 50, ...pagingArgs(cursor.paging, 50) }), 50);
+        const progress = advancePage(cursor.paging, rows, 50, row => identifier(entity, row));
+        if (progress.warning) throw new FacadeError(progress.warning, "The account list did not complete. Restart the lookup later.");
         const matching = rows.filter(row => identifier(entity, row) === args.recordId);
         if (matching.length > 1) throw new FacadeError("ambiguous_record", "This identifier is not unique. Search again for an account with a unique ID.");
         if (matching.length === 1) { record = matching[0]; break; }
         if (rows.length < 50) return reply({ status: "not_found", companyName: context.clean(context.companies[0].companyName) }, true);
+        cursor.paging = progress.state;
         cursor.page++;
       }
       if (!record) return reply({ status: "incomplete", message: "Continue with the same accountId and companyName to finish the lookup.", nextCursor: encryptCredentialSecret(JSON.stringify(cursor)) });

@@ -93,6 +93,9 @@ test("each new facade reuses the correct list/get endpoint, scopes credentials, 
         assert.equal(listCall.url.pathname, `/api/v1/${path}`);
         assert.equal(listCall.url.searchParams.get("page"), "1");
         assert.equal(listCall.url.searchParams.get("pageSize"), "20");
+        assert.equal(listCall.url.searchParams.get("$top"), "20");
+        assert.equal(listCall.url.searchParams.get("$skip"), "0");
+        assert.equal(listCall.url.searchParams.get("$orderby"), "id asc");
         assert.equal(listCall.key, "owner-a-key");
         const fetched = await f.invoke(f.a, `fetch_${singular}`, { [idField]: row[idField], companyName: "Shared" });
         assert.equal(fetched.structuredContent.status, "ok", singular);
@@ -128,7 +131,7 @@ test("bounded search continues after empty matches and binds cursor to owner, en
     let requests = 0;
     t.mock.method(globalThis, "fetch", async (input) => {
         requests++;
-        const url = new URL(String(input)), page = Number(url.searchParams.get("page"));
+        const url = new URL(String(input)), page = Number(url.searchParams.get("$skip")) + 1;
         return new Response(JSON.stringify({ Items: page < 4 ? [{ Id: page, Name: "Other", Code: "A" }] : [] }));
     });
     const args = { query: "needle", companyName: "Shared", pageSize: 1 };
@@ -183,7 +186,7 @@ test("accounts fetch uses exact stable IDs/codes, bounded list continuation, and
         requests++;
         const url = new URL(String(input));
         assert.equal(url.pathname, "/api/v1/accounts");
-        const page = Number(url.searchParams.get("page"));
+        const page = Number(url.searchParams.get("$skip")) / 50 + 1;
         const rows = page < 4 ? Array.from({ length: 50 }, (_, index) => ({ Id: (page - 1) * 50 + index + 1, Code: "OTHER" })) : [{ Code: "TARGET", Name: "Account" }];
         return new Response(JSON.stringify({ Items: rows }));
     });
@@ -209,5 +212,117 @@ test("mismatched records, upstream errors and partial company failures never bec
     const partial = await f.invoke(f.a, "search_suppliers", { query: "" });
     assert.equal(partial.structuredContent.status, "partial_failure");
     assert.deepEqual(partial.structuredContent.unavailableCompanies, ["Shared"]);
+    assert.equal(partial.structuredContent.complete, true);
+    assert.equal(partial.structuredContent.nextCursor, undefined);
     assert.doesNotMatch(JSON.stringify(partial), /owner-a-key/);
+});
+for (const [plural, , idField] of expected) {
+    test(`${plural} advances OData offsets across continuations without repeated records`, async (t) => {
+        const f = await fixture(t);
+        const offsets = [];
+        t.mock.method(globalThis, "fetch", async (input) => {
+            const url = new URL(String(input));
+            const skip = Number(url.searchParams.get("$skip"));
+            offsets.push(skip);
+            assert.equal(url.searchParams.get("$top"), "2");
+            return new Response(JSON.stringify({ Items: Array.from({ length: Math.max(0, Math.min(2, 7 - skip)) }, (_, i) => ({ Id: skip + i + 1, Name: "Summary", Code: "Code" })), Count: null, NextPageLink: null }));
+        });
+        const first = (await f.invoke(f.a, `search_${plural}`, { query: "", pageSize: 2 })).structuredContent;
+        const next = (await f.invoke(f.a, `search_${plural}`, { query: "", pageSize: 2, nextCursor: first.nextCursor })).structuredContent;
+        const rows = [...first.results, ...next.results];
+        assert.equal(rows.length, 7);
+        assert.equal(new Set(rows.map(row => row[idField])).size, 7);
+        assert.deepEqual(offsets, [0, 2, 4, 6]);
+        assert.equal(next.complete, true);
+    });
+    test(`${plural} stops an upstream that ignores offsets without repeating its first page`, async (t) => {
+        const f = await fixture(t);
+        let calls = 0;
+        t.mock.method(globalThis, "fetch", async () => { calls++; return new Response(JSON.stringify({ Items: [{ Id: 1 }, { Id: 2 }], NextPageLink: "https://untrusted.invalid/next" })); });
+        const result = (await f.invoke(f.a, `search_${plural}`, { query: "", pageSize: 2 })).structuredContent;
+        assert.equal(calls, 2);
+        assert.equal(result.results.length, 2);
+        assert.equal(result.complete, false);
+        assert.equal(result.nextCursor, undefined);
+        assert.equal(result.paginationWarnings[0].reason, "pagination_stalled");
+    });
+}
+test("product search retains and searches lightweight list details without detail requests", async (t) => {
+    const f = await fixture(t);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        calls++;
+        assert.equal(new URL(String(input)).pathname, "/api/v1/products");
+        return new Response(JSON.stringify({ Items: [{ id: 5023355, stockCode: "DEMO", unitPrice: 12.5, grossUnitPrice: false, details: ["Demo Product 1"], ApiKey: "secret", lineItems: [{ private: "omit" }] }] }));
+    });
+    const result = (await f.invoke(f.a, "search_products", { query: "Demo Product", code: "demo" })).structuredContent;
+    assert.equal(calls, 1);
+    assert.equal(result.results[0].title, "Demo Product 1");
+    assert.deepEqual(result.results[0].record, { id: 5023355, stockCode: "DEMO", unitPrice: 12.5, grossUnitPrice: false, details: ["Demo Product 1"] });
+});
+test("customer continuation uses offsets and stops a stalled backend", async (t) => {
+    const f = await fixture(t);
+    const offsets = [];
+    let stalled = false;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        const url = new URL(String(input));
+        const skip = Number(url.searchParams.get("$skip"));
+        offsets.push(skip);
+        assert.equal(url.searchParams.get("$top"), "20");
+        return new Response(JSON.stringify({ Items: Array.from({ length: stalled ? 20 : Math.max(0, Math.min(20, 65 - skip)) }, (_, i) => ({ Id: (stalled ? 0 : skip) + i + 1, Name: "Customer", AcCode: "C001" })) }));
+    });
+    const first = (await f.invoke(f.a, "search_customers", { query: "" })).structuredContent;
+    const next = (await f.invoke(f.a, "search_customers", { query: "", nextCursor: first.nextCursor })).structuredContent;
+    const rows = [...first.companies, ...next.companies].flatMap(group => group.customers);
+    assert.equal(rows.length, 65);
+    assert.equal(new Set(rows.map(row => row.Id)).size, 65);
+    assert.deepEqual(offsets, [0, 20, 40, 60]);
+    stalled = true;
+    offsets.length = 0;
+    const stopped = (await f.invoke(f.a, "search_customers", { query: "" })).structuredContent;
+    assert.deepEqual(offsets, [0, 20]);
+    assert.equal(stopped.complete, false);
+    assert.equal(stopped.nextCursor, undefined);
+    assert.equal(stopped.companies.flatMap((group) => group.customers).length, 20);
+});
+test("account fetch terminates an ignored offset without claiming not found", async (t) => {
+    const f = await fixture(t);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => { calls++; return new Response(JSON.stringify({ Items: Array.from({ length: 50 }, (_, i) => ({ Id: i + 1 })) })); });
+    const result = await f.invoke(f.a, "fetch_account", { companyName: "Shared", accountId: "id:999" });
+    assert.equal(result.structuredContent.status, "pagination_stalled");
+    assert.equal(calls, 2);
+    assert.equal(result.isError, true);
+});
+test("empty final pages complete without stalling", async (t) => {
+    const f = await fixture(t);
+    const offsets = [];
+    t.mock.method(globalThis, "fetch", async (input) => {
+        const skip = Number(new URL(String(input)).searchParams.get("$skip"));
+        offsets.push(skip);
+        const items = skip === 0 ? [{ Id: 1, Name: "Item", Code: "X" }, { Id: 2, Name: "Item", Code: "X" }] : [];
+        return new Response(JSON.stringify({ Items: items }));
+    });
+    const result = (await f.invoke(f.a, "search_suppliers", { query: "", pageSize: 2 })).structuredContent;
+    assert.deepEqual(result.results.map((row) => row.supplierId), ["1", "2"]);
+    assert.deepEqual(offsets, [0, 2]);
+    assert.equal(result.complete, true);
+    assert.equal(result.nextCursor, undefined);
+    assert.deepEqual(result.paginationWarnings, []);
+});
+test("maximum-sized continuation remains accepted and detects repetition across calls", async (t) => {
+    const f = await fixture(t);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+        const start = Math.min(calls++, 2) * 50;
+        return new Response(JSON.stringify({ Items: Array.from({ length: 50 }, (_, i) => ({ Id: start + i + 1, Name: "Account summary" })) }));
+    });
+    const args = { query: "x".repeat(1000), pageSize: 50 };
+    const first = (await f.invoke(f.a, "search_accounts", args)).structuredContent;
+    assert.ok(first.nextCursor.length <= 4096);
+    const next = (await f.invoke(f.a, "search_accounts", { ...args, nextCursor: first.nextCursor })).structuredContent;
+    assert.equal(calls, 4);
+    assert.equal(next.nextCursor, undefined);
+    assert.equal(next.complete, false);
+    assert.equal(next.paginationWarnings[0].reason, "pagination_stalled");
 });

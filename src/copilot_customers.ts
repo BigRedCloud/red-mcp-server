@@ -1,3 +1,4 @@
+import { advancePage, freshPaging, pagingArgs, pagingSchema, type Paging } from "./copilot_paging.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -8,12 +9,12 @@ import { encryptCredentialSecret } from "./auth/credential_encryption.js";
 import { decodeStoredApiKey } from "./auth/credential_secret.js";
 import { openSsoEnvelope, ssoPublicBase } from "./auth/entra_browser.js";
 import { brcFetch, runWithSessionKeyStore, type CompanyApiContext } from "./shared.js";
-import { listBrcCustomers } from "./tools/general/list_tools.js";
+import { buildListQuery } from "./tools/general/list_tools.js";
 
 const annotations = {readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false} as const;
 const response = (data: Record<string,unknown>, isError = false) => ({ content:[{type:"text" as const,text:JSON.stringify(data)}],structuredContent:data,...(isError?{isError:true}:{}) });
-type Cursor = {owner:string;snapshot:string;index:number;page:number;pageSize:number;exp:number;query?:string};
-const fields = new Set(["id","customerid","code","customercode","name","customername","email","emailaddress","telephone","phone","address1","address2","address3","address4","postcode","country","contact","contactname","balance","dormant","isdormant"]);
+type Cursor = {version:2;paging:Paging;incomplete:boolean;owner:string;snapshot:string;index:number;page:number;pageSize:number;exp:number;query?:string};
+const fields = new Set(["id","customerid","code","customercode","accode","name","customername","email","emailaddress","telephone","phone","address1","address2","address3","address4","postcode","country","contact","contactname","balance","dormant","isdormant"]);
 function safeCustomer(item: unknown, clean: (value: string) => string) {
   if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Unsupported customer response.");
   const row: Record<string, unknown> = {};
@@ -48,11 +49,11 @@ export async function listCopilotCustomers(args: {cursor?:string;pageSize?:numbe
     }
     const snapshot = createHash("sha256").update(JSON.stringify(companies.map(c=>[c.companyName,c.updatedAt]))).digest("hex");
     const query = (args.query ?? "").trim().toLowerCase();
-    let cursor: Cursor = {owner:ownerKey(owner),snapshot,index:0,page:1,pageSize:args.pageSize??20,exp:Date.now()+600_000,query};
+    let cursor: Cursor = {version:2,paging:freshPaging(),incomplete:false,owner:ownerKey(owner),snapshot,index:0,page:1,pageSize:args.pageSize??20,exp:Date.now()+600_000,query};
     if (args.cursor) {
       try { cursor = JSON.parse(openSsoEnvelope(args.cursor)); } catch { return response({status:"invalid_cursor",message:"Restart the customer list."},true); }
       if ((cursor.query ?? "") !== query) return response({status:"invalid_cursor",message:"Restart the customer search when changing the query."},true);
-      if (cursor.owner!==ownerKey(owner) || cursor.snapshot!==snapshot || cursor.exp<=Date.now() || !Number.isInteger(cursor.index) || cursor.index<0 || cursor.index>=companies.length || !Number.isInteger(cursor.page) || cursor.page<1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize<1 || cursor.pageSize>50 || (args.pageSize!==undefined && args.pageSize!==cursor.pageSize)) return response({status:"invalid_cursor",message:"Restart the customer list."},true);
+      if (cursor.version!==2 || !pagingSchema.safeParse(cursor.paging).success || typeof cursor.incomplete!=="boolean" || cursor.owner!==ownerKey(owner) || cursor.snapshot!==snapshot || cursor.exp<=Date.now() || !Number.isInteger(cursor.index) || cursor.index<0 || cursor.index>=companies.length || !Number.isInteger(cursor.page) || cursor.page<1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize<1 || cursor.pageSize>50 || (args.pageSize!==undefined && args.pageSize!==cursor.pageSize)) return response({status:"invalid_cursor",message:"Restart the customer list."},true);
     }
     if (cursor.pageSize<1 || cursor.pageSize>50) return response({status:"invalid_request"},true);
     const secrets = [owner.tenantId,owner.objectId,...companies.flatMap(c=>{const key=decodeStoredApiKey(c.encryptedSecret);return [key,Buffer.from(`${key}:`).toString("base64")];})];
@@ -64,24 +65,27 @@ export async function listCopilotCustomers(args: {cursor?:string;pageSize?:numbe
       const group: Record<string,unknown>={companyName:clean(company.companyName),page:cursor.page,pageSize:cursor.pageSize};
       try {
         const contexts = new Map<string,CompanyApiContext>([[company.companyName.toLowerCase(), {companyName:company.companyName,apiKey:decodeStoredApiKey(company.encryptedSecret),expiresAt:company.expiresAt}]]);
-        const data = await runWithSessionKeyStore(contexts,()=>listBrcCustomers(company.companyName,cursor.page,cursor.pageSize));
+        const data = await runWithSessionKeyStore(contexts,()=>brcFetch(company.companyName, `/v1/customers${buildListQuery(pagingArgs(cursor.paging,cursor.pageSize))}`, {signal:AbortSignal.timeout(15_000)}));
         const obj=data as Record<string,unknown>;
         const items = Array.isArray(data) ? data : obj?.Items ?? obj?.items;
         if (!Array.isArray(items) || items.length>cursor.pageSize) throw new Error("Unsupported customer response.");
-        const safeItems=items.map(item=>safeCustomer(item,clean)).filter(row=>!query || Object.values(row).some(value=>
+        const progress=advancePage(cursor.paging,items,cursor.pageSize,row=> { const id=Object.entries(row).find(([key])=>["id","customerid"].includes(key.toLowerCase()))?.[1]; return id===undefined ? undefined : String(id); });
+        const safeItems=progress.rows.map(item=>safeCustomer(item,clean)).filter(row=>!query || Object.values(row).some(value=>
           (typeof value === "string" || typeof value === "number") && String(value).toLowerCase().includes(query)));
         if (Buffer.byteLength(JSON.stringify(safeItems)) > 128_000) throw new Error("Customer page is too large.");
         Object.assign(group,{status:"ok",customers:safeItems});
         // A full page always warrants a next-page check, independent of Count semantics.
-        if(items.length===cursor.pageSize) cursor.page++; else {cursor.index++;cursor.page=1;}
+        cursor.paging=progress.state;
+        if(progress.warning) {group.status=progress.warning;cursor.incomplete=true;}
+        if(!progress.done) cursor.page++; else {cursor.index++;cursor.page=1;cursor.paging=freshPaging();}
       } catch {
         Object.assign(group,{status:"company_unavailable",message:"Could not list this company's customers. Retry this company by restarting the list.",customers:[]});
-        cursor.index++;cursor.page=1;
+        cursor.index++;cursor.page=1;cursor.paging=freshPaging();
       }
       groups.push(group);
     }
     const nextCursor = cursor.index<companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
-    return response({status:groups.some(g=>g.status!=="ok")?"partial_failure":"ok",companies:groups,...(nextCursor?{nextCursor}:{}),complete:!nextCursor});
+    return response({status:cursor.incomplete||groups.some(g=>g.status!=="ok")?"partial_failure":"ok",companies:groups,...(nextCursor?{nextCursor}:{}),complete:!nextCursor && !cursor.incomplete});
   } catch { return response({status:"service_unavailable",message:"Customer listing is unavailable. Please try again."},true); }
 }
 export function registerCopilotCustomers(server: McpServer) {

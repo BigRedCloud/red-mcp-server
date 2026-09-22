@@ -36,7 +36,8 @@ globalThis.fetch = async (input, init) => {
             return json({ Id, Name: `Customer ${Id}`, apiKey: key });
         }
         if (url.pathname.endsWith("/customers")) {
-            const page = Number(url.searchParams.get("page") ?? 1), size = Number(url.searchParams.get("pageSize") ?? 20);
+            const size = Number(url.searchParams.get("$top") ?? url.searchParams.get("pageSize") ?? 20);
+            const page = url.searchParams.has("$skip") ? Number(url.searchParams.get("$skip")) / size + 1 : Number(url.searchParams.get("page") ?? 1);
             if (key === "test-only-fail" && size !== 1)
                 return json({ error: `never echo ${key}` }, 500);
             const all = Array.from({ length: 21 }, (_, i) => i + 1).map(Id => ({ Id, Name: `Customer ${Id}`, Email: `customer${Id}@example.test`, apiKey: key, Token: "must-not-return" }));

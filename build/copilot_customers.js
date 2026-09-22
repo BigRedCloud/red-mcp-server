@@ -1,3 +1,4 @@
+import { advancePage, freshPaging, pagingArgs, pagingSchema } from "./copilot_paging.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { entraRequestOwner } from "./auth/entra_auth.js";
@@ -7,10 +8,10 @@ import { encryptCredentialSecret } from "./auth/credential_encryption.js";
 import { decodeStoredApiKey } from "./auth/credential_secret.js";
 import { openSsoEnvelope, ssoPublicBase } from "./auth/entra_browser.js";
 import { brcFetch, runWithSessionKeyStore } from "./shared.js";
-import { listBrcCustomers } from "./tools/general/list_tools.js";
+import { buildListQuery } from "./tools/general/list_tools.js";
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const response = (data, isError = false) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, ...(isError ? { isError: true } : {}) });
-const fields = new Set(["id", "customerid", "code", "customercode", "name", "customername", "email", "emailaddress", "telephone", "phone", "address1", "address2", "address3", "address4", "postcode", "country", "contact", "contactname", "balance", "dormant", "isdormant"]);
+const fields = new Set(["id", "customerid", "code", "customercode", "accode", "name", "customername", "email", "emailaddress", "telephone", "phone", "address1", "address2", "address3", "address4", "postcode", "country", "contact", "contactname", "balance", "dormant", "isdormant"]);
 function safeCustomer(item, clean) {
     if (!item || typeof item !== "object" || Array.isArray(item))
         throw new Error("Unsupported customer response.");
@@ -51,7 +52,7 @@ export async function listCopilotCustomers(args) {
         }
         const snapshot = createHash("sha256").update(JSON.stringify(companies.map(c => [c.companyName, c.updatedAt]))).digest("hex");
         const query = (args.query ?? "").trim().toLowerCase();
-        let cursor = { owner: ownerKey(owner), snapshot, index: 0, page: 1, pageSize: args.pageSize ?? 20, exp: Date.now() + 600_000, query };
+        let cursor = { version: 2, paging: freshPaging(), incomplete: false, owner: ownerKey(owner), snapshot, index: 0, page: 1, pageSize: args.pageSize ?? 20, exp: Date.now() + 600_000, query };
         if (args.cursor) {
             try {
                 cursor = JSON.parse(openSsoEnvelope(args.cursor));
@@ -61,7 +62,7 @@ export async function listCopilotCustomers(args) {
             }
             if ((cursor.query ?? "") !== query)
                 return response({ status: "invalid_cursor", message: "Restart the customer search when changing the query." }, true);
-            if (cursor.owner !== ownerKey(owner) || cursor.snapshot !== snapshot || cursor.exp <= Date.now() || !Number.isInteger(cursor.index) || cursor.index < 0 || cursor.index >= companies.length || !Number.isInteger(cursor.page) || cursor.page < 1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize < 1 || cursor.pageSize > 50 || (args.pageSize !== undefined && args.pageSize !== cursor.pageSize))
+            if (cursor.version !== 2 || !pagingSchema.safeParse(cursor.paging).success || typeof cursor.incomplete !== "boolean" || cursor.owner !== ownerKey(owner) || cursor.snapshot !== snapshot || cursor.exp <= Date.now() || !Number.isInteger(cursor.index) || cursor.index < 0 || cursor.index >= companies.length || !Number.isInteger(cursor.page) || cursor.page < 1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize < 1 || cursor.pageSize > 50 || (args.pageSize !== undefined && args.pageSize !== cursor.pageSize))
                 return response({ status: "invalid_cursor", message: "Restart the customer list." }, true);
         }
         if (cursor.pageSize < 1 || cursor.pageSize > 50)
@@ -75,32 +76,40 @@ export async function listCopilotCustomers(args) {
             const group = { companyName: clean(company.companyName), page: cursor.page, pageSize: cursor.pageSize };
             try {
                 const contexts = new Map([[company.companyName.toLowerCase(), { companyName: company.companyName, apiKey: decodeStoredApiKey(company.encryptedSecret), expiresAt: company.expiresAt }]]);
-                const data = await runWithSessionKeyStore(contexts, () => listBrcCustomers(company.companyName, cursor.page, cursor.pageSize));
+                const data = await runWithSessionKeyStore(contexts, () => brcFetch(company.companyName, `/v1/customers${buildListQuery(pagingArgs(cursor.paging, cursor.pageSize))}`, { signal: AbortSignal.timeout(15_000) }));
                 const obj = data;
                 const items = Array.isArray(data) ? data : obj?.Items ?? obj?.items;
                 if (!Array.isArray(items) || items.length > cursor.pageSize)
                     throw new Error("Unsupported customer response.");
-                const safeItems = items.map(item => safeCustomer(item, clean)).filter(row => !query || Object.values(row).some(value => (typeof value === "string" || typeof value === "number") && String(value).toLowerCase().includes(query)));
+                const progress = advancePage(cursor.paging, items, cursor.pageSize, row => { const id = Object.entries(row).find(([key]) => ["id", "customerid"].includes(key.toLowerCase()))?.[1]; return id === undefined ? undefined : String(id); });
+                const safeItems = progress.rows.map(item => safeCustomer(item, clean)).filter(row => !query || Object.values(row).some(value => (typeof value === "string" || typeof value === "number") && String(value).toLowerCase().includes(query)));
                 if (Buffer.byteLength(JSON.stringify(safeItems)) > 128_000)
                     throw new Error("Customer page is too large.");
                 Object.assign(group, { status: "ok", customers: safeItems });
                 // A full page always warrants a next-page check, independent of Count semantics.
-                if (items.length === cursor.pageSize)
+                cursor.paging = progress.state;
+                if (progress.warning) {
+                    group.status = progress.warning;
+                    cursor.incomplete = true;
+                }
+                if (!progress.done)
                     cursor.page++;
                 else {
                     cursor.index++;
                     cursor.page = 1;
+                    cursor.paging = freshPaging();
                 }
             }
             catch {
                 Object.assign(group, { status: "company_unavailable", message: "Could not list this company's customers. Retry this company by restarting the list.", customers: [] });
                 cursor.index++;
                 cursor.page = 1;
+                cursor.paging = freshPaging();
             }
             groups.push(group);
         }
         const nextCursor = cursor.index < companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
-        return response({ status: groups.some(g => g.status !== "ok") ? "partial_failure" : "ok", companies: groups, ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor });
+        return response({ status: cursor.incomplete || groups.some(g => g.status !== "ok") ? "partial_failure" : "ok", companies: groups, ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
     }
     catch {
         return response({ status: "service_unavailable", message: "Customer listing is unavailable. Please try again." }, true);
