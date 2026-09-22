@@ -1,0 +1,213 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { randomBytes, randomUUID, createHash } from "node:crypto";
+import { z } from "zod";
+import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
+import { registerAllTools } from "./register_all_tools.js";
+import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
+import { entraRequestOwner } from "./auth/entra_auth.js";
+import { getConnectionStore } from "./auth/connection_store.js";
+import { encryptCredentialSecret, decryptCredentialSecret } from "./auth/credential_encryption.js";
+import { runWithHttpRequestSessionId, runWithSessionKeyStore } from "./shared.js";
+const expected = [
+    ["suppliers", "supplier", "supplierId", "suppliers"],
+    ["products", "product", "productId", "products"],
+    ["sales_invoices", "sales_invoice", "salesInvoiceId", "salesInvoices"],
+    ["purchases", "purchase", "purchaseId", "purchases"],
+    ["accounts", "account", "accountId", "accounts"],
+];
+function registry() {
+    const tools = new Map();
+    registerCopilotDiagnosticTools({ registerTool(name, config, handler) { tools.set(name, { config, handler }); } }, true);
+    return tools;
+}
+async function fixture(t) {
+    const original = { key: process.env.RED_CONNECT_ENCRYPTION_KEY, http: process.env.RED_CONNECT_HTTP_MODE };
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    process.env.RED_CONNECT_HTTP_MODE = "true";
+    t.after(() => {
+        if (original.key === undefined)
+            delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+        else
+            process.env.RED_CONNECT_ENCRYPTION_KEY = original.key;
+        if (original.http === undefined)
+            delete process.env.RED_CONNECT_HTTP_MODE;
+        else
+            process.env.RED_CONNECT_HTTP_MODE = original.http;
+    });
+    const a = { tenantId: randomUUID(), objectId: randomUUID() }, b = { ...a, objectId: randomUUID() }, c = { ...a, tenantId: randomUUID() };
+    const store = getConnectionStore().entra;
+    for (const owner of [a, b, c])
+        await store.createLink(owner);
+    await store.saveCompanies(a, [{ companyName: "Shared", apiKey: "owner-a-key", expiresAt: Date.now() + 600_000 }]);
+    await store.saveCompanies(b, [{ companyName: "Shared", apiKey: "owner-b-key", expiresAt: Date.now() + 600_000 }]);
+    const tools = registry();
+    const invoke = (owner, name, input) => {
+        const tool = tools.get(name);
+        const args = tool.config.inputSchema.parse(input);
+        return owner ? entraRequestOwner.run(owner, () => tool.handler(args)) : tool.handler(args);
+    };
+    return { a, b, c, store, tools, invoke };
+}
+test("normal 159 descriptors remain identical; Copilot advertises exactly twelve strict search/fetch tools", () => {
+    const normal = [];
+    registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
+    assert.equal(normal.length, 159);
+    assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
+    const tools = registry();
+    const names = ["search_customers", "fetch_customer", ...expected.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])].sort();
+    assert.equal(tools.size, 12);
+    assert.deepEqual([...tools.keys()].sort(), names);
+    assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), names);
+    for (const [name, { config }] of tools) {
+        assert.match(name, /^(search|fetch)_/);
+        assert.ok(config.title.length > 10);
+        assert.ok(config.description.length < 400);
+        assert.deepEqual(config.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+        const schema = z.toJSONSchema(config.inputSchema);
+        assert.equal(schema.additionalProperties, false);
+        for (const field of ["apiKey", "connectionRef", "tenantId", "objectId", "confirmWrite", "routeToken", "filter"])
+            assert.equal(field in schema.properties, false, name);
+    }
+    assert.deepEqual(Object.keys(tools.get("search_customers").config.inputSchema.shape), ["query", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_customer").config.inputSchema.shape), ["customerId", "companyName"]);
+});
+test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async (t) => {
+    const f = await fixture(t);
+    const calls = [];
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        assert.equal(init.method ?? "GET", "GET");
+        const url = new URL(String(input));
+        const key = Buffer.from(init.headers.Authorization.replace("Basic ", ""), "base64").toString().slice(0, -1);
+        calls.push({ url, key });
+        const row = { Id: 7, Code: "ABC", Name: `Record ${key} ${f.a.objectId}`, EntryDate: "2026-01-02", AcCode: "ABC", ApiKey: key, nested: { Token: "private", detail: "Visible" } };
+        return new Response(JSON.stringify(/\/7$/.test(url.pathname) ? row : { Items: [row] }));
+    });
+    for (const [plural, singular, idField, path] of expected) {
+        const search = await f.invoke(f.a, `search_${plural}`, { query: "Record", companyName: "Shared" });
+        assert.equal(search.structuredContent.status, "ok", plural);
+        const row = search.structuredContent.results[0];
+        assert.equal(row.companyName, "Shared");
+        assert.equal(row[idField], singular === "account" ? "id:7" : "7");
+        const listCall = calls.at(-1);
+        assert.equal(listCall.url.pathname, `/api/v1/${path}`);
+        assert.equal(listCall.url.searchParams.get("page"), "1");
+        assert.equal(listCall.url.searchParams.get("pageSize"), "20");
+        assert.equal(listCall.key, "owner-a-key");
+        const fetched = await f.invoke(f.a, `fetch_${singular}`, { [idField]: row[idField], companyName: "Shared" });
+        assert.equal(fetched.structuredContent.status, "ok", singular);
+        assert.equal(fetched.structuredContent[singular].Id, 7);
+        assert.equal(calls.at(-1).url.pathname, `/api/v1/${path}${singular === "account" ? "" : "/7"}`);
+        const output = JSON.stringify([search, fetched]);
+        assert.doesNotMatch(output, /owner-a-key|ApiKey|private|Token/);
+        assert.equal(output.includes(f.a.objectId), false);
+        assert.equal(fetched.structuredContent[singular].nested.detail, "Visible");
+    }
+    calls.length = 0;
+    await Promise.all([f.a, f.b].map(owner => f.invoke(owner, "search_suppliers", { query: "", companyName: "Shared" })));
+    assert.deepEqual(calls.map(call => call.key).sort(), ["owner-a-key", "owner-b-key"]);
+});
+test("new facades reject absent/foreign owners, unknown companies, credential injection and legacy session scope", async (t) => {
+    const f = await fixture(t);
+    let requests = 0;
+    t.mock.method(globalThis, "fetch", async () => { requests++; throw new Error("No IO expected"); });
+    for (const [plural, singular, idField] of expected) {
+        for (const [name, args] of [[`search_${plural}`, { query: "", companyName: "Shared" }], [`fetch_${singular}`, { [idField]: "7", companyName: "Shared" }]]) {
+            assert.equal((await f.invoke(undefined, name, args)).structuredContent.status, "authentication_required");
+            assert.equal((await f.invoke(f.c, name, args)).structuredContent.status, "company_unavailable");
+            assert.equal((await f.invoke(f.a, name, { ...args, companyName: "Foreign" })).isError, true);
+            assert.throws(() => f.tools.get(name).config.inputSchema.parse({ ...args, connectionRef: "foreign", tenantId: f.a.tenantId }));
+        }
+    }
+    const legacy = await runWithHttpRequestSessionId("legacy", () => runWithSessionKeyStore(new Map(), () => f.invoke(f.a, "search_products", { query: "" })));
+    assert.equal(legacy.structuredContent.status, "query_unavailable");
+    assert.equal(requests, 0);
+});
+test("bounded search continues after empty matches and binds cursor to owner, entity, filters and connection snapshot", async (t) => {
+    const f = await fixture(t);
+    let requests = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        requests++;
+        const url = new URL(String(input)), page = Number(url.searchParams.get("page"));
+        return new Response(JSON.stringify({ Items: page < 4 ? [{ Id: page, Name: "Other", Code: "A" }] : [] }));
+    });
+    const args = { query: "needle", companyName: "Shared", pageSize: 1 };
+    const first = await f.invoke(f.a, "search_products", args);
+    assert.equal(requests, 3);
+    assert.deepEqual(first.structuredContent.results, []);
+    assert.equal(first.structuredContent.complete, false);
+    const cursor = first.structuredContent.nextCursor;
+    for (const [owner, tool, changed] of [
+        [f.b, "search_products", args], [f.a, "search_suppliers", args],
+        [f.a, "search_products", { ...args, query: "different" }],
+        [f.a, "search_products", { ...args, code: "A" }],
+        [f.a, "search_products", { ...args, pageSize: 2 }],
+    ])
+        assert.equal((await f.invoke(owner, tool, { ...changed, nextCursor: cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "search_products", { ...args, nextCursor: cursor + "tampered" })).structuredContent.status, "invalid_cursor");
+    const expired = JSON.parse(decryptCredentialSecret(cursor));
+    expired.exp = Date.now() - 1;
+    assert.equal((await f.invoke(f.a, "search_products", { ...args, nextCursor: encryptCredentialSecret(JSON.stringify(expired)) })).structuredContent.status, "invalid_cursor");
+    assert.equal(requests, 3);
+    const next = await f.invoke(f.a, "search_products", { ...args, nextCursor: cursor });
+    assert.equal(next.structuredContent.complete, true);
+    assert.equal(requests, 4);
+    await f.store.saveCompanies(f.a, [{ companyName: "Shared", apiKey: "replacement", expiresAt: Date.now() + 700_000 }]);
+    assert.equal((await f.invoke(f.a, "search_products", { ...args, nextCursor: cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal(requests, 4);
+});
+test("search filters are explicit, local, case-insensitive and date-inclusive; bad ranges fail before IO", async (t) => {
+    const f = await fixture(t);
+    let requests = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        requests++;
+        assert.equal(new URL(String(input)).searchParams.has("$filter"), false);
+        return new Response(JSON.stringify({ Items: [
+                { Id: 1, Code: "ABC", Reference: "Wanted", AcCode: "C01", EntryDate: "2026-01-02T12:00:00" },
+                { Id: 2, Code: "XYZ", Reference: "Wanted", AcCode: "C01", EntryDate: "2026-01-03" },
+                { Id: 3, Code: "ABC", Reference: "Other", AcCode: "C02", EntryDate: "2026-01-02" },
+            ] }));
+    });
+    const invoice = await f.invoke(f.a, "search_sales_invoices", { query: "wanted", counterpartyCode: "c01", dateFrom: "2026-01-02", dateTo: "2026-01-02" });
+    assert.deepEqual(invoice.structuredContent.results.map((row) => row.salesInvoiceId), ["1"]);
+    const product = await f.invoke(f.a, "search_products", { query: "wanted", code: "abc" });
+    assert.deepEqual(product.structuredContent.results.map((row) => row.productId), ["1"]);
+    assert.equal((await f.invoke(f.a, "search_purchases", { query: "", dateFrom: "2026-02-01", dateTo: "2026-01-01" })).structuredContent.status, "invalid_request");
+    assert.equal(requests, 2);
+    assert.throws(() => f.tools.get("search_purchases").config.inputSchema.parse({ query: "", dateFrom: "2026-02-30" }));
+});
+test("accounts fetch uses exact stable IDs/codes, bounded list continuation, and never invents a get endpoint", async (t) => {
+    const f = await fixture(t);
+    let requests = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        requests++;
+        const url = new URL(String(input));
+        assert.equal(url.pathname, "/api/v1/accounts");
+        const page = Number(url.searchParams.get("page"));
+        const rows = page < 4 ? Array.from({ length: 50 }, (_, index) => ({ Id: (page - 1) * 50 + index + 1, Code: "OTHER" })) : [{ Code: "TARGET", Name: "Account" }];
+        return new Response(JSON.stringify({ Items: rows }));
+    });
+    const args = { companyName: "Shared", accountId: "code:TARGET" };
+    const first = await f.invoke(f.a, "fetch_account", args);
+    assert.equal(first.structuredContent.status, "incomplete");
+    assert.equal(requests, 3);
+    const nextCursor = first.structuredContent.nextCursor;
+    assert.equal((await f.invoke(f.b, "fetch_account", { ...args, nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "fetch_account", { ...args, accountId: "id:2", nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal(requests, 3);
+    const result = await f.invoke(f.a, "fetch_account", { ...args, nextCursor });
+    assert.equal(result.structuredContent.account.Code, "TARGET");
+    assert.equal(result.structuredContent.status, "ok");
+    const notFound = await f.invoke(f.a, "fetch_account", { companyName: "Shared", accountId: "code:MISSING", nextCursor: undefined });
+    const completed = await f.invoke(f.a, "fetch_account", { companyName: "Shared", accountId: "code:MISSING", nextCursor: notFound.structuredContent.nextCursor });
+    assert.equal(completed.structuredContent.status, "not_found");
+});
+test("mismatched records, upstream errors and partial company failures never become successful fetches or secret-bearing errors", async (t) => {
+    const f = await fixture(t);
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ Id: 999, error: "owner-a-key" })));
+    assert.equal((await f.invoke(f.a, "fetch_supplier", { companyName: "Shared", supplierId: "7" })).isError, true);
+    const partial = await f.invoke(f.a, "search_suppliers", { query: "" });
+    assert.equal(partial.structuredContent.status, "partial_failure");
+    assert.deepEqual(partial.structuredContent.unavailableCompanies, ["Shared"]);
+    assert.doesNotMatch(JSON.stringify(partial), /owner-a-key/);
+});

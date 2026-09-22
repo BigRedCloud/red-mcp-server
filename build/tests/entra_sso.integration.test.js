@@ -1,4 +1,4 @@
-import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_read_tools.js";
+import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_facade.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -166,13 +166,28 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     assert.equal(groups.filter(g => g.companyName === "B").flatMap(g => g.customers).length, 21);
     assert.equal(groups.find(g => g.companyName === "C")?.status, "company_unavailable");
     assert.equal(second.structuredContent.complete, true);
-    const supplierQuery = await a.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } });
+    const supplierQuery = await a.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "A" } });
     assert.notEqual(supplierQuery.isError, true);
-    const forbiddenQuery = await b.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } });
+    const forbiddenQuery = await b.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "A" } });
     assert.equal(forbiddenQuery.isError, true);
     assert.match(JSON.stringify(forbiddenQuery), /company_unavailable/);
-    await assert.rejects(anon.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } }));
-    await assert.rejects(invalid.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } }));
+    await assert.rejects(anon.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "A" } }));
+    await assert.rejects(invalid.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "A" } }));
+    for (const [plural, singular, idField] of [
+        ["suppliers", "supplier", "supplierId"], ["products", "product", "productId"],
+        ["sales_invoices", "sales_invoice", "salesInvoiceId"], ["purchases", "purchase", "purchaseId"],
+        ["accounts", "account", "accountId"],
+    ]) {
+        const search = await a.callTool({ name: `search_${plural}`, arguments: { query: "", companyName: "A" } });
+        assert.equal(search.structuredContent.status, "ok");
+        const id = search.structuredContent.results[0][idField];
+        const fetchRecord = await a.callTool({ name: `fetch_${singular}`, arguments: { [idField]: id, companyName: "A" } });
+        assert.equal(fetchRecord.structuredContent.status, "ok");
+        assert.equal(fetchRecord.structuredContent[singular].Id, 1);
+        assert.doesNotMatch(JSON.stringify([search, fetchRecord]), /test-only-/);
+        const denied = await b.callTool({ name: `fetch_${singular}`, arguments: { [idField]: id, companyName: "A" } });
+        assert.equal(denied.isError, true);
+    }
     const fetched = await a.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } });
     assert.equal(fetched.structuredContent?.status, "ok");
     assert.equal(fetched.structuredContent.customer.Id, 1);

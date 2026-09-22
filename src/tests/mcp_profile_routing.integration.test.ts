@@ -1,4 +1,4 @@
-import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_read_tools.js";
+import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_facade.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 

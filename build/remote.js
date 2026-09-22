@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_read_tools.js";
+import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
 import "dotenv/config";
 import { registerEntraBrowserRoutes } from "./auth/entra_browser.js";
 import { entraRequestOwner, verifyEntraAuthorization } from "./auth/entra_auth.js";

@@ -1,4 +1,6 @@
-# Federated Copilot read-only catalogue audit
+# Previous raw Copilot catalogue audit (superseded)
+
+This is the historical audit for the previous raw profile. The current endpoint now uses the [12-tool search/fetch facade](copilot-search-fetch-facade.md). The counts and implementation below describe the earlier iteration.
 
 The `/mcp/copilot` endpoint expands from **2 to 72 tools**: the unchanged `search_customers` and `fetch_customer`, plus **70** existing accounting queries. `/mcp` retains its **159** descriptors. No commit, push, deployment, Microsoft configuration, OAuth verifier, owner binding, company-linking flow, or Cosmos record changes are needed.
 
