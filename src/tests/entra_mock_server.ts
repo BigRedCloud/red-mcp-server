@@ -17,6 +17,7 @@ globalThis.fetch=async (input,init)=>{
     const authorization=new Headers(init?.headers).get("authorization")??"";
     const key=Buffer.from(authorization.replace(/^Basic /,""),"base64").toString().replace(/:$/,"");
     if(!key.startsWith("test-only-")) return json({error:"invalid"},401);
+    if(url.pathname.endsWith("/suppliers")) return json({Items:[{Id:1,Name:"Supplier for " + key}]});
     if(url.pathname.includes("getFinancialYear")) return json({Id:1});
     if (/\/customers\/\d+$/.test(url.pathname)) {
       const Id=Number(url.pathname.split("/").at(-1));

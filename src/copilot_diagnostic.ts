@@ -1,3 +1,4 @@
+import { registerAllTools } from "./register_all_tools.js";
 import { registerCopilotCustomers } from "./copilot_customers.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.js";
@@ -7,6 +8,7 @@ export const COPILOT_INSTRUCTIONS = [
   "Use search_customers to search customers in companies linked to the verified signed-in Microsoft user. Use an empty query to list customers.",
   "Start without nextCursor. If a response returns nextCursor, pass it with the same query to continue, even when the current page has no matches.",
   "Use fetch_customer with the exact customerId and companyName from search results to retrieve one customer. Customer IDs are company-scoped.",
+  "Accounting query tools require companyName (or companyNames) from your linked companies. Use empty customer search to discover names. Use list filters and pagination before fetching exact records.",
 ].join("\n");
 
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
@@ -23,9 +25,13 @@ export const COPILOT_DIAGNOSTIC_STATUS = {
   message: "Microsoft 365 Copilot successfully invoked the RED MCP server.",
 } as const;
 
-/** Temporary HTTP-only registry. Deliberately bypasses company-aware wrappers. */
+/** HTTP federated profile; legacy diagnostic mode is retained for local diagnostics. */
 export function registerCopilotDiagnosticTools(server: McpServer, authenticated = false): void {
-  if (authenticated) { registerCopilotCustomers(server); return; }
+  if (authenticated) {
+    registerCopilotCustomers(server);
+    registerAllTools(server, { profile: "full", federatedReadOnly: true });
+    return;
+  }
 
   server.registerTool("brc_copilot_connector_status", {
     title: "Check RED connectivity",

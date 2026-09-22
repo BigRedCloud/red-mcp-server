@@ -1,3 +1,4 @@
+import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_read_tools.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -6,7 +7,7 @@ import { COPILOT_DIAGNOSTIC_ANNOTATIONS } from "../copilot_diagnostic.js";
 import { TOOL_ANNOTATIONS } from "../tool_annotations.js";
 import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 
-test("Copilot diagnostic initializes, exposes only read-only search/fetch tools, and performs no company or BRC IO", async (t) => {
+test("Copilot federated discovery exposes only audited read-only tools without company or BRC IO", async (t) => {
   const port = await getFreePort();
   const child = await startHttpTestServer(t, port, {
     NODE_OPTIONS: "--import=./scripts/tests/lib/diagnostic_guards.mjs",
@@ -21,13 +22,11 @@ test("Copilot diagnostic initializes, exposes only read-only search/fetch tools,
   t.after(() => client.close());
   await client.connect(transport);
   const listed = await client.listTools();
-  assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-    "fetch_customer", "search_customers",
-  ]);
+  assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...COPILOT_FEDERATED_TOOL_NAMES].sort());
   for (const tool of listed.tools) assert.deepEqual(tool.annotations, COPILOT_DIAGNOSTIC_ANNOTATIONS);
   await assert.rejects(client.callTool({name:"search_customers",arguments:{query:""}}));
   await assert.rejects(client.callTool({name:"fetch_customer",arguments:{customerId:"1",companyName:"A"}}));
-  for (const name of ["brc_copilot_connector_status", "brc_copilot_list_all_customers", "brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_list_customers", "brc_create_customer"]) {
+  for (const name of ["brc_copilot_connector_status", "brc_copilot_list_all_customers", "brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_create_customer"]) {
     assert.equal((await client.callTool({ name, arguments: {} })).isError, true, name);
   }
   // The same server still exposes the complete production registry on /mcp.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_read_tools.js";
 
 import "dotenv/config";
 import { registerEntraBrowserRoutes } from "./auth/entra_browser.js";
@@ -293,7 +294,7 @@ async function handleMcpRequest(
 ): Promise<void> {
   if (session.profile === "copilot-sso") {
     const requestBody = body as { method?: string; params?: { name?: string } } | undefined;
-    if (requestBody?.method === "tools/call" && ["search_customers", "fetch_customer"].includes(requestBody.params?.name ?? "")) {
+    if (requestBody?.method === "tools/call" && COPILOT_FEDERATED_TOOL_NAMES.has(requestBody.params?.name ?? "")) {
       let owner;
       try {
         owner = await verifyEntraAuthorization(req.headers.authorization);

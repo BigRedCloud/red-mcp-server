@@ -1,3 +1,4 @@
+import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_read_tools.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -46,12 +47,9 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
     assert.match(instructions, /without nextCursor/);
     assert.match(instructions, /same query to continue/);
     assert.doesNotMatch(instructions, /connectionRef/);
-    assert.deepEqual(diagnosticNames, [
-        "fetch_customer",
-        "search_customers",
-    ]);
-    assert.deepEqual([...new Set(instructions.match(/(?:search_customers|fetch_customer)/g))].sort(), diagnosticNames);
-    assert.deepEqual(diagnosticResponse.tools.map(({ name, title }) => ({ name, title })), [
+    assert.deepEqual(diagnosticNames, [...COPILOT_FEDERATED_TOOL_NAMES].sort());
+    assert.deepEqual([...new Set(instructions.match(/(?:search_customers|fetch_customer)/g))].sort(), ["fetch_customer", "search_customers"]);
+    assert.deepEqual(diagnosticResponse.tools.slice(0, 2).map(({ name, title }) => ({ name, title })), [
         { name: "search_customers", title: "Search Big Red Cloud customers" },
         { name: "fetch_customer", title: "Fetch Big Red Cloud customer" },
     ]);
@@ -69,8 +67,6 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
         "brc_start_company_connection",
         "brc_confirm_company_connection",
         "brc_list_company_contexts",
-        "brc_list_nominal_accounts",
-        "brc_list_customers",
         "brc_create_customer",
     ]) {
         assert.equal(diagnosticNames.includes(name), false, name);

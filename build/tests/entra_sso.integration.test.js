@@ -1,3 +1,4 @@
+import { COPILOT_FEDERATED_TOOL_NAMES } from "../copilot_read_tools.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
@@ -28,7 +29,7 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
         return c;
     }
     const anon = await client();
-    assert.deepEqual((await anon.listTools()).tools.map(t => t.name).sort(), ["fetch_customer", "search_customers"]);
+    assert.deepEqual((await anon.listTools()).tools.map(t => t.name).sort(), [...COPILOT_FEDERATED_TOOL_NAMES].sort());
     await assert.rejects(anon.callTool({ name: "search_customers", arguments: { query: "" } }));
     const invalid = await client("invalid-token");
     await assert.rejects(invalid.callTool({ name: "search_customers", arguments: { query: "" } }));
@@ -165,6 +166,13 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     assert.equal(groups.filter(g => g.companyName === "B").flatMap(g => g.customers).length, 21);
     assert.equal(groups.find(g => g.companyName === "C")?.status, "company_unavailable");
     assert.equal(second.structuredContent.complete, true);
+    const supplierQuery = await a.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } });
+    assert.notEqual(supplierQuery.isError, true);
+    const forbiddenQuery = await b.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } });
+    assert.equal(forbiddenQuery.isError, true);
+    assert.match(JSON.stringify(forbiddenQuery), /company_unavailable/);
+    await assert.rejects(anon.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } }));
+    await assert.rejects(invalid.callTool({ name: "brc_list_suppliers", arguments: { companyName: "A" } }));
     const fetched = await a.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } });
     assert.equal(fetched.structuredContent?.status, "ok");
     assert.equal(fetched.structuredContent.customer.Id, 1);
