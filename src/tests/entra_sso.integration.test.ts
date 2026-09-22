@@ -173,6 +173,11 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   assert.equal(ledger.structuredContent.status,"ok");
   assert.equal(ledger.structuredContent.results[0].bookTranId,"1");
   assert.equal(ledger.structuredContent.results[0].fetchAvailable,false);
+  const supplierLedger: any = await a.callTool({name:"search_supplier_transactions",arguments:{supplierId:"1",companyName:"A"}});
+  assert.equal(supplierLedger.structuredContent.status,"ok");
+  assert.equal(supplierLedger.structuredContent.results[0].bookTranId,"1");
+  assert.equal((await b.callTool({name:"search_supplier_transactions",arguments:{supplierId:"1",companyName:"A"}})).isError,true);
+  assert.equal((await b.callTool({name:"search_customer_transactions",arguments:{customerId:"1",companyName:"A"}})).isError,true);
   const year: any = await a.callTool({name:"get_financial_year",arguments:{companyName:"A"}});
   assert.equal(year.structuredContent.status,"ok");
   assert.equal(year.structuredContent.financial_year.yearStart,"2026-01-01");

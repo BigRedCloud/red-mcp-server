@@ -513,3 +513,86 @@ test("accrual and VAT searches advance OData offsets; customer ledgers page loca
   assert.equal(ledgerNext.complete, true);
   assert.equal((await f.invoke(f.b, "search_customer_transactions", { customerId: "42", companyName: "Shared", pageSize: 4, nextCursor: ledgerFirst.nextCursor })).structuredContent.status, "invalid_cursor");
 });
+
+for (const [tool, args, path, idField] of [
+  ["search_nominal_accounts", { query:"",companyName:"Shared" }, "/api/v1/nominalAccounts", "nominalAccountId"],
+  ["search_customer_transactions", { customerId:"26540869",companyName:"Shared" }, "/api/v1/customers/26540869/accountTrans", "bookTranId"],
+  ["search_supplier_transactions", { supplierId:"987",companyName:"Shared" }, "/api/v1/suppliers/987/accountTrans", "bookTranId"],
+] as const) {
+  test(`${tool} accepts bare API arrays through the real RED handler and preserves exact arguments`,async t=>{
+    const f=await fixture(t); let calls=0;
+    t.mock.method(globalThis,"fetch",async(input:any,init:any)=>{
+      calls++; const url=new URL(String(input)); assert.equal(url.pathname,path);
+      assert.equal(init.method??"GET","GET");
+      if(tool==="search_nominal_accounts") {
+        assert.equal(url.searchParams.get("$skip"),"0"); assert.equal(url.searchParams.get("$top"),"20");
+      } else assert.equal(url.search, "", "itemId belongs in the path; ledger endpoint has no paging arguments");
+      return new Response(JSON.stringify([{Id:7,BookTranId:11,Code:"4000",Name:"Sales",Debit:50,ApiKey:"owner-a-key"}]));
+    });
+    const result=(await f.invoke(f.a,tool,args)).structuredContent;
+    assert.equal(result.status,"ok"); assert.equal(calls,1);
+    assert.equal(result.results[0][idField],tool==="search_nominal_accounts"?"7":"11");
+    assert.equal(result.results[0].record.Name,"Sales"); assert.equal(result.results[0].fetchAvailable,false);
+    assert.doesNotMatch(JSON.stringify(result),/owner-a-key|connectionStatus|connectionRef|ApiKey/);
+  });
+  test(`${tool} rejects genuine upstream failures and malformed collections`,async t=>{
+    const f=await fixture(t);
+    for(const payload of [null, {result:"not a collection"}, {result:[null]}, {result:{error:"owner-a-key"}}]) {
+      t.mock.method(globalThis,"fetch",async()=>new Response(JSON.stringify(payload)));
+      const result=await f.invoke(f.a,tool,args);
+      assert.equal(result.structuredContent.status,tool==="search_nominal_accounts"?"partial_failure":"query_unavailable");
+      assert.doesNotMatch(JSON.stringify(result),/owner-a-key/);
+    }
+    t.mock.method(globalThis,"fetch",async()=>new Response("owner-a-key",{status:500}));
+    const result=await f.invoke(f.a,tool,args);
+    assert.equal(result.structuredContent.status,tool==="search_nominal_accounts"?"partial_failure":"query_unavailable");
+    assert.doesNotMatch(JSON.stringify(result),/owner-a-key/);
+  });
+}
+
+// Official v1 Swagger declares bare arrays for nominalAccounts and both accountTrans endpoints.
+// https://app.bigredcloud.com/api/swagger/docs/v1
+for (const party of ["customer", "supplier"] as const) {
+  test(`${party} ledger documented arrays retain local continuation, filtering and owner binding`,async t=>{
+    const f=await fixture(t); let calls=0;
+    t.mock.method(globalThis,"fetch",async(input:any)=>{
+      calls++; assert.equal(new URL(String(input)).pathname,`/api/v1/${party}s/26540869/accountTrans`);
+      return new Response(JSON.stringify(Array.from({length:7},(_,i)=>({id:i+1,bookTranId:i+11,bookTranTypeId:0,bookTransactionReference:"O/Bal",bookTypeDesc:"Opening Balance",credit:0,debit:30,procDate:"2012-12-31T00:00:00"}))));
+    });
+    const args={companyName:"Shared",[`${party}Id`]:"26540869",query:"Opening",pageSize:4};
+    const first=(await f.invoke(f.a,`search_${party}_transactions`,args)).structuredContent;
+    const second=(await f.invoke(f.a,`search_${party}_transactions`,{...args,nextCursor:first.nextCursor})).structuredContent;
+    assert.equal(calls,2,"one list GET per invocation, no per-result fetches");
+    assert.equal(first.results.length,4); assert.equal(second.results.length,3); assert.equal(second.complete,true);
+    assert.equal(new Set([...first.results,...second.results].map(row=>row.bookTranId)).size,7);
+    assert.equal(second.results[0].record.debit,30);
+    assert.equal((await f.invoke(f.b,`search_${party}_transactions`,{...args,nextCursor:first.nextCursor})).structuredContent.status,"invalid_cursor");
+    assert.equal(calls,2);
+    t.mock.method(globalThis,"fetch",async()=>new Response("[]"));
+    const empty=(await f.invoke(f.a,`search_${party}_transactions`,args)).structuredContent;
+    assert.equal(empty.status,"ok"); assert.deepEqual(empty.results,[]); assert.equal(empty.complete,true);
+    t.mock.method(globalThis,"fetch",async()=>new Response(JSON.stringify(Array.from({length:2001},()=>({id:1})))));
+    assert.equal((await f.invoke(f.a,`search_${party}_transactions`,args)).structuredContent.status,"query_unavailable");
+  });
+}
+
+test("nominal documented arrays preserve OData paging and local code filtering",async t=>{
+  const f=await fixture(t); const offsets:number[]=[];
+  t.mock.method(globalThis,"fetch",async(input:any)=>{
+    const url=new URL(String(input)); assert.equal(url.pathname,"/api/v1/nominalAccounts");
+    assert.equal(url.searchParams.has("$filter"),false,"nominal API forbids filtering");
+    assert.equal(url.searchParams.get("$orderby"),"id asc"); assert.equal(url.searchParams.get("$top"),"2");
+    const skip=Number(url.searchParams.get("$skip")); offsets.push(skip);
+    return new Response(JSON.stringify(Array.from({length:Math.max(0,Math.min(2,7-skip))},(_,i)=>({id:skip+i+1,code:String(skip+i),description:"SALES",balance:0,oBalance:0,month1:10,group:"Sales",type:"Profit and Loss"}))));
+  });
+  const args={query:"",code:"6",pageSize:2};
+  const first=(await f.invoke(f.a,"search_nominal_accounts",args)).structuredContent;
+  assert.deepEqual(first.results,[]);
+  const next=(await f.invoke(f.a,"search_nominal_accounts",{...args,nextCursor:first.nextCursor})).structuredContent;
+  assert.deepEqual(offsets,[0,2,4,6]); assert.equal(next.complete,true);
+  assert.equal(next.results[0].record.description,"SALES"); assert.equal(next.results[0].record.month1,undefined);
+  assert.equal(next.results[0].nominalAccountId,"7");
+  t.mock.method(globalThis,"fetch",async()=>new Response("[]"));
+  const empty=(await f.invoke(f.a,"search_nominal_accounts",args)).structuredContent;
+  assert.equal(empty.status,"ok"); assert.deepEqual(empty.results,[]); assert.equal(empty.complete,true);
+});

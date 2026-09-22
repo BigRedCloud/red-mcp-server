@@ -205,9 +205,11 @@ async function read(context: Scope, index: number, tool: string, args: Record<st
   if (!text || Buffer.byteLength(text) > 2_000_000) throw new Error("Unsupported response");
   return JSON.parse(text) as unknown;
 }
-function records(data: unknown, limit: number): Record<string, unknown>[] {
+function records(data: unknown, limit: number, allowResultArray = false): Record<string, unknown>[] {
   const object = data as Record<string, unknown> | null;
-  const rows = Array.isArray(data) ? data : object?.Items ?? object?.items;
+  // brcFetch enriches bare API arrays as { result: [...], connectionStatus, ... }.
+  // Only the nominal/ledger adapters opt into this contract; metadata stays outside rows.
+  const rows = Array.isArray(data) ? data : object?.Items ?? object?.items ?? (allowResultArray ? object?.result : undefined);
   if (!Array.isArray(rows) || rows.length > limit || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("Unsupported page");
   return rows;
 }
@@ -264,7 +266,7 @@ export async function searchCopilotEntity(entity: Searchable, args: SearchArgs) 
     for (let count = 0; count < MAX_PAGES && cursor.index < context.companies.length; count++) {
       const companyName = context.clean(context.companies[cursor.index].companyName);
       try {
-        const rows = items(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) }), pageSize);
+        const rows = records(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) }), pageSize, entity.plural === "nominal_accounts");
         const progress = advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
         const pageResults = [];
         for (const row of progress.rows) {
@@ -345,7 +347,7 @@ export async function searchCopilotLedger(party: "customer" | "supplier", args: 
     const query = args.query ?? "";
     const hash = binding(context, `search_${entity.plural}`, [itemId, fold(query), pageSize]);
     const cursor = cursorFor(context, hash, args.nextCursor);
-    const rows = records(await read(context, 0, entity.list, { itemId }), 2_000);
+    const rows = records(await read(context, 0, entity.list, { itemId }), 2_000, true);
     const filtered = rows.filter(row => matches(entity, summariseRow(row, context.clean), { query }));
     const slice = filtered.slice(cursor.paging.offset, cursor.paging.offset + pageSize);
     const companyName = context.clean(context.companies[0].companyName);

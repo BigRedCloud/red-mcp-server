@@ -21,11 +21,11 @@ globalThis.fetch=async (input,init)=>{
     if (facadePath) {
       if (init?.method && init.method !== "GET") throw new Error("Facade must only read");
       const row = {Id: 1, Code: "ONE", Name: "Record for " + key, Percentage: 23, AcCode: "4000", oBalance: 0};
-      return json(facadePath[2] ? row : {Items: [row]});
+      return json(facadePath[2] ? row : facadePath[1] === "nominalAccounts" ? [row] : {Items: [row]});
     }
     if(url.pathname.includes("getFinancialYear")) return json({yearStart:"2026-01-01",yearEnd:"2026-12-31"});
     if (/\/(customers|suppliers)\/\d+\/accountTrans$/.test(url.pathname)) {
-      return json({Items:[{Id:1,BookTranId:1,Reference:"INV-1",Debit:10,Credit:0,BookTypeDesc:"Sales Invoice",ApiKey:key}]});
+      return json([{Id:1,BookTranId:1,Reference:"INV-1",Debit:10,Credit:0,BookTypeDesc:"Sales Invoice",ApiKey:key}]);
     }
     if (/\/customers\/\d+$/.test(url.pathname)) {
       const Id=Number(url.pathname.split("/").at(-1));
