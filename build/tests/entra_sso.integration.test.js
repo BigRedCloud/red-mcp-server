@@ -176,7 +176,10 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     for (const [plural, singular, idField] of [
         ["suppliers", "supplier", "supplierId"], ["products", "product", "productId"],
         ["sales_invoices", "sales_invoice", "salesInvoiceId"], ["purchases", "purchase", "purchaseId"],
-        ["accounts", "account", "accountId"],
+        ["accounts", "account", "accountId"], ["quotes", "quote", "quoteId"],
+        ["sales_credit_notes", "sales_credit_note", "salesCreditNoteId"], ["bank_accounts", "bank_account", "bankAccountId"],
+        ["cash_payments", "cash_payment", "cashPaymentId"], ["cash_receipts", "cash_receipt", "cashReceiptId"],
+        ["payments", "payment", "paymentId"],
     ]) {
         const search = await a.callTool({ name: `search_${plural}`, arguments: { query: "", companyName: "A" } });
         assert.equal(search.structuredContent.status, "ok");

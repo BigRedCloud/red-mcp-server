@@ -22,13 +22,13 @@ test("Copilot federated discovery exposes only audited read-only tools without c
     await client.connect(transport);
     const listed = await client.listTools();
     assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...COPILOT_FEDERATED_TOOL_NAMES].sort());
-    assert.equal(listed.tools.length, 12);
+    assert.equal(listed.tools.length, 24);
     assert.ok(listed.tools.every(tool => /^(search|fetch)_/.test(tool.name)));
     for (const tool of listed.tools)
         assert.deepEqual(tool.annotations, COPILOT_DIAGNOSTIC_ANNOTATIONS);
     await assert.rejects(client.callTool({ name: "search_customers", arguments: { query: "" } }));
     await assert.rejects(client.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } }));
-    for (const name of ["brc_copilot_connector_status", "brc_copilot_list_all_customers", "brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_create_customer", "brc_list_customers", "brc_list_suppliers", "brc_get_supplier", "brc_list_accounts"]) {
+    for (const name of ["brc_copilot_connector_status", "brc_copilot_list_all_customers", "brc_start_company_connection", "brc_confirm_company_connection", "brc_list_company_contexts", "brc_create_customer", "brc_list_customers", "brc_list_suppliers", "brc_get_supplier", "brc_list_accounts", "brc_list_quotes", "brc_get_quote", "brc_list_bank_accounts", "brc_list_cash_payments", "brc_get_payment"]) {
         assert.equal((await client.callTool({ name, arguments: {} })).isError, true, name);
     }
     // The same server still exposes the complete production registry on /mcp.

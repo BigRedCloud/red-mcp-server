@@ -17,7 +17,7 @@ globalThis.fetch=async (input,init)=>{
     const authorization=new Headers(init?.headers).get("authorization")??"";
     const key=Buffer.from(authorization.replace(/^Basic /,""),"base64").toString().replace(/:$/,"");
     if(!key.startsWith("test-only-")) return json({error:"invalid"},401);
-    const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts)(?:\/(\d+))?$/.exec(url.pathname);
+    const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts|quotes|salesCreditNotes|bankAccounts|cashPayments|cashReceipts|payments)(?:\/(\d+))?$/.exec(url.pathname);
     if (facadePath) {
       if (init?.method && init.method !== "GET") throw new Error("Facade must only read");
       const row = {Id: 1, Code: "ONE", Name: "Record for " + key};

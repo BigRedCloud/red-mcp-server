@@ -9,13 +9,23 @@ import { entraRequestOwner } from "./auth/entra_auth.js";
 import { getConnectionStore } from "./auth/connection_store.js";
 import { encryptCredentialSecret, decryptCredentialSecret } from "./auth/credential_encryption.js";
 import { runWithHttpRequestSessionId, runWithSessionKeyStore } from "./shared.js";
-const expected = [
+const original = [
     ["suppliers", "supplier", "supplierId", "suppliers"],
     ["products", "product", "productId", "products"],
     ["sales_invoices", "sales_invoice", "salesInvoiceId", "salesInvoices"],
     ["purchases", "purchase", "purchaseId", "purchases"],
     ["accounts", "account", "accountId", "accounts"],
 ];
+const added = [
+    ["quotes", "quote", "quoteId", "quotes"],
+    ["sales_credit_notes", "sales_credit_note", "salesCreditNoteId", "salesCreditNotes"],
+    ["bank_accounts", "bank_account", "bankAccountId", "bankAccounts"],
+    ["cash_payments", "cash_payment", "cashPaymentId", "cashPayments"],
+    ["cash_receipts", "cash_receipt", "cashReceiptId", "cashReceipts"],
+    ["payments", "payment", "paymentId", "payments"],
+];
+const expected = [...original, ...added];
+const originalNames = ["search_customers", "fetch_customer", ...original.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])];
 function registry() {
     const tools = new Map();
     registerCopilotDiagnosticTools({ registerTool(name, config, handler) { tools.set(name, { config, handler }); } }, true);
@@ -49,16 +59,18 @@ async function fixture(t) {
     };
     return { a, b, c, store, tools, invoke };
 }
-test("normal 159 descriptors remain identical; Copilot advertises exactly twelve strict search/fetch tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 24 strict search/fetch tools", () => {
     const normal = [];
     registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
     assert.equal(normal.length, 159);
     assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
     const tools = registry();
     const names = ["search_customers", "fetch_customer", ...expected.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`])].sort();
-    assert.equal(tools.size, 12);
+    assert.equal(tools.size, 24);
     assert.deepEqual([...tools.keys()].sort(), names);
     assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), names);
+    for (const name of originalNames)
+        assert.equal(tools.has(name), true, name);
     for (const [name, { config }] of tools) {
         assert.match(name, /^(search|fetch)_/);
         assert.ok(config.title.length > 10);
@@ -71,6 +83,14 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly twelve
     }
     assert.deepEqual(Object.keys(tools.get("search_customers").config.inputSchema.shape), ["query", "nextCursor"]);
     assert.deepEqual(Object.keys(tools.get("fetch_customer").config.inputSchema.shape), ["customerId", "companyName"]);
+    assert.deepEqual(Object.keys(tools.get("search_suppliers").config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_supplier").config.inputSchema.shape), ["supplierId", "companyName"]);
+    assert.deepEqual(Object.keys(tools.get("search_sales_invoices").config.inputSchema.shape), ["query", "companyName", "counterpartyCode", "dateFrom", "dateTo", "pageSize", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_account").config.inputSchema.shape), ["accountId", "companyName", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("search_quotes").config.inputSchema.shape), ["query", "companyName", "counterpartyCode", "dateFrom", "dateTo", "pageSize", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_quote").config.inputSchema.shape), ["quoteId", "companyName"]);
+    assert.deepEqual(Object.keys(tools.get("search_bank_accounts").config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_bank_account").config.inputSchema.shape), ["bankAccountId", "companyName"]);
 });
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async (t) => {
     const f = await fixture(t);
@@ -84,11 +104,13 @@ test("each new facade reuses the correct list/get endpoint, scopes credentials, 
         return new Response(JSON.stringify(/\/7$/.test(url.pathname) ? row : { Items: [row] }));
     });
     for (const [plural, singular, idField, path] of expected) {
+        const before = calls.length;
         const search = await f.invoke(f.a, `search_${plural}`, { query: "Record", companyName: "Shared" });
         assert.equal(search.structuredContent.status, "ok", plural);
         const row = search.structuredContent.results[0];
         assert.equal(row.companyName, "Shared");
         assert.equal(row[idField], singular === "account" ? "id:7" : "7");
+        assert.equal(calls.length, before + 1, `${plural} search must not fan out to per-result fetches`);
         const listCall = calls.at(-1);
         assert.equal(listCall.url.pathname, `/api/v1/${path}`);
         assert.equal(listCall.url.searchParams.get("page"), "1");
@@ -247,6 +269,44 @@ for (const [plural, , idField] of expected) {
         assert.equal(result.paginationWarnings[0].reason, "pagination_stalled");
     });
 }
+test("quote, credit-note and bank-account search keep lightweight identifying fields without detail requests", async (t) => {
+    const f = await fixture(t);
+    const paths = [];
+    t.mock.method(globalThis, "fetch", async (input) => {
+        const url = new URL(String(input));
+        paths.push(url.pathname);
+        if (url.pathname.endsWith("/quotes"))
+            return new Response(JSON.stringify({ Items: [{ Id: 9, Reference: "Q-9", AcCode: "C01", EntryDate: "2026-03-01", Total: 120, Comments: "Kitchen quote", customerOwnerName: "Ada", ApiKey: "secret", productTrans: [{ private: "omit" }] }] }));
+        if (url.pathname.endsWith("/salesCreditNotes"))
+            return new Response(JSON.stringify({ Items: [{ Id: 8, Reference: "CN-8", AcCode: "C01", EntryDate: "2026-03-02", Total: 15, Unpaid: 15, Note: "Return", lineItems: [{ private: "omit" }] }] }));
+        if (url.pathname.endsWith("/bankAccounts"))
+            return new Response(JSON.stringify({ Items: [{ Id: 3, AcCode: "1603", Details: "Current account", Balance: 500, internationalBankAccountNumber: "secret-iban" }] }));
+        if (url.pathname.endsWith("/cashPayments"))
+            return new Response(JSON.stringify({ Items: [{ Id: 4, AcCode: "S01", EntryDate: "2026-03-03", Total: 40, Note: "Supplier paid", bankAccountCode: "1603" }] }));
+        if (url.pathname.endsWith("/cashReceipts"))
+            return new Response(JSON.stringify({ Items: [{ Id: 5, AcCode: "C01", EntryDate: "2026-03-04", Total: 25, Note: "Customer receipt", Unallocated: 5 }] }));
+        if (url.pathname.endsWith("/payments"))
+            return new Response(JSON.stringify({ Items: [{ Id: 6, AcCode: "S01", Reference: "CHQ-6", EntryDate: "2026-03-05", Total: 80, bankAccountCode: "1603", Note: "Cheque" }] }));
+        throw new Error(url.pathname);
+    });
+    const quote = (await f.invoke(f.a, "search_quotes", { query: "Kitchen", companyName: "Shared" })).structuredContent;
+    assert.equal(quote.results[0].title, "Kitchen quote");
+    assert.deepEqual(quote.results[0].record, { Id: 9, Reference: "Q-9", AcCode: "C01", EntryDate: "2026-03-01", Total: 120, Comments: "Kitchen quote", customerOwnerName: "Ada" });
+    const credit = (await f.invoke(f.a, "search_sales_credit_notes", { query: "Return", companyName: "Shared" })).structuredContent;
+    assert.equal(credit.results[0].salesCreditNoteId, "8");
+    assert.equal(credit.results[0].record.Unpaid, 15);
+    const bank = (await f.invoke(f.a, "search_bank_accounts", { query: "Current", code: "1603", companyName: "Shared" })).structuredContent;
+    assert.equal(bank.results[0].title, "Current account");
+    assert.deepEqual(bank.results[0].record, { Id: 3, AcCode: "1603", Details: "Current account", Balance: 500 });
+    const payment = (await f.invoke(f.a, "search_cash_payments", { query: "Supplier", counterpartyCode: "s01", companyName: "Shared" })).structuredContent;
+    assert.equal(payment.results[0].cashPaymentId, "4");
+    assert.equal(payment.results[0].record.bankAccountCode, "1603");
+    const receipt = (await f.invoke(f.a, "search_cash_receipts", { query: "receipt", dateFrom: "2026-03-04", dateTo: "2026-03-04", companyName: "Shared" })).structuredContent;
+    assert.equal(receipt.results[0].record.Unallocated, 5);
+    const cheque = (await f.invoke(f.a, "search_payments", { query: "Cheque", companyName: "Shared" })).structuredContent;
+    assert.equal(cheque.results[0].title, "Cheque");
+    assert.deepEqual(paths, ["/api/v1/quotes", "/api/v1/salesCreditNotes", "/api/v1/bankAccounts", "/api/v1/cashPayments", "/api/v1/cashReceipts", "/api/v1/payments"]);
+});
 test("product search retains and searches lightweight list details without detail requests", async (t) => {
     const f = await fixture(t);
     let calls = 0;

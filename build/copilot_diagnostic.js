@@ -6,7 +6,7 @@ export const COPILOT_INSTRUCTIONS = [
     "Use search_customers to search customers in companies linked to the verified signed-in Microsoft user. Use an empty query to list customers.",
     "Start without nextCursor. If a response returns nextCursor, pass it with the same query to continue, even when the current page has no matches.",
     "Use fetch_customer with the exact customerId and companyName from search results to retrieve one customer. Customer IDs are company-scoped.",
-    "Use the other search tools for suppliers, products, sales invoices, purchases and accounts. Omit companyName to search linked companies. Keep all filters unchanged with nextCursor. Fetch a result using its returned identifier and companyName.",
+    "Use the other search tools for suppliers, products, quotes, sales invoices, sales credit notes, purchases, bank accounts, cash payments, cash receipts, payments and accounts. Omit companyName to search linked companies. Keep all filters unchanged with nextCursor. Fetch a result using its returned identifier and companyName.",
 ].join("\n");
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
     readOnlyHint: true,

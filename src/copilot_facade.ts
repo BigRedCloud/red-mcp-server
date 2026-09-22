@@ -4,6 +4,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerTools } from "./tools/general/list_tools.js";
 import { registerProductTools } from "./tools/product_tools.js";
+import { registerBankListTools } from "./tools/bank-payments/bank_tools.js";
+import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
 import { getToolMetadata } from "./tool_annotations.js";
 import { entraRequestOwner } from "./auth/entra_auth.js";
 import { ownerKey } from "./auth/entra_store.js";
@@ -20,8 +22,15 @@ export const COPILOT_ENTITIES = [
   { plural: "sales_invoices", singular: "sales_invoice", label: "sales invoices", idField: "salesInvoiceId", list: "brc_list_sales_invoices", get: "brc_get_sales_invoice", ids: ["id", "salesinvoiceid", "invoiceid", "booktranid"], codes: ["reference", "invoicenumber"], documents: true },
   { plural: "purchases", singular: "purchase", label: "purchases", idField: "purchaseId", list: "brc_list_purchases", get: "brc_get_purchase", ids: ["id", "purchaseid", "booktranid"], codes: ["reference", "purchasenumber"], documents: true },
   { plural: "accounts", singular: "account", label: "accounts", idField: "accountId", list: "brc_list_accounts", get: null, ids: ["id", "accountid"], codes: ["code", "accountcode", "accode"], documents: false },
+  { plural: "quotes", singular: "quote", label: "quotes", idField: "quoteId", list: "brc_list_quotes", get: "brc_get_quote", ids: ["id", "quoteid"], codes: ["reference"], documents: true },
+  { plural: "sales_credit_notes", singular: "sales_credit_note", label: "sales credit notes", idField: "salesCreditNoteId", list: "brc_list_sales_credit_notes", get: "brc_get_sales_credit_note", ids: ["id", "salescreditnoteid", "creditnoteid", "booktranid"], codes: ["reference"], documents: true },
+  { plural: "bank_accounts", singular: "bank_account", label: "bank accounts", idField: "bankAccountId", list: "brc_list_bank_accounts", get: "brc_get_bank_account", ids: ["id", "bankaccountid"], codes: ["accode", "code", "bankaccountcode"], documents: false },
+  { plural: "cash_payments", singular: "cash_payment", label: "cash payments", idField: "cashPaymentId", list: "brc_list_cash_payments", get: "brc_get_cash_payment", ids: ["id", "cashpaymentid", "booktranid"], codes: ["reference"], documents: true },
+  { plural: "cash_receipts", singular: "cash_receipt", label: "cash receipts", idField: "cashReceiptId", list: "brc_list_cash_receipts", get: "brc_get_cash_receipt", ids: ["id", "cashreceiptid", "booktranid"], codes: ["reference"], documents: true },
+  { plural: "payments", singular: "payment", label: "payments", idField: "paymentId", list: "brc_list_payments", get: "brc_get_payment", ids: ["id", "paymentid", "booktranid"], codes: ["reference"], documents: true },
 ] as const;
 type Entity = typeof COPILOT_ENTITIES[number];
+const supplierLedgers = new Set<Entity["singular"]>(["purchase", "cash_payment", "payment"]);
 export const COPILOT_FEDERATED_TOOL_NAMES = new Set<string>([
   "search_customers", "fetch_customer",
   ...COPILOT_ENTITIES.flatMap(entity => [`search_${entity.plural}`, `fetch_${entity.singular}`]),
@@ -56,6 +65,8 @@ function readers() {
   } } as unknown as McpServer;
   registerTools(collector);
   registerProductTools(collector);
+  registerBankListTools(collector);
+  registerCashPaymentTools(collector);
   if (captured.size !== selected.size) throw new Error("Incomplete facade readers");
   redHandlers = captured;
   return captured;
@@ -143,10 +154,12 @@ function items(data: unknown, pageSize: number): Record<string, unknown>[] {
   return rows;
 }
 const summaryFields = new Set([
-  "id", "supplierid", "productid", "salesinvoiceid", "invoiceid", "purchaseid", "accountid", "booktranid",
+  "id", "supplierid", "customerid", "productid", "salesinvoiceid", "invoiceid", "purchaseid", "accountid", "booktranid",
+  "quoteid", "salescreditnoteid", "creditnoteid", "bankaccountid", "cashpaymentid", "cashreceiptid", "paymentid",
   "code", "suppliercode", "productcode", "customercode", "accountcode", "accode", "name", "suppliername", "customername", "productname", "description",
-  "reference", "invoicenumber", "purchasenumber", "entrydate", "date", "invoicedate", "purchasedate", "duedate",
+  "reference", "invoicenumber", "purchasenumber", "entrydate", "procdate", "date", "invoicedate", "purchasedate", "duedate",
   "stockcode", "details", "price", "unitprice", "grossunitprice", "accountname", "netamount", "vatamount", "grossamount",
+  "note", "comments", "customerownername", "bankaccountcode", "bankaccountname", "amount", "totalnet", "totalvat", "unallocated",
   "email", "telephone", "phone", "balance", "total", "net", "vat", "gross", "unpaid", "dormant", "isdormant",
 ]);
 const privateFields = /^(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|password|secret|encryptedSecret|connectionRef|activeConnectionRef|connectionMetadata|connection|_meta|tenantId|objectId)$/i;
@@ -163,9 +176,9 @@ function sanitize(data: unknown, clean: Scope["clean"], depth = 0): unknown {
 }
 function matches(entity: Entity, row: Record<string, unknown>, args: SearchArgs) {
   if (args.code && fold(value(row, entity.codes) ?? "") !== fold(args.code)) return false;
-  if (args.counterpartyCode && fold(value(row, entity.singular === "purchase" ? ["suppliercode", "accode"] : ["customercode", "accode"]) ?? "") !== fold(args.counterpartyCode)) return false;
+  if (args.counterpartyCode && fold(value(row, supplierLedgers.has(entity.singular) ? ["suppliercode", "accode"] : ["customercode", "accode"]) ?? "") !== fold(args.counterpartyCode)) return false;
   if (args.dateFrom || args.dateTo) {
-    const date = value(row, ["entrydate", "invoicedate", "purchasedate", "date"])?.slice(0, 10);
+    const date = value(row, ["entrydate", "invoicedate", "purchasedate", "procdate", "date"])?.slice(0, 10);
     if (!date || !z.iso.date().safeParse(date).success || (args.dateFrom && date < args.dateFrom) || (args.dateTo && date > args.dateTo)) return false;
   }
   return !args.query.trim() || Object.values(row).flatMap(item => Array.isArray(item) ? item : [item]).some(item => (typeof item === "string" || typeof item === "number") && fold(String(item)).includes(fold(args.query)));
@@ -193,7 +206,7 @@ export async function searchCopilotEntity(entity: Entity, args: SearchArgs) {
           const id = identifier(entity, row);
           const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
           pageResults.push({ companyName, ...(usableId ? { [entity.idField]: id } : {}),
-            title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
+            title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
             record: summary, fetchAvailable: usableId });
         }
         if (Buffer.byteLength(JSON.stringify([...results, ...pageResults])) > MAX_BYTES) {
@@ -259,7 +272,7 @@ export function registerCopilotAccountingFacade(server: McpServer) {
         query: z.string().max(1000).describe("Text to match in record summaries; empty string lists records."),
         companyName: z.string().min(1).max(4000).optional().describe("Linked company name; omit to search all your linked companies."),
         ...(entity.documents ? {
-          counterpartyCode: z.string().min(1).max(256).optional().describe(entity.singular === "purchase" ? "Exact supplier account code." : "Exact customer account code."),
+          counterpartyCode: z.string().min(1).max(256).optional().describe(supplierLedgers.has(entity.singular) ? "Exact supplier account code." : "Exact customer account code."),
           dateFrom: z.iso.date().optional().describe("Inclusive earliest transaction date, YYYY-MM-DD."),
           dateTo: z.iso.date().optional().describe("Inclusive latest transaction date, YYYY-MM-DD."),
         } : { code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity.") }),
