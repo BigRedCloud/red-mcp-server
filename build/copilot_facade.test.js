@@ -103,6 +103,9 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
     const tools = registry();
     const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
     assert.equal(tools.size, 53);
+    const current52 = [...tools].filter(([name]) => name !== "get_allocated_transactions").map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    assert.equal(current52.length, 52);
+    assert.equal(createHash("sha256").update(JSON.stringify(current52)).digest("hex"), "c7191ea7f3820b7d40db9e9120ddefc115a4a3da5918617a7eb8e96bab3fa6d7");
     const current49 = [...tools].filter(([name]) => !gapNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(current49.length, 49);
     assert.equal(createHash("sha256").update(JSON.stringify(current49)).digest("hex"), "57b3b243870c49293ae54f45734f917db1ab382b0026bd07b1143f3a09ed3ca6");
@@ -165,10 +168,13 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
     assert.deepEqual(Object.keys(tools.get("fetch_nominal_account").config.inputSchema.shape), ["nominalAccountId", "companyName"]);
     assert.deepEqual(Object.keys(tools.get("get_customer_aged_balance").config.inputSchema.shape), ["customerId", "companyName"]);
     assert.deepEqual(Object.keys(tools.get("get_supplier_aged_balance").config.inputSchema.shape), ["supplierId", "companyName"]);
-    assert.deepEqual(Object.keys(tools.get("get_allocated_transactions").config.inputSchema.shape), ["bookTranId", "companyName"]);
-    assert.deepEqual(Object.keys(tools.get("get_allocation_candidates").config.inputSchema.shape), ["bookTranId", "companyName"]);
+    assert.deepEqual(Object.keys(tools.get("get_allocated_transactions").config.inputSchema.shape), ["bookTranId", "companyName", "nextCursor"]);
+    assert.deepEqual(Object.keys(tools.get("get_allocation_candidates").config.inputSchema.shape), ["bookTranId", "companyName", "nextCursor"]);
     assert.match(tools.get("get_allocation_candidates").config.description, /unmatched|eligible|possible/i);
+    assert.match(tools.get("get_allocation_candidates").config.description, /Continue with nextCursor/);
     assert.match(tools.get("get_allocated_transactions").config.description, /already applied/);
+    assert.match(tools.get("get_allocated_transactions").config.description, /Continue with nextCursor/);
+    assert.equal("pageSize" in tools.get("get_allocated_transactions").config.inputSchema.shape, false);
 });
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async (t) => {
     const f = await fixture(t);
@@ -1025,9 +1031,14 @@ test("allocated transactions and allocation candidates use distinct GETs and are
     assert.equal(applied.allocated_transactions.allocations[0].receiverReference, "INV001");
     assert.equal(applied.allocated_transactions.allocations[0].secret, undefined);
     assert.equal(applied.allocation_candidates, undefined);
+    assert.equal(applied.nextCursor, undefined);
+    assert.equal(applied.complete, true);
+    assert.equal(applied.allocated_transactions.truncated, undefined);
     assert.equal(calls[0].pathname, "/api/v1/allocationResolvers/allocated");
     const candidates = (await f.invoke(f.a, "get_allocation_candidates", { bookTranId: "1001", companyName: "Shared" })).structuredContent;
     assert.equal(candidates.status, "ok");
+    assert.equal(candidates.complete, true);
+    assert.equal(candidates.nextCursor, undefined);
     assert.equal(candidates.allocation_candidates.bookTran.unAllocated, 350);
     assert.equal(candidates.allocation_candidates.candidates[0].allocated, 0);
     assert.equal(candidates.allocation_candidates.candidates[0].receiverReference, "INV002");
@@ -1037,4 +1048,192 @@ test("allocated transactions and allocation candidates use distinct GETs and are
     assert.doesNotMatch(JSON.stringify([applied, candidates]), /owner-a-key|ApiKey|secret/);
     assert.equal((await f.invoke(f.a, "get_allocated_transactions", { bookTranId: "INV001", companyName: "Shared" })).structuredContent.status, "invalid_request");
     assert.equal(calls.length, 2);
+});
+test("allocation candidates page locally from one GET with bound continuation", async (t) => {
+    const f = await fixture(t);
+    const calls = [];
+    const line = (i) => ({
+        id: 9000 - i, allocated: 0, discount: 0, date: "2026-06-03T00:00:00", bookTranId: 1001,
+        bookTranIdReceiver: 3000 - i, receiverReference: `INV${String(i).padStart(3, "0")}`,
+        receiverTotal: 100 + i, receiverOutstanding: 100 + i, receiverBookTranTypeId: 3, secret: "omit", ApiKey: "owner-a-key",
+    });
+    const shuffled = [line(1), ...Array.from({ length: 45 }, (_, i) => line(45 - i))];
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        const url = new URL(String(input));
+        const key = Buffer.from(String(init.headers.Authorization.replace("Basic ", "")), "base64").toString();
+        calls.push({ pathname: url.pathname, key, bookTranId: url.searchParams.get("bookTranId") });
+        assert.equal(init.method ?? "GET", "GET");
+        assert.equal(url.search, "?bookTranId=1001", "candidates stay on one list GET; paging is local");
+        if (key === "owner-b-key:") {
+            return new Response(JSON.stringify({
+                bookTran: { ...allocationDto.bookTran, unAllocated: 1, ownerName: "Other Ltd" },
+                allocationResolvers: [{ ...line(99), bookTranId: 1001, receiverReference: "INV-B" }],
+            }));
+        }
+        return new Response(JSON.stringify({
+            bookTran: { ...allocationDto.bookTran, unAllocated: 350 },
+            allocationResolvers: shuffled,
+        }));
+    });
+    const args = { bookTranId: "1001", companyName: "Shared" };
+    const first = (await f.invoke(f.a, "get_allocation_candidates", args)).structuredContent;
+    assert.equal(first.status, "ok");
+    assert.equal(first.complete, false);
+    assert.equal(typeof first.nextCursor, "string");
+    assert.ok(first.nextCursor.length <= 4096);
+    assert.equal(first.allocation_candidates.candidates.length, 20);
+    assert.equal(first.allocation_candidates.truncated, undefined);
+    assert.equal(first.allocation_candidates.candidates[0].receiverReference, "INV045");
+    assert.equal(first.allocation_candidates.candidates[0].bookTranIdReceiver, 2955);
+    assert.equal(first.allocation_candidates.candidates[19].receiverReference, "INV026");
+    assert.equal(first.allocation_candidates.candidates[0].secret, undefined);
+    assert.equal(first.allocation_candidates.candidates[0].ApiKey, undefined);
+    assert.deepEqual(Object.keys(first.allocation_candidates.candidates[0]).sort(), [
+        "allocated", "bookTranId", "bookTranIdReceiver", "date", "discount", "id",
+        "receiverBookTranTypeId", "receiverOutstanding", "receiverReference", "receiverTotal",
+    ]);
+    const next = (await f.invoke(f.a, "get_allocation_candidates", { ...args, nextCursor: first.nextCursor })).structuredContent;
+    assert.equal(next.status, "ok");
+    assert.equal(next.complete, false);
+    assert.equal(next.allocation_candidates.candidates.length, 20);
+    assert.equal(next.allocation_candidates.candidates[0].receiverReference, "INV025");
+    assert.equal(next.allocation_candidates.candidates[19].receiverReference, "INV006");
+    const last = (await f.invoke(f.a, "get_allocation_candidates", { ...args, nextCursor: next.nextCursor })).structuredContent;
+    assert.equal(last.status, "ok");
+    assert.equal(last.complete, true);
+    assert.equal(last.nextCursor, undefined);
+    assert.equal(last.allocation_candidates.candidates.length, 5);
+    assert.equal(last.allocation_candidates.candidates[0].receiverReference, "INV005");
+    assert.equal(last.allocation_candidates.candidates[4].receiverReference, "INV001");
+    const pages = [...first.allocation_candidates.candidates, ...next.allocation_candidates.candidates, ...last.allocation_candidates.candidates];
+    assert.equal(pages.length, 45);
+    assert.equal(new Set(pages.map((row) => `${row.bookTranIdReceiver}:${row.id}`)).size, 45);
+    assert.deepEqual(pages.map((row) => row.bookTranIdReceiver), pages.map((row) => row.bookTranIdReceiver).slice().sort((a, b) => a - b));
+    assert.equal(calls.length, 3, "one list GET per page, no per-candidate fetches");
+    assert.ok(calls.every(call => call.pathname === "/api/v1/allocationResolvers" && call.key === "owner-a-key:"));
+    assert.equal((await f.invoke(f.b, "get_allocation_candidates", { ...args, nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "get_allocation_candidates", { bookTranId: "1002", companyName: "Shared", nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "get_allocation_candidates", { ...args, nextCursor: first.nextCursor + "tampered" })).structuredContent.status, "invalid_cursor");
+    const expired = JSON.parse(decryptCredentialSecret(first.nextCursor));
+    expired.exp = Date.now() - 1;
+    assert.equal((await f.invoke(f.a, "get_allocation_candidates", { ...args, nextCursor: encryptCredentialSecret(JSON.stringify(expired)) })).structuredContent.status, "invalid_cursor");
+    assert.equal(calls.length, 3);
+    const other = (await f.invoke(f.b, "get_allocation_candidates", args)).structuredContent;
+    assert.equal(other.status, "ok");
+    assert.equal(other.allocation_candidates.candidates[0].receiverReference, "INV-B");
+    assert.equal(calls.length, 4);
+    assert.equal(calls[3].key, "owner-b-key:");
+    assert.equal((await f.invoke(undefined, "get_allocation_candidates", args)).structuredContent.status, "authentication_required");
+    assert.equal((await f.invoke(f.c, "get_allocation_candidates", args)).structuredContent.status, "company_unavailable");
+    assert.equal((await f.invoke(f.a, "get_allocation_candidates", { ...args, companyName: "Foreign" })).isError, true);
+    assert.equal(calls.length, 4);
+});
+test("allocated transactions page locally from one GET with bound continuation", async (t) => {
+    const f = await fixture(t);
+    const calls = [];
+    const line = (i) => ({
+        id: 8000 - i, allocated: 10 + i, discount: 0, date: "2026-06-03T00:00:00", bookTranId: 1001,
+        bookTranIdReceiver: 4000 - i, receiverReference: `INV${String(i).padStart(3, "0")}`,
+        receiverTotal: 200 + i, receiverOutstanding: 50, receiverBookTranTypeId: 3, secret: "omit", ApiKey: "owner-a-key",
+    });
+    const shuffled = [line(1), ...Array.from({ length: 45 }, (_, i) => line(45 - i))];
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        const url = new URL(String(input));
+        const key = Buffer.from(String(init.headers.Authorization.replace("Basic ", "")), "base64").toString();
+        calls.push({ pathname: url.pathname, key, bookTranId: url.searchParams.get("bookTranId") });
+        assert.equal(init.method ?? "GET", "GET");
+        assert.equal(url.search, "?bookTranId=1001", "allocated stays on one list GET; paging is local");
+        if (key === "owner-b-key:") {
+            return new Response(JSON.stringify({
+                bookTran: { ...allocationDto.bookTran, unAllocated: 1, ownerName: "Other Ltd" },
+                allocationResolvers: [{ ...line(99), bookTranId: 1001, receiverReference: "INV-B" }],
+            }));
+        }
+        return new Response(JSON.stringify({
+            bookTran: { ...allocationDto.bookTran, unAllocated: 150 },
+            allocationResolvers: shuffled,
+        }));
+    });
+    const args = { bookTranId: "1001", companyName: "Shared" };
+    const first = (await f.invoke(f.a, "get_allocated_transactions", args)).structuredContent;
+    assert.equal(first.status, "ok");
+    assert.equal(first.complete, false);
+    assert.equal(typeof first.nextCursor, "string");
+    assert.ok(first.nextCursor.length <= 4096);
+    assert.equal(first.allocated_transactions.allocations.length, 20);
+    assert.equal(first.allocated_transactions.truncated, undefined);
+    assert.equal(first.allocated_transactions.allocations[0].receiverReference, "INV045");
+    assert.equal(first.allocated_transactions.allocations[0].bookTranIdReceiver, 3955);
+    assert.equal(first.allocated_transactions.allocations[19].receiverReference, "INV026");
+    assert.equal(first.allocated_transactions.allocations[0].secret, undefined);
+    assert.equal(first.allocated_transactions.allocations[0].ApiKey, undefined);
+    assert.deepEqual(Object.keys(first.allocated_transactions.allocations[0]).sort(), [
+        "allocated", "bookTranId", "bookTranIdReceiver", "date", "discount", "id",
+        "receiverBookTranTypeId", "receiverOutstanding", "receiverReference", "receiverTotal",
+    ]);
+    const next = (await f.invoke(f.a, "get_allocated_transactions", { ...args, nextCursor: first.nextCursor })).structuredContent;
+    assert.equal(next.status, "ok");
+    assert.equal(next.complete, false);
+    assert.equal(next.allocated_transactions.allocations.length, 20);
+    assert.equal(next.allocated_transactions.allocations[0].receiverReference, "INV025");
+    assert.equal(next.allocated_transactions.allocations[19].receiverReference, "INV006");
+    const last = (await f.invoke(f.a, "get_allocated_transactions", { ...args, nextCursor: next.nextCursor })).structuredContent;
+    assert.equal(last.status, "ok");
+    assert.equal(last.complete, true);
+    assert.equal(last.nextCursor, undefined);
+    assert.equal(last.allocated_transactions.allocations.length, 5);
+    assert.equal(last.allocated_transactions.allocations[0].receiverReference, "INV005");
+    assert.equal(last.allocated_transactions.allocations[4].receiverReference, "INV001");
+    const pages = [...first.allocated_transactions.allocations, ...next.allocated_transactions.allocations, ...last.allocated_transactions.allocations];
+    assert.equal(pages.length, 45);
+    assert.equal(new Set(pages.map((row) => `${row.bookTranIdReceiver}:${row.id}`)).size, 45);
+    const receivers = pages.map((row) => row.bookTranIdReceiver);
+    const ids = pages.map((row) => row.id);
+    assert.deepEqual(receivers, receivers.slice().sort((a, b) => a - b));
+    assert.deepEqual(ids, ids.slice().sort((a, b) => a - b));
+    assert.equal(calls.length, 3, "one list GET per page, no per-allocation fetches");
+    assert.ok(calls.every(call => call.pathname === "/api/v1/allocationResolvers/allocated" && call.key === "owner-a-key:"));
+    assert.equal((await f.invoke(f.b, "get_allocated_transactions", { ...args, nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "get_allocated_transactions", { bookTranId: "1002", companyName: "Shared", nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await f.invoke(f.a, "get_allocated_transactions", { ...args, nextCursor: first.nextCursor + "tampered" })).structuredContent.status, "invalid_cursor");
+    const expired = JSON.parse(decryptCredentialSecret(first.nextCursor));
+    expired.exp = Date.now() - 1;
+    assert.equal((await f.invoke(f.a, "get_allocated_transactions", { ...args, nextCursor: encryptCredentialSecret(JSON.stringify(expired)) })).structuredContent.status, "invalid_cursor");
+    assert.equal(calls.length, 3);
+    const other = (await f.invoke(f.b, "get_allocated_transactions", args)).structuredContent;
+    assert.equal(other.status, "ok");
+    assert.equal(other.allocated_transactions.allocations[0].receiverReference, "INV-B");
+    assert.equal(calls.length, 4);
+    assert.equal(calls[3].key, "owner-b-key:");
+    assert.equal((await f.invoke(undefined, "get_allocated_transactions", args)).structuredContent.status, "authentication_required");
+    assert.equal((await f.invoke(f.c, "get_allocated_transactions", args)).structuredContent.status, "company_unavailable");
+    assert.equal((await f.invoke(f.a, "get_allocated_transactions", { ...args, companyName: "Foreign" })).isError, true);
+    assert.equal(calls.length, 4);
+});
+test("allocated transactions complete in one call at or below page size and reject oversized dumps", async (t) => {
+    const f = await fixture(t);
+    let payloadCount = 20;
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        calls++;
+        const url = new URL(String(input));
+        assert.equal(url.pathname, "/api/v1/allocationResolvers/allocated");
+        assert.equal(url.search, "?bookTranId=1001");
+        return new Response(JSON.stringify({
+            bookTran: allocationDto.bookTran,
+            allocationResolvers: Array.from({ length: payloadCount }, (_, i) => ({
+                id: i + 1, allocated: 1, bookTranId: 1001, bookTranIdReceiver: i + 1, receiverReference: `INV${i + 1}`,
+            })),
+        }));
+    });
+    const full = (await f.invoke(f.a, "get_allocated_transactions", { bookTranId: "1001", companyName: "Shared" })).structuredContent;
+    assert.equal(full.status, "ok");
+    assert.equal(full.complete, true);
+    assert.equal(full.nextCursor, undefined);
+    assert.equal(full.allocated_transactions.allocations.length, 20);
+    assert.equal(full.allocated_transactions.truncated, undefined);
+    assert.equal(calls, 1);
+    payloadCount = 2001;
+    assert.equal((await f.invoke(f.a, "get_allocated_transactions", { bookTranId: "1001", companyName: "Shared" })).structuredContent.status, "query_unavailable");
+    assert.equal(calls, 2);
 });

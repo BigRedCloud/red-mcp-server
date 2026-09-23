@@ -88,8 +88,8 @@ const extraFetch: Record<string, { title: string; description: string }> = {
   nominal_account: { title: "Fetch Big Red Cloud nominal account", description: "Retrieve one chart-of-accounts nominal account, including monthly period movements, using the exact nominalAccountId and companyName from search_nominal_accounts. Distinct from bank accounts and customer or supplier accounts." },
   customer_aged_balance: { title: "Get Big Red Cloud customer aged balance", description: "Return one customer's aged outstanding balance split by current month, one month, two months and three or more months. Requires customerId and companyName from search_customers. Distinct from fetch_customer and search_customer_transactions." },
   supplier_aged_balance: { title: "Get Big Red Cloud supplier aged balance", description: "Return one supplier's aged outstanding balance split by current month, one month, two months and three or more months. Requires supplierId and companyName from search_suppliers. Distinct from fetch_supplier and search_supplier_transactions." },
-  allocated_transactions: { title: "Get Big Red Cloud allocated transactions", description: "Return allocations already applied from one sender book transaction, such as a receipt or payment, to receiver invoices or credits. Requires bookTranId from a ledger or document search and companyName. Distinct from get_allocation_candidates, which lists unmatched eligible receivers." },
-  allocation_candidates: { title: "Get Big Red Cloud allocation candidates", description: "Return unmatched transactions eligible to receive an allocation from the specified sender book transaction. These are possible allocations, not allocations already applied. Requires bookTranId and companyName. Use get_allocated_transactions for existing applications." },
+  allocated_transactions: { title: "Get Big Red Cloud allocated transactions", description: "Return allocations already applied from one sender book transaction, such as a receipt or payment, to receiver invoices or credits. Requires bookTranId from a ledger or document search and companyName. Distinct from get_allocation_candidates, which lists unmatched eligible receivers. Continue with nextCursor." },
+  allocation_candidates: { title: "Get Big Red Cloud allocation candidates", description: "Return unmatched transactions eligible to receive an allocation from the specified sender book transaction. These are possible allocations, not allocations already applied. Requires bookTranId and companyName. Use get_allocated_transactions for existing applications. Continue with nextCursor." },
 };
 const supplierLedgers = new Set<string>(["purchase", "cash_payment", "payment"]);
 export const COPILOT_FEDERATED_TOOL_NAMES = new Set<string>([
@@ -461,7 +461,7 @@ const agedBalanceFields = ["currentMonth", "oneMonthOld", "twoMonthsOld", "three
 const allocationBookTranFields = ["id", "bookTranTypeId", "total", "unAllocated", "discount", "unAllocatedDiscount", "ownerId", "ownerName"] as const;
 const allocationLineFields = ["id", "allocated", "discount", "date", "bookTranId", "bookTranIdReceiver",
   "receiverProcDate", "receiverEntryDate", "receiverReference", "receiverTotal", "receiverOutstanding", "receiverBookTranTypeId"] as const;
-const MAX_ALLOCATION_LINES = 100;
+const ALLOCATION_PAGE = 20;
 
 function unwrapRecord(data: unknown): Record<string, unknown> {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Unsupported response");
@@ -485,6 +485,35 @@ function requireNumericId(value: string, label: string) {
   if ([".", ".."].includes(value) || !/^\d+$/.test(value)) throw new FacadeError("invalid_request", `Use the exact ${label} returned by search.`);
   return value;
 }
+function allocationLines(data: unknown) {
+  const row = unwrapRecord(data);
+  const bookTranRaw = Object.entries(row).find(([key]) => key.toLowerCase() === "booktran")?.[1];
+  const linesRaw = Object.entries(row).find(([key]) => key.toLowerCase() === "allocationresolvers")?.[1];
+  if (!bookTranRaw || typeof bookTranRaw !== "object" || Array.isArray(bookTranRaw) || !Array.isArray(linesRaw)) throw new Error("Unsupported response");
+  if (linesRaw.length > 2_000 || linesRaw.some(item => !item || typeof item !== "object" || Array.isArray(item))) throw new Error("Unsupported response");
+  return { bookTran: bookTranRaw as Record<string, unknown>, lines: linesRaw as Record<string, unknown>[] };
+}
+function allocationLineKey(row: Record<string, unknown>) {
+  return `${value(row, ["booktranidreceiver"]) ?? ""}:${value(row, ["id"]) ?? ""}`;
+}
+function sortAllocationLines(lines: Record<string, unknown>[]) {
+  return [...lines].sort((left, right) => {
+    const receivers = [Number(value(left, ["booktranidreceiver"]) ?? NaN), Number(value(right, ["booktranidreceiver"]) ?? NaN)];
+    if (Number.isFinite(receivers[0]) && Number.isFinite(receivers[1]) && receivers[0] !== receivers[1]) return receivers[0] - receivers[1];
+    const ids = [Number(value(left, ["id"]) ?? NaN), Number(value(right, ["id"]) ?? NaN)];
+    if (Number.isFinite(ids[0]) && Number.isFinite(ids[1]) && ids[0] !== ids[1]) return ids[0] - ids[1];
+    return allocationLineKey(left).localeCompare(allocationLineKey(right));
+  });
+}
+function uniqueSortedAllocationLines(lines: Record<string, unknown>[]) {
+  const seen = new Set<string>();
+  return sortAllocationLines(lines).filter(row => {
+    const key = allocationLineKey(row);
+    if (!key || key === ":" || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export async function getCopilotAgedBalance(party: "customer" | "supplier", args: { companyName: string; customerId?: string; supplierId?: string }) {
   try {
@@ -504,27 +533,27 @@ export async function getCopilotAgedBalance(party: "customer" | "supplier", args
   } catch (error) { return failure(error); }
 }
 
-export async function getCopilotAllocations(kind: "allocated" | "candidates", args: { companyName: string; bookTranId: string }) {
+export async function getCopilotAllocations(kind: "allocated" | "candidates", args: { companyName: string; bookTranId: string; nextCursor?: string }) {
   try {
     const bookTranId = requireNumericId(args.bookTranId, "bookTranId");
     const context = await scope(args.companyName);
-    const tool = kind === "allocated" ? "brc_list_allocated_transactions" : "brc_list_allocation_resolvers";
-    const row = unwrapRecord(await read(context, 0, tool, { bookTranId: Number(bookTranId) }));
-    const bookTranRaw = Object.entries(row).find(([key]) => key.toLowerCase() === "booktran")?.[1];
-    const linesRaw = Object.entries(row).find(([key]) => key.toLowerCase() === "allocationresolvers")?.[1];
-    if (!bookTranRaw || typeof bookTranRaw !== "object" || Array.isArray(bookTranRaw) || !Array.isArray(linesRaw)) throw new Error("Unsupported response");
-    if (linesRaw.length > 2_000 || linesRaw.some(item => !item || typeof item !== "object" || Array.isArray(item))) throw new Error("Unsupported response");
-    const truncated = linesRaw.length > MAX_ALLOCATION_LINES;
-    const lines = (truncated ? linesRaw.slice(0, MAX_ALLOCATION_LINES) : linesRaw).map(item => pickNamed(item as Record<string, unknown>, allocationLineFields));
+    const purpose = kind === "allocated" ? "get_allocated_transactions" : "get_allocation_candidates";
+    const cursor = cursorFor(context, binding(context, purpose, bookTranId), args.nextCursor);
+    const parsed = allocationLines(await read(context, 0, kind === "allocated" ? "brc_list_allocated_transactions" : "brc_list_allocation_resolvers", { bookTranId: Number(bookTranId) }));
+    const ordered = uniqueSortedAllocationLines(parsed.lines);
+    const slice = ordered.slice(cursor.paging.offset, cursor.paging.offset + ALLOCATION_PAGE);
     const record = sanitize({
-      bookTran: pickNamed(bookTranRaw as Record<string, unknown>, allocationBookTranFields),
-      [kind === "allocated" ? "allocations" : "candidates"]: lines,
-      ...(truncated ? { truncated: true } : {}),
+      bookTran: pickNamed(parsed.bookTran, allocationBookTranFields),
+      [kind === "allocated" ? "allocations" : "candidates"]: slice.map(item => pickNamed(item, allocationLineFields)),
     }, context.clean);
     if (Buffer.byteLength(JSON.stringify(record)) > MAX_BYTES) throw new Error("Record too large");
+    cursor.paging = { ...cursor.paging, offset: cursor.paging.offset + slice.length, pages: cursor.paging.pages + 1 };
+    if (cursor.paging.offset >= ordered.length) cursor.index = context.companies.length;
+    const nextCursor = cursor.index < context.companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
     return reply({
       status: "ok", companyName: context.clean(context.companies[0].companyName), bookTranId,
       [kind === "allocated" ? "allocated_transactions" : "allocation_candidates"]: record,
+      ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor,
     });
   } catch (error) { return failure(error); }
 }
@@ -633,8 +662,9 @@ export function registerCopilotAccountingFacade(server: McpServer) {
     inputSchema: z.object({
       bookTranId: z.string().min(1).max(256).describe("Sender bookTranId from a ledger, invoice, receipt or payment search."),
       companyName: z.string().min(1).max(4000).describe("Company name that owns this book transaction."),
+      nextCursor: z.string().max(4096).optional().describe("Continuation from this allocated list; keep bookTranId and companyName unchanged."),
     }).strict(),
-  }, args => getCopilotAllocations("allocated", args as { bookTranId: string; companyName: string }));
+  }, args => getCopilotAllocations("allocated", args as { bookTranId: string; companyName: string; nextCursor?: string }));
   server.registerTool("get_allocation_candidates", {
     title: extraFetch.allocation_candidates.title,
     description: extraFetch.allocation_candidates.description,
@@ -642,6 +672,7 @@ export function registerCopilotAccountingFacade(server: McpServer) {
     inputSchema: z.object({
       bookTranId: z.string().min(1).max(256).describe("Sender bookTranId from a ledger, invoice, receipt or payment search."),
       companyName: z.string().min(1).max(4000).describe("Company name that owns this book transaction."),
+      nextCursor: z.string().max(4096).optional().describe("Continuation from this candidate list; keep bookTranId and companyName unchanged."),
     }).strict(),
-  }, args => getCopilotAllocations("candidates", args as { bookTranId: string; companyName: string }));
+  }, args => getCopilotAllocations("candidates", args as { bookTranId: string; companyName: string; nextCursor?: string }));
 }
