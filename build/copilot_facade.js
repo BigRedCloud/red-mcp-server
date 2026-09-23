@@ -9,6 +9,7 @@ import { registerAccrualTools } from "./tools/accrual_tools.js";
 import { registerPrepaymentTools } from "./tools/prepayment_tools.js";
 import { registerCustomerTools } from "./tools/customer_tools.js";
 import { registerSupplierTools } from "./tools/purchases/supplier_tools.js";
+import { registerNominalJournalBatchTools } from "./tools/journals/nominal_journal_batch_tools.js";
 import { registerCompanySetupTools } from "./tools/setup/company_setup_tools.js";
 import { getToolMetadata } from "./tool_annotations.js";
 import { entraRequestOwner } from "./auth/entra_auth.js";
@@ -33,14 +34,26 @@ export const COPILOT_ENTITIES = [
     { plural: "payments", singular: "payment", label: "payments", idField: "paymentId", list: "brc_list_payments", get: "brc_get_payment", ids: ["id", "paymentid", "booktranid"], codes: ["reference"], documents: true },
     { plural: "accruals", singular: "accrual", label: "accruals", idField: "accrualId", list: "brc_list_accruals", get: "brc_get_accrual", ids: ["id", "accrualid"], codes: ["accode", "code", "reference"], documents: false, dated: true },
     { plural: "prepayments", singular: "prepayment", label: "prepayments", idField: "prepaymentId", list: "brc_list_prepayments", get: "brc_get_prepayment", ids: ["id", "prepaymentid"], codes: ["accode", "code", "reference"], documents: false, dated: true },
+    { plural: "sales_reps", singular: "sales_rep", label: "sales representatives", idField: "salesRepId", list: "brc_list_sales_reps", get: "brc_get_sales_rep", ids: ["id"], codes: ["code"], documents: false },
+    { plural: "nominal_journal_batches", singular: "nominal_journal_batch", label: "nominal journal batches", idField: "nominalJournalBatchId", list: "brc_list_nominal_journal_batches", get: "brc_get_nominal_journal_batch", ids: ["id"], codes: [], documents: false, dated: true, noCode: true },
 ];
 export const COPILOT_SEARCH_ONLY = [
     { plural: "vat_rates", singular: "vat_rate", label: "VAT rates", idField: "vatRateId", list: "brc_list_vat_rates", ids: ["id", "vatrateid"], codes: ["code", "name"], documents: false, searchOnly: true },
     { plural: "vat_categories", singular: "vat_category", label: "VAT categories", idField: "vatCategoryId", list: "brc_list_vat_categories", ids: ["id", "vatcategoryid"], codes: ["code", "name"], documents: false, searchOnly: true },
     { plural: "analysis_categories", singular: "analysis_category", label: "analysis categories", idField: "analysisCategoryId", list: "brc_list_analysis_categories", ids: ["id", "analysiscategoryid"], codes: ["code", "accountcode", "accode", "name"], documents: false, searchOnly: true },
     { plural: "nominal_accounts", singular: "nominal_account", label: "nominal accounts", idField: "nominalAccountId", list: "brc_list_nominal_accounts", ids: ["id", "nominalaccountid"], codes: ["accode", "code", "accountcode"], documents: false, searchOnly: true },
+    { plural: "vat_types", singular: "vat_type", label: "VAT types", idField: "vatTypeId", list: "brc_list_vat_types", ids: ["id"], codes: ["code"], documents: false, searchOnly: true, summaryExtras: ["isonlyzero", "isnotapplicable"] },
+    { plural: "vat_analysis_types", singular: "vat_analysis_type", label: "VAT analysis types", idField: "vatAnalysisTypeId", list: "brc_list_vat_analysis_types", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true },
+    { plural: "category_types", singular: "category_type", label: "category types", idField: "categoryTypeId", list: "brc_list_category_types", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true },
+    { plural: "book_transaction_types", singular: "book_transaction_type", label: "book transaction types", idField: "bookTranTypeId", list: "brc_list_book_tran_types", ids: ["id"], codes: ["code"], documents: false, searchOnly: true },
 ];
 const extraSearch = {
+    sales_reps: { title: "Search Big Red Cloud sales representatives", description: "Find sales representatives by name, code or contact details in linked companies. Empty query lists representatives. Use this for sales staff, not customer accounts. Continue with nextCursor." },
+    nominal_journal_batches: { title: "Search Big Red Cloud nominal journal batches", description: "Find general-ledger journal batches by date or summary text. Returns batch IDs, dates and totals without debit/credit lines. Use fetch_nominal_journal_batch for lines; use search_nominal_accounts for the chart of accounts." },
+    vat_types: { title: "Search Big Red Cloud VAT types", description: "Look up VAT treatments such as Domestic, Other EU, Exempt or Reverse Charge and their IDs/codes. These are treatments, not VAT percentages or sales/purchase VAT categories. Empty query lists types." },
+    vat_analysis_types: { title: "Search Big Red Cloud VAT analysis types", description: "Look up the None, Goods and Services VAT analysis classifications and their IDs. These distinguish goods from services, not VAT rates or posting analysis categories. Empty query lists types." },
+    category_types: { title: "Search Big Red Cloud category types", description: "Look up category-type IDs and descriptions identifying accounting books, such as Cash Receipts. Use search_analysis_categories for the actual posting categories. Empty query lists types." },
+    book_transaction_types: { title: "Search Big Red Cloud book transaction types", description: "Decode bookTranTypeId values from ledger lines into transaction-type descriptions such as Cash Receipt or Sales Entry. Returns reference definitions, not transactions. Empty query lists types." },
     accruals: { title: "Search Big Red Cloud accrual journals", description: "Search period-end accrual journals by text, date or nominal code. Not purchases, invoices or nominal accounts. Empty query lists journals. Continue with nextCursor." },
     prepayments: { title: "Search Big Red Cloud prepayment journals", description: "Search period-end prepayment journals by text, date or nominal code. Not payments, invoices or nominal accounts. Empty query lists journals. Continue with nextCursor." },
     vat_rates: { title: "Search Big Red Cloud VAT rates", description: "Search company VAT rates and percentages. Distinct from VAT categories, analysis categories and products. Empty query lists rates. Continue with nextCursor." },
@@ -51,6 +64,8 @@ const extraSearch = {
     supplier_transactions: { title: "Search a supplier ledger", description: "Search one supplier's account ledger lines (purchases, payments). Requires supplierId from search_suppliers. Distinct from search_purchases, search_payments and search_suppliers. Continue with nextCursor." },
 };
 const extraFetch = {
+    sales_rep: { title: "Fetch Big Red Cloud sales representative", description: "Retrieve one sales representative and contact details using the exact salesRepId and companyName from search_sales_reps." },
+    nominal_journal_batch: { title: "Fetch Big Red Cloud nominal journal batch", description: "Retrieve one general-ledger journal batch with its debit/credit lines using the exact nominalJournalBatchId and companyName from search_nominal_journal_batches." },
     accrual: { title: "Fetch Big Red Cloud accrual journal", description: "Retrieve one parent accrual journal using accrualId from search_accruals. Child reversing accruals are not returned." },
     prepayment: { title: "Fetch Big Red Cloud prepayment journal", description: "Retrieve one parent prepayment journal using prepaymentId from search_prepayments. Child reversing prepayments are not returned." },
     financial_year: { title: "Get Big Red Cloud financial year", description: "Return the linked company's financial year and period dates. Company-level setup, not a transaction search. Distinct from search_accruals and search_prepayments." },
@@ -125,6 +140,7 @@ function readers() {
     registerCustomerTools(collector);
     registerSupplierTools(collector);
     registerCompanySetupTools(collector);
+    registerNominalJournalBatchTools(collector);
     if (captured.size !== selected.size)
         throw new Error("Incomplete facade readers");
     redHandlers = captured;
@@ -250,8 +266,8 @@ const summaryFields = new Set([
     "email", "telephone", "phone", "balance", "total", "net", "vat", "gross", "unpaid", "dormant", "isdormant",
 ]);
 const monthlyMovement = /^month(?:[1-9]|1[0-2])$/i;
-function summariseRow(row, clean) {
-    return sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => summaryFields.has(key.toLowerCase()) && !monthlyMovement.test(key)).map(([key, item]) => [key, Array.isArray(item) ? item.filter(value => typeof value === "string").slice(0, 5).map(value => value.slice(0, 1000)) : item])), clean);
+function summariseRow(row, clean, extras = []) {
+    return sanitize(Object.fromEntries(Object.entries(row).filter(([key]) => (summaryFields.has(key.toLowerCase()) || extras.includes(key.toLowerCase())) && !monthlyMovement.test(key)).map(([key, item]) => [key, Array.isArray(item) ? item.filter(value => typeof value === "string").slice(0, 5).map(value => value.slice(0, 1000)) : item])), clean);
 }
 const privateFields = /^(?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|password|secret|encryptedSecret|connectionRef|activeConnectionRef|connectionMetadata|connection|_meta|tenantId|objectId)$/i;
 function sanitize(data, clean, depth = 0) {
@@ -317,13 +333,13 @@ export async function searchCopilotEntity(entity, args) {
                 const progress = dump ? pageNominalAccounts(cursor.paging, rows, pageSize, row => identifier(entity, row)) : advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
                 const pageResults = [];
                 for (const row of progress.rows) {
-                    const summary = summariseRow(row, context.clean);
+                    const summary = summariseRow(row, context.clean, entity.summaryExtras);
                     if (!matches(entity, summary, args))
                         continue;
                     const id = identifier(entity, row);
                     const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
                     pageResults.push({ companyName, ...(usableId ? { [entity.idField]: id } : {}),
-                        title: context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "firstdetail", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
+                        title: entity.singular === "nominal_journal_batch" ? context.clean(`Journal batch ${id ?? ""} - ${value(summary, ["entrydate"])?.slice(0, 10) ?? "undated"}`) : context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "firstdetail", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
                         record: summary, fetchAvailable: entity.searchOnly ? false : usableId });
                 }
                 if (Buffer.byteLength(JSON.stringify([...results, ...pageResults])) > MAX_BYTES) {
@@ -489,14 +505,14 @@ export function registerCopilotAccountingFacade(server) {
                 query: z.string().max(1000).describe("Text to match in record summaries; empty string lists records."),
                 companyName: z.string().min(1).max(4000).optional().describe("Linked company name; omit to search all your linked companies."),
                 ...(entity.dated ? {
-                    code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity."),
+                    ...(!entity.noCode ? { code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity.") } : {}),
                     dateFrom: z.iso.date().optional().describe("Inclusive earliest transaction date, YYYY-MM-DD."),
                     dateTo: z.iso.date().optional().describe("Inclusive latest transaction date, YYYY-MM-DD."),
                 } : entity.documents ? {
                     counterpartyCode: z.string().min(1).max(256).optional().describe(supplierLedgers.has(entity.singular) ? "Exact supplier account code." : "Exact customer account code."),
                     dateFrom: z.iso.date().optional().describe("Inclusive earliest transaction date, YYYY-MM-DD."),
                     dateTo: z.iso.date().optional().describe("Inclusive latest transaction date, YYYY-MM-DD."),
-                } : { code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity.") }),
+                } : entity.noCode ? {} : { code: z.string().min(1).max(256).optional().describe("Exact record code, matched without case sensitivity.") }),
                 pageSize: z.number().int().min(1).max(50).optional().describe("Records examined per company page; default 20, at most three pages per call."),
                 nextCursor: z.string().max(4096).optional().describe("Continuation from this search; keep the query, company, filters and pageSize unchanged."),
             }).strict(),

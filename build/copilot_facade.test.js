@@ -10,6 +10,15 @@ import { entraRequestOwner } from "./auth/entra_auth.js";
 import { getConnectionStore } from "./auth/connection_store.js";
 import { encryptCredentialSecret, decryptCredentialSecret } from "./auth/credential_encryption.js";
 import { runWithHttpRequestSessionId, runWithSessionKeyStore } from "./shared.js";
+const nextTranche = [
+    ["sales_reps", "sales_rep", "salesRepId", "salesReps"],
+    ["nominal_journal_batches", "nominal_journal_batch", "nominalJournalBatchId", "nominalJournalBatches"],
+    ["vat_types", null, "vatTypeId", "vatTypes"],
+    ["vat_analysis_types", null, "vatAnalysisTypeId", "vatAnalysisTypes"],
+    ["category_types", null, "categoryTypeId", "categoryTypes"],
+    ["book_transaction_types", null, "bookTranTypeId", "bookTranTypes"],
+];
+const nextNames = nextTranche.flatMap(([plural, singular]) => singular ? [`search_${plural}`, `fetch_${singular}`] : [`search_${plural}`]);
 const original = [
     ["suppliers", "supplier", "supplierId", "suppliers"],
     ["products", "product", "productId", "products"],
@@ -77,14 +86,17 @@ async function fixture(t) {
     };
     return { a, b, c, store, tools, invoke };
 }
-test("normal 159 descriptors remain identical; Copilot advertises exactly 35 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 43 strict read-only tools", () => {
     const normal = [];
     registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
     assert.equal(normal.length, 159);
     assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
     const tools = registry();
-    const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames].sort();
-    assert.equal(tools.size, 35);
+    const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames].sort();
+    assert.equal(tools.size, 43);
+    const priorDescriptors = [...tools].filter(([name]) => !nextNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    assert.equal(priorDescriptors.length, 35);
+    assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"), "c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
     assert.deepEqual([...tools.keys()].sort(), names);
     assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), names);
     for (const name of originalNames)
@@ -708,4 +720,124 @@ test("nominal diagnostics distinguish upstream failures without echoing raw erro
     assert.doesNotMatch(JSON.stringify(unknown), /owner-a-key|private network/);
     const other = (await f.invoke(f.a, "search_suppliers", { query: "" })).structuredContent;
     assert.equal(other.nominalFailures, undefined);
+});
+// Selected from https://app.bigredcloud.com/api/swagger/docs/v1; intentionally include
+// heavy journal lines to prove search projections do not return them.
+function nextTrancheRow(path) {
+    if (path === "salesReps")
+        return { id: 7, code: "SR0001", name: "Sales Rep 1", phone: "1234567890", email: "example@example.test", companyId: 123456, timeStamp: "opaque" };
+    if (path === "nominalJournalBatches")
+        return { id: 7, bookTranTypeId: 7, entryDate: "2024-01-15T00:00:00", procDate: "2024-01-15T00:00:00", total: 100, timestamp: "opaque", accountTransactions: [{ id: 1, acCode: "400", description: "Sales", reference: "NJ0001", debit: 100, credit: 0 }] };
+    if (path === "vatTypes")
+        return { id: 7, description: "VAT Exempt", code: "X", isOnlyZero: true, isNotApplicable: false };
+    if (path === "vatAnalysisTypes")
+        return { id: 0, description: "None" };
+    if (path === "categoryTypes")
+        return { id: 17, description: "Cash Receipts" };
+    return { id: 1, description: "Cash Receipt", code: "" };
+}
+for (const [plural, singular, idField, path] of nextTranche) {
+    test(`next tranche ${plural}: correct handler, summary, real fetch and no fan-out`, async (t) => {
+        const f = await fixture(t);
+        const calls = [];
+        const row = nextTrancheRow(path);
+        t.mock.method(globalThis, "fetch", async (input, init) => {
+            const url = new URL(String(input));
+            calls.push(url);
+            assert.equal(init.method ?? "GET", "GET");
+            assert.equal(Buffer.from(init.headers.Authorization.replace("Basic ", ""), "base64").toString(), "owner-a-key:");
+            const data = { ...row, ApiKey: "owner-a-key" };
+            return new Response(JSON.stringify(url.pathname.endsWith(`/${row.id}`) ? data : { Items: [data], Count: 1, NextPageLink: "" }));
+        });
+        const search = (await f.invoke(f.a, `search_${plural}`, { query: "", companyName: "Shared" })).structuredContent;
+        assert.equal(search.status, "ok");
+        assert.equal(search.results.length, 1);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].pathname, `/api/v1/${path}`);
+        assert.equal(calls[0].searchParams.get("$top"), "20");
+        assert.equal(calls[0].searchParams.get("$skip"), "0");
+        assert.equal(calls[0].searchParams.get("$orderby"), "id asc");
+        assert.equal(calls[0].searchParams.has("$filter"), false);
+        if (path === "nominalJournalBatches")
+            assert.equal(calls[0].searchParams.has("page"), false);
+        const result = search.results[0];
+        assert.equal(result[idField], String(row.id));
+        assert.equal(result.fetchAvailable, Boolean(singular));
+        assert.equal(result.record.id, row.id);
+        assert.equal(result.record.ApiKey, undefined);
+        assert.equal(result.record.accountTransactions, undefined);
+        assert.equal(result.record.timeStamp, undefined);
+        if (path === "salesReps") {
+            assert.equal(result.title, "Sales Rep 1");
+            assert.equal(result.record.email, "example@example.test");
+            assert.equal(result.record.code, "SR0001");
+        }
+        else if (path === "nominalJournalBatches") {
+            assert.equal(result.title, "Journal batch 7 - 2024-01-15");
+            assert.equal(result.record.total, 100);
+        }
+        else {
+            assert.equal(result.record.description, row.description);
+            assert.equal(result.title, row.description);
+        }
+        if (path === "vatTypes") {
+            assert.equal(result.record.isOnlyZero, true);
+            assert.equal(result.record.isNotApplicable, false);
+        }
+        if (singular) {
+            const fetched = (await f.invoke(f.a, `fetch_${singular}`, { companyName: "Shared", [idField]: String(row.id) })).structuredContent;
+            assert.equal(fetched.status, "ok");
+            assert.equal(calls.length, 2);
+            assert.equal(calls[1].pathname, `/api/v1/${path}/${row.id}`);
+            if (path === "nominalJournalBatches")
+                assert.equal(fetched[singular].accountTransactions[0].debit, 100);
+            assert.doesNotMatch(JSON.stringify(fetched), /owner-a-key|ApiKey/);
+        }
+        else
+            assert.equal(f.tools.has(`fetch_${plural.replace(/s$/, "")}`), false);
+    });
+    test(`next tranche ${plural}: paging and owner/company isolation`, async (t) => {
+        const f = await fixture(t);
+        const offsets = [];
+        t.mock.method(globalThis, "fetch", async (input) => {
+            const url = new URL(String(input));
+            const skip = Number(url.searchParams.get("$skip"));
+            offsets.push(skip);
+            return new Response(JSON.stringify({ Items: Array.from({ length: Math.max(0, Math.min(2, 7 - skip)) }, (_, i) => ({ ...nextTrancheRow(path), id: skip + i + 1 })), Count: 7, NextPageLink: "" }));
+        });
+        const args = { query: "", companyName: "Shared", pageSize: 2 };
+        const first = (await f.invoke(f.a, `search_${plural}`, args)).structuredContent;
+        assert.equal(first.results.length, 6);
+        assert.equal(first.complete, false);
+        for (const owner of [f.b, f.c])
+            assert.notEqual((await f.invoke(owner, `search_${plural}`, { ...args, nextCursor: first.nextCursor })).structuredContent.status, "ok");
+        assert.equal((await f.invoke(f.a, `search_${plural}`, { ...args, query: "changed", nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+        assert.equal((await f.invoke(f.a, `search_${plural}`, { ...args, companyName: "Foreign" })).structuredContent.status, "company_unavailable");
+        assert.equal((await f.invoke(undefined, `search_${plural}`, args)).structuredContent.status, "authentication_required");
+        assert.deepEqual(offsets, [0, 2, 4]);
+        const next = (await f.invoke(f.a, `search_${plural}`, { ...args, nextCursor: first.nextCursor })).structuredContent;
+        assert.equal(next.complete, true);
+        assert.deepEqual(offsets, [0, 2, 4, 6]);
+        assert.equal(new Set([...first.results, ...next.results].map(row => row[idField])).size, 7);
+        assert.throws(() => f.tools.get(`search_${plural}`).config.inputSchema.parse({ ...args, connectionRef: "foreign" }));
+        if (singular) {
+            for (const owner of [undefined, f.c])
+                assert.equal((await f.invoke(owner, `fetch_${singular}`, { companyName: "Shared", [idField]: "7" })).isError, true);
+            assert.equal((await f.invoke(f.a, `fetch_${singular}`, { companyName: "Foreign", [idField]: "7" })).isError, true);
+            assert.deepEqual(offsets, [0, 2, 4, 6]);
+        }
+    });
+}
+test("journal search date filters are local and omit line detail text; references retain distinct schemas", async (t) => {
+    const f = await fixture(t);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => { calls++; return new Response(JSON.stringify({ Items: [nextTrancheRow("nominalJournalBatches")] })); });
+    const args = { query: "", dateFrom: "2024-01-15", dateTo: "2024-01-15" };
+    assert.equal((await f.invoke(f.a, "search_nominal_journal_batches", args)).structuredContent.results.length, 1);
+    assert.equal((await f.invoke(f.a, "search_nominal_journal_batches", { ...args, query: "NJ0001" })).structuredContent.results.length, 0);
+    assert.equal(calls, 2);
+    for (const name of ["search_nominal_journal_batches", "search_vat_analysis_types", "search_category_types"])
+        assert.equal("code" in f.tools.get(name).config.inputSchema.shape, false);
+    assert.equal((await f.invoke(f.a, "search_nominal_journal_batches", { query: "", dateFrom: "2024-02-01", dateTo: "2024-01-01" })).structuredContent.status, "invalid_request");
+    assert.equal(calls, 2);
 });

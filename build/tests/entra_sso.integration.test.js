@@ -208,6 +208,20 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     assert.equal(supplierLedger.structuredContent.results[0].bookTranId, "1");
     assert.equal((await b.callTool({ name: "search_supplier_transactions", arguments: { supplierId: "1", companyName: "A" } })).isError, true);
     assert.equal((await b.callTool({ name: "search_customer_transactions", arguments: { customerId: "1", companyName: "A" } })).isError, true);
+    for (const [plural, singular, idField] of [
+        ["sales_reps", "sales_rep", "salesRepId"], ["nominal_journal_batches", "nominal_journal_batch", "nominalJournalBatchId"],
+        ["vat_types", null, "vatTypeId"], ["vat_analysis_types", null, "vatAnalysisTypeId"], ["category_types", null, "categoryTypeId"], ["book_transaction_types", null, "bookTranTypeId"],
+    ]) {
+        const result = await a.callTool({ name: `search_${plural}`, arguments: { query: "", companyName: "A" } });
+        assert.equal(result.structuredContent.status, "ok", plural);
+        assert.equal(result.structuredContent.results.length, 1, plural);
+        assert.equal((await b.callTool({ name: `search_${plural}`, arguments: { query: "", companyName: "A" } })).isError, true);
+        if (singular) {
+            const detail = await a.callTool({ name: `fetch_${singular}`, arguments: { companyName: "A", [idField]: result.structuredContent.results[0][idField] } });
+            assert.equal(detail.structuredContent.status, "ok", singular);
+            assert.equal((await b.callTool({ name: `fetch_${singular}`, arguments: { companyName: "A", [idField]: "1" } })).isError, true);
+        }
+    }
     const year = await a.callTool({ name: "get_financial_year", arguments: { companyName: "A" } });
     assert.equal(year.structuredContent.status, "ok");
     assert.equal(year.structuredContent.financial_year.yearStart, "2026-01-01");

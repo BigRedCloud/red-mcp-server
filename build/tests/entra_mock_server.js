@@ -29,6 +29,18 @@ globalThis.fetch = async (input, init) => {
             const skip = Number(url.searchParams.get("$skip") ?? 0), top = Number(url.searchParams.get("$top") ?? rows.length);
             return json(rows.slice(skip, skip + top));
         }
+        const nextPath = /\/(salesReps|nominalJournalBatches|vatTypes|vatAnalysisTypes|categoryTypes|bookTranTypes)(?:\/(\d+))?$/.exec(url.pathname);
+        if (nextPath) {
+            if (init?.method && init.method !== "GET")
+                throw new Error("New facade tools must only read");
+            const kind = nextPath[1];
+            const row = kind === "salesReps" ? { id: 1, code: "SR1", name: "Sales Representative", email: "rep@example.test" }
+                : kind === "nominalJournalBatches" ? { id: 1, entryDate: "2024-01-15T00:00:00", total: 100, accountTransactions: [{ acCode: "400", debit: 100, credit: 0 }] }
+                    : kind === "vatTypes" ? { id: 1, description: "Domestic", code: "", isOnlyZero: false, isNotApplicable: false }
+                        : kind === "vatAnalysisTypes" ? { id: 0, description: "None" }
+                            : { id: 1, description: "Cash Receipt" };
+            return json(nextPath[2] ? row : { Items: [row], Count: 1, NextPageLink: "" });
+        }
         const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts|quotes|salesCreditNotes|bankAccounts|cashPayments|cashReceipts|payments|accruals|prepayments|vatRates|vatCategories|analysisCategories|nominalAccounts)(?:\/(\d+))?$/.exec(url.pathname);
         if (facadePath) {
             if (init?.method && init.method !== "GET")
