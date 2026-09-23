@@ -197,7 +197,11 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   assert.equal(year.structuredContent.status,"ok");
   assert.equal(year.structuredContent.financial_year.yearStart,"2026-01-01");
   assert.equal((await b.callTool({name:"get_financial_year",arguments:{companyName:"A"}})).isError,true);
-  assert.doesNotMatch(JSON.stringify([accrual,ledger,year]), /test-only-/);
+  const nominal: any = await a.callTool({name:"search_nominal_accounts",arguments:{query:"",companyName:"A"}});
+  const fetchedNominal: any = await a.callTool({name:"fetch_nominal_account",arguments:{nominalAccountId:nominal.structuredContent.results[0].nominalAccountId,companyName:"A"}});
+  assert.equal(fetchedNominal.structuredContent.status,"ok");
+  assert.equal((await b.callTool({name:"fetch_nominal_account",arguments:{nominalAccountId:"1",companyName:"A"}})).isError,true);
+  assert.doesNotMatch(JSON.stringify([accrual,ledger,year,fetchedNominal]), /test-only-/);
   const fetched: any=await a.callTool({name:"fetch_customer",arguments:{customerId:"1",companyName:"A"}});
   assert.equal(fetched.structuredContent?.status,"ok");
   assert.equal(fetched.structuredContent.customer.Id,1);

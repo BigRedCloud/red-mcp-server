@@ -53,7 +53,6 @@ export const COPILOT_SEARCH_ONLY = [
   { plural: "category_types", singular: "category_type", label: "category types", idField: "categoryTypeId", list: "brc_list_category_types", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true },
   { plural: "book_transaction_types", singular: "book_transaction_type", label: "book transaction types", idField: "bookTranTypeId", list: "brc_list_book_tran_types", ids: ["id"], codes: ["code"], documents: false, searchOnly: true },
 ] as const;
-type Entity = typeof COPILOT_ENTITIES[number];
 type Searchable = {
   plural: string; singular: string; label: string; idField: string; list: string; get?: string | null;
   ids: readonly string[]; codes: readonly string[]; documents: boolean; dated?: boolean; searchOnly?: boolean; noCode?: boolean; summaryExtras?: readonly string[];
@@ -85,13 +84,14 @@ const extraFetch: Record<string, { title: string; description: string }> = {
   accrual: { title: "Fetch Big Red Cloud accrual journal", description: "Retrieve one parent accrual journal using accrualId from search_accruals. Child reversing accruals are not returned." },
   prepayment: { title: "Fetch Big Red Cloud prepayment journal", description: "Retrieve one parent prepayment journal using prepaymentId from search_prepayments. Child reversing prepayments are not returned." },
   financial_year: { title: "Get Big Red Cloud financial year", description: "Return the linked company's financial year and period dates. Company-level setup, not a transaction search. Distinct from search_accruals and search_prepayments." },
+  nominal_account: { title: "Fetch Big Red Cloud nominal account", description: "Retrieve one chart-of-accounts nominal account, including monthly period movements, using the exact nominalAccountId and companyName from search_nominal_accounts. Distinct from bank accounts and customer or supplier accounts." },
 };
 const supplierLedgers = new Set<string>(["purchase", "cash_payment", "payment"]);
 export const COPILOT_FEDERATED_TOOL_NAMES = new Set<string>([
   "search_customers", "fetch_customer",
   ...COPILOT_ENTITIES.flatMap(entity => [`search_${entity.plural}`, `fetch_${entity.singular}`]),
   ...COPILOT_SEARCH_ONLY.map(entity => `search_${entity.plural}`),
-  "search_customer_transactions", "search_supplier_transactions", "get_financial_year",
+  "search_customer_transactions", "search_supplier_transactions", "get_financial_year", "fetch_nominal_account",
 ]);
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const MAX_PAGES = 3;
@@ -130,6 +130,7 @@ function readers() {
     ...COPILOT_ENTITIES.flatMap(entity => entity.get ? [entity.list, entity.get] : [entity.list]),
     ...COPILOT_SEARCH_ONLY.map(entity => entity.list),
     "brc_list_customer_account_trans", "brc_list_supplier_account_trans", "brc_get_financial_year",
+    "brc_get_nominal_account_ledger_by_id",
   ]);
   const captured = new Map<string, RedHandler>();
   // Capture original read callbacks into a private adapter. This object is never
@@ -327,7 +328,7 @@ export async function searchCopilotEntity(entity: Searchable, args: SearchArgs) 
           const usableId = id !== undefined && id.length <= 256 && context.clean(id) === id && ![".", ".."].includes(id);
           pageResults.push({ companyName, ...(usableId ? { [entity.idField]: id } : {}),
             title: entity.singular === "nominal_journal_batch" ? context.clean(`Journal batch ${id ?? ""} - ${value(summary, ["entrydate"])?.slice(0, 10) ?? "undated"}`) : context.clean(value(summary, ["name", "suppliername", "customername", "accountname", "productname", "description", "comments", "note", "firstdetail", "reference"]) ?? detailTitle(summary) ?? value(summary, entity.codes) ?? id ?? entity.singular),
-            record: summary, fetchAvailable: entity.searchOnly ? false : usableId });
+            record: summary, fetchAvailable: entity.searchOnly && entity.plural !== "nominal_accounts" ? false : usableId });
         }
         if (Buffer.byteLength(JSON.stringify([...results, ...pageResults])) > MAX_BYTES) {
           if (!results.length) throw new Error("Page too large");
@@ -362,7 +363,13 @@ export async function searchCopilotEntity(entity: Searchable, args: SearchArgs) 
   } catch (error) { return failure(error); }
 }
 
-export async function fetchCopilotEntity(entity: Entity, args: { companyName: string; recordId: string; nextCursor?: string }) {
+const NOMINAL_ACCOUNT_FETCH: Searchable = {
+  plural: "nominal_accounts", singular: "nominal_account", label: "nominal accounts",
+  idField: "nominalAccountId", list: "brc_list_nominal_accounts", get: "brc_get_nominal_account_ledger_by_id",
+  ids: ["id", "nominalaccountid"], codes: ["accode", "code", "accountcode"], documents: false,
+};
+
+export async function fetchCopilotEntity(entity: Searchable, args: { companyName: string; recordId: string; nextCursor?: string }) {
   try {
     if ([".", ".."].includes(args.recordId)) throw new FacadeError("invalid_request", "Use the exact identifier returned by search.");
     const context = await scope(args.companyName);
@@ -478,7 +485,7 @@ export function registerCopilotAccountingFacade(server: McpServer) {
         companyName: z.string().min(1).max(4000).describe("Company name returned with the search result; identifiers are company-scoped."),
         ...(!entity.get ? { nextCursor: z.string().max(4096).optional().describe("Continuation from an incomplete fetch_account; keep accountId and companyName unchanged.") } : {}),
       }).strict(),
-    }, args => fetchCopilotEntity(entity as Entity, { companyName: args.companyName as string, recordId: (args as Record<string, unknown>)[entity.idField] as string, nextCursor: args.nextCursor as string | undefined }));
+    }, args => fetchCopilotEntity(entity, { companyName: args.companyName as string, recordId: (args as Record<string, unknown>)[entity.idField] as string, nextCursor: args.nextCursor as string | undefined }));
   }
   server.registerTool("search_customer_transactions", {
     title: extraSearch.customer_transactions.title,
@@ -512,4 +519,13 @@ export function registerCopilotAccountingFacade(server: McpServer) {
       companyName: z.string().min(1).max(4000).describe("Linked company whose financial year and period information should be returned."),
     }).strict(),
   }, args => getCopilotFinancialYear(args as { companyName: string }));
+  server.registerTool("fetch_nominal_account", {
+    title: extraFetch.nominal_account.title,
+    description: extraFetch.nominal_account.description,
+    annotations,
+    inputSchema: z.object({
+      nominalAccountId: z.string().min(1).max(256).describe("Exact nominalAccountId returned by search_nominal_accounts; not an account code."),
+      companyName: z.string().min(1).max(4000).describe("Company name returned with the search result; identifiers are company-scoped."),
+    }).strict(),
+  }, args => fetchCopilotEntity(NOMINAL_ACCOUNT_FETCH, { companyName: args.companyName as string, recordId: args.nominalAccountId as string }));
 }

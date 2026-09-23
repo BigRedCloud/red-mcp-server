@@ -26,6 +26,7 @@ const nextTranche = [
     ["book_transaction_types", null, "bookTranTypeId", "bookTranTypes"],
 ];
 const nextNames = nextTranche.flatMap(([plural, singular]) => singular ? [`search_${plural}`, `fetch_${singular}`] : [`search_${plural}`]);
+const remainderNames = ["fetch_nominal_account"];
 const original = [
     ["suppliers", "supplier", "supplierId", "suppliers"],
     ["products", "product", "productId", "products"],
@@ -93,18 +94,21 @@ async function fixture(t) {
     };
     return { a, b, c, store, tools, invoke };
 }
-test("normal 159 descriptors remain identical; Copilot advertises exactly 48 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 49 strict read-only tools", () => {
     const normal = [];
     registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
     assert.equal(normal.length, 159);
     assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
     const tools = registry();
-    const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames].sort();
-    assert.equal(tools.size, 48);
-    const locked = [...tools].filter(([name]) => !finalNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames].sort();
+    assert.equal(tools.size, 49);
+    const current = [...tools].filter(([name]) => !remainderNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    assert.equal(current.length, 48);
+    assert.equal(createHash("sha256").update(JSON.stringify(current)).digest("hex"), "0826018dac5c81ce321e65e9ad54f3f408a916274352048c71bb177eb4cfcaa2");
+    const locked = [...tools].filter(([name]) => !finalNames.includes(name) && !remainderNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(locked.length, 43);
     assert.equal(createHash("sha256").update(JSON.stringify(locked)).digest("hex"), "c6e6860b46851bb8ae4731853f504bf8f5ab0fdd089482fd44ae26f56c5fec4b");
-    const priorDescriptors = [...tools].filter(([name]) => !nextNames.includes(name) && !finalNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    const priorDescriptors = [...tools].filter(([name]) => !nextNames.includes(name) && !finalNames.includes(name) && !remainderNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(priorDescriptors.length, 35);
     assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"), "c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
     assert.deepEqual([...tools.keys()].sort(), names);
@@ -114,7 +118,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 48 str
     for (const name of existingNames)
         assert.equal(tools.has(name), true, name);
     assert.equal(tools.has("fetch_vat_rate"), false);
-    assert.equal(tools.has("fetch_nominal_account"), false);
+    assert.equal(tools.has("fetch_nominal_account"), true);
     for (const [name, { config }] of tools) {
         assert.match(name, /^(search|fetch|get)_/);
         assert.doesNotMatch(name, /^brc_/);
@@ -148,6 +152,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 48 str
     assert.deepEqual(Object.keys(tools.get("search_vat_rates").config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
     assert.deepEqual(Object.keys(tools.get("search_customer_transactions").config.inputSchema.shape), ["customerId", "companyName", "query", "pageSize", "nextCursor"]);
     assert.deepEqual(Object.keys(tools.get("get_financial_year").config.inputSchema.shape), ["companyName"]);
+    assert.deepEqual(Object.keys(tools.get("fetch_nominal_account").config.inputSchema.shape), ["nominalAccountId", "companyName"]);
 });
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async (t) => {
     const f = await fixture(t);
@@ -493,12 +498,18 @@ test("tranche wrappers reuse the audited list/get handlers without fetch fan-out
         const search = await f.invoke(f.a, `search_${plural}`, { query: "", companyName: "Shared" });
         assert.equal(search.structuredContent.status, "ok", plural);
         assert.equal(search.structuredContent.results[0][idField], "7");
-        assert.equal(search.structuredContent.results[0].fetchAvailable, false);
+        assert.equal(search.structuredContent.results[0].fetchAvailable, plural === "nominal_accounts");
         assert.equal(search.structuredContent.results[0].record.month2, undefined);
         assert.equal(calls.length, before + 1, `${plural} search must not fan out`);
         assert.equal(calls.at(-1).url.pathname, `/api/v1/${path}`);
-        assert.equal(toolsMissingFetch(f.tools, plural), true);
+        if (plural !== "nominal_accounts")
+            assert.equal(toolsMissingFetch(f.tools, plural), true);
     }
+    const fetchedNominal = await f.invoke(f.a, "fetch_nominal_account", { nominalAccountId: "7", companyName: "Shared" });
+    assert.equal(fetchedNominal.structuredContent.status, "ok");
+    assert.equal(fetchedNominal.structuredContent.nominal_account.Id, 7);
+    assert.equal(fetchedNominal.structuredContent.nominal_account.month2, 5);
+    assert.equal(calls.at(-1).url.pathname, "/api/v1/nominalAccounts/7");
     const ledger = await f.invoke(f.a, "search_customer_transactions", { customerId: "42", companyName: "Shared" });
     assert.equal(ledger.structuredContent.status, "ok");
     assert.equal(ledger.structuredContent.results.length, 2);
@@ -524,6 +535,7 @@ test("tranche tools stay owner-scoped and reject credential injection", async (t
         ["search_customer_transactions", { customerId: "42", companyName: "Shared" }],
         ["search_supplier_transactions", { supplierId: "9", companyName: "Shared" }],
         ["get_financial_year", { companyName: "Shared" }],
+        ["fetch_nominal_account", { nominalAccountId: "7", companyName: "Shared" }],
     ]) {
         assert.equal((await f.invoke(undefined, name, args)).structuredContent.status, "authentication_required");
         assert.equal((await f.invoke(f.c, name, args)).structuredContent.status, "company_unavailable");
@@ -593,7 +605,7 @@ for (const [tool, args, path, idField] of [
         assert.equal(calls, 1);
         assert.equal(result.results[0][idField], tool === "search_nominal_accounts" ? "7" : "11");
         assert.equal(result.results[0].record.Name, "Sales");
-        assert.equal(result.results[0].fetchAvailable, false);
+        assert.equal(result.results[0].fetchAvailable, tool === "search_nominal_accounts");
         assert.doesNotMatch(JSON.stringify(result), /owner-a-key|connectionStatus|connectionRef|ApiKey/);
     });
     test(`${tool} rejects genuine upstream failures and malformed collections`, async (t) => {
@@ -901,4 +913,40 @@ test("sales-entry dates and customer code filter summaries without detail fan-ou
     assert.equal((await f.invoke(f.a, "search_sales_entries", { ...args, counterpartyCode: "OTHER" })).structuredContent.results.length, 0);
     assert.equal((await f.invoke(f.a, "search_sales_entries", { ...args, dateFrom: "2024-02-01", dateTo: "2024-02-01" })).structuredContent.results.length, 0);
     assert.equal(calls, 3);
+});
+test("fetch_nominal_account uses GET /v1/nominalAccounts/{id} and keeps monthly movements without changing search", async (t) => {
+    const f = await fixture(t);
+    const calls = [];
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        const url = new URL(String(input));
+        calls.push(url);
+        assert.equal(init.method ?? "GET", "GET");
+        assert.equal(Buffer.from(init.headers.Authorization.replace("Basic ", ""), "base64").toString(), "owner-a-key:");
+        const row = { ...nominalDto(7), ApiKey: "owner-a-key" };
+        return new Response(JSON.stringify(url.pathname.endsWith("/7") ? row : Array.from({ length: 1 }, () => row)));
+    });
+    const search = (await f.invoke(f.a, "search_nominal_accounts", { query: "", companyName: "Shared" })).structuredContent;
+    assert.equal(search.status, "ok");
+    assert.equal(search.results[0].nominalAccountId, "7");
+    assert.equal(search.results[0].fetchAvailable, true);
+    assert.equal(search.results[0].record.month1, undefined);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].pathname, "/api/v1/nominalAccounts");
+    const fetched = (await f.invoke(f.a, "fetch_nominal_account", { nominalAccountId: search.results[0].nominalAccountId, companyName: "Shared" })).structuredContent;
+    assert.equal(fetched.status, "ok");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].pathname, "/api/v1/nominalAccounts/7");
+    assert.equal(fetched.nominal_account.id, 7);
+    assert.equal(fetched.nominal_account.month1, 0);
+    assert.equal(fetched.nominal_account.code, "007");
+    assert.equal(fetched.nominal_account.group, "Sales");
+    assert.equal(fetched.nominal_account.ApiKey, undefined);
+    assert.doesNotMatch(JSON.stringify(fetched), /owner-a-key|ApiKey/);
+    assert.equal((await f.invoke(f.a, "fetch_nominal_account", { nominalAccountId: "8", companyName: "Shared" })).isError, true);
+    assert.equal(calls.length, 3);
+    for (const owner of [undefined, f.c])
+        assert.equal((await f.invoke(owner, "fetch_nominal_account", { nominalAccountId: "7", companyName: "Shared" })).isError, true);
+    assert.equal((await f.invoke(f.a, "fetch_nominal_account", { nominalAccountId: "7", companyName: "Foreign" })).isError, true);
+    assert.equal(calls.length, 3);
+    assert.throws(() => f.tools.get("fetch_nominal_account").config.inputSchema.parse({ nominalAccountId: "7", companyName: "Shared", connectionRef: "foreign" }));
 });
