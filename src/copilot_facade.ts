@@ -209,9 +209,18 @@ function records(data: unknown, limit: number, allowResultArray = false): Record
   const object = data as Record<string, unknown> | null;
   // brcFetch enriches bare API arrays as { result: [...], connectionStatus, ... }.
   // Only the nominal/ledger adapters opt into this contract; metadata stays outside rows.
-  const rows = Array.isArray(data) ? data : object?.Items ?? object?.items ?? (allowResultArray ? object?.result : undefined);
+  const rows = Array.isArray(data) ? data : object?.Items ?? object?.items
+    ?? (allowResultArray ? object?.result ?? object?.value ?? object?.Value : undefined);
   if (!Array.isArray(rows) || rows.length > limit || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("Unsupported page");
   return rows;
+}
+const NOMINAL_DUMP_LIMIT = 2_000;
+function pageNominalAccounts(state: ReturnType<typeof freshPaging>, rows: Record<string, unknown>[], pageSize: number, identity: (row: Record<string, unknown>) => string | undefined) {
+  if (rows.length <= pageSize) return advancePage(state, rows, pageSize, identity);
+  // Live GET /v1/nominalAccounts ignores $top/$skip and returns the full chart of accounts.
+  const slice = rows.slice(state.offset, state.offset + pageSize);
+  return { rows: slice, warning: undefined, done: state.offset + slice.length >= rows.length,
+    state: { ...state, offset: state.offset + slice.length, pages: state.pages + 1 } };
 }
 function items(data: unknown, pageSize: number): Record<string, unknown>[] {
   return records(data, pageSize);
@@ -263,11 +272,28 @@ export async function searchCopilotEntity(entity: Searchable, args: SearchArgs) 
     const results: Record<string, unknown>[] = [];
     const unavailableCompanies: string[] = [];
     const paginationWarnings: Record<string, string>[] = [];
+    // Temporary nominal-only diagnostics: structural facts, never records or raw exceptions.
+    const nominalFailures: Record<string, unknown>[] = [];
     for (let count = 0; count < MAX_PAGES && cursor.index < context.companies.length; count++) {
       const companyName = context.clean(context.companies[cursor.index].companyName);
+      const nominalDiagnostic: Record<string, unknown> | undefined = entity.plural === "nominal_accounts"
+        ? { companyName, stage: "handler", page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) } : undefined;
       try {
-        const rows = records(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) }), pageSize, entity.plural === "nominal_accounts");
-        const progress = advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
+        const data = await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) });
+        if (nominalDiagnostic) {
+          const envelope = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+          const collection = Array.isArray(data) ? data : envelope?.Items ?? envelope?.items ?? envelope?.result ?? envelope?.value ?? envelope?.Value;
+          Object.assign(nominalDiagnostic, {
+            stage: "parse", responseShape: Array.isArray(data) ? "array" : envelope ? "object" : typeof data,
+            collectionField: Array.isArray(data) ? "root" : envelope?.Items != null ? "Items" : envelope?.items != null ? "items" : envelope?.result != null ? "result" : envelope?.value != null ? "value" : envelope?.Value != null ? "Value" : "missing",
+            collectionType: Array.isArray(collection) ? "array" : collection === null ? "null" : typeof collection,
+            ...(Array.isArray(collection) ? { rowCount: collection.length, invalidRowCount: collection.filter(row => !row || typeof row !== "object" || Array.isArray(row)).length } : {}),
+          });
+        }
+        const dump = entity.plural === "nominal_accounts";
+        const rows = records(data, dump ? NOMINAL_DUMP_LIMIT : pageSize, dump);
+        if (nominalDiagnostic) nominalDiagnostic.stage = "summary";
+        const progress = dump ? pageNominalAccounts(cursor.paging, rows, pageSize, row => identifier(entity, row)) : advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
         const pageResults = [];
         for (const row of progress.rows) {
           const summary = summariseRow(row, context.clean);
@@ -286,13 +312,27 @@ export async function searchCopilotEntity(entity: Searchable, args: SearchArgs) 
         cursor.paging = progress.state;
         if (progress.warning) { paginationWarnings.push({ companyName, reason: progress.warning }); cursor.incomplete = true; }
         if (!progress.done) cursor.page++; else { cursor.index++; cursor.page = 1; cursor.paging = freshPaging(); }
-      } catch {
+      } catch (error) {
+        if (nominalDiagnostic) {
+          const knownErrors: Record<string, string> = {
+            "Unsupported page": "unsupported_page",
+            "Unsupported response": "unsupported_handler_response",
+            "BRC customer request failed.": "upstream_request_failed",
+            "Page too large": "summary_page_too_large",
+            "Field too large": "summary_field_too_large",
+            "Record too deep": "summary_record_too_deep",
+            "Expired company": "company_expired",
+          };
+          nominalFailures.push({ ...nominalDiagnostic,
+            reason: error instanceof z.ZodError ? "handler_schema_validation_failed" : error instanceof Error && Object.hasOwn(knownErrors, error.message) ? knownErrors[error.message] : "unclassified_failure" });
+        }
         unavailableCompanies.push(companyName);
         cursor.index++; cursor.page = 1; cursor.paging = freshPaging();
       }
     }
     const nextCursor = cursor.index < context.companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
     return reply({ status: cursor.incomplete || unavailableCompanies.length ? "partial_failure" : "ok", results, unavailableCompanies, paginationWarnings,
+      ...(nominalFailures.length ? { nominalFailures } : {}),
       ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
   } catch (error) { return failure(error); }
 }

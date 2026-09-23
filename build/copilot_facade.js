@@ -220,10 +220,20 @@ function records(data, limit, allowResultArray = false) {
     const object = data;
     // brcFetch enriches bare API arrays as { result: [...], connectionStatus, ... }.
     // Only the nominal/ledger adapters opt into this contract; metadata stays outside rows.
-    const rows = Array.isArray(data) ? data : object?.Items ?? object?.items ?? (allowResultArray ? object?.result : undefined);
+    const rows = Array.isArray(data) ? data : object?.Items ?? object?.items
+        ?? (allowResultArray ? object?.result ?? object?.value ?? object?.Value : undefined);
     if (!Array.isArray(rows) || rows.length > limit || rows.some(row => !row || typeof row !== "object" || Array.isArray(row)))
         throw new Error("Unsupported page");
     return rows;
+}
+const NOMINAL_DUMP_LIMIT = 2_000;
+function pageNominalAccounts(state, rows, pageSize, identity) {
+    if (rows.length <= pageSize)
+        return advancePage(state, rows, pageSize, identity);
+    // Live GET /v1/nominalAccounts ignores $top/$skip and returns the full chart of accounts.
+    const slice = rows.slice(state.offset, state.offset + pageSize);
+    return { rows: slice, warning: undefined, done: state.offset + slice.length >= rows.length,
+        state: { ...state, offset: state.offset + slice.length, pages: state.pages + 1 } };
 }
 function items(data, pageSize) {
     return records(data, pageSize);
@@ -282,11 +292,29 @@ export async function searchCopilotEntity(entity, args) {
         const results = [];
         const unavailableCompanies = [];
         const paginationWarnings = [];
+        // Temporary nominal-only diagnostics: structural facts, never records or raw exceptions.
+        const nominalFailures = [];
         for (let count = 0; count < MAX_PAGES && cursor.index < context.companies.length; count++) {
             const companyName = context.clean(context.companies[cursor.index].companyName);
+            const nominalDiagnostic = entity.plural === "nominal_accounts"
+                ? { companyName, stage: "handler", page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) } : undefined;
             try {
-                const rows = records(await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) }), pageSize, entity.plural === "nominal_accounts");
-                const progress = advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
+                const data = await read(context, cursor.index, entity.list, { page: cursor.page, pageSize, ...pagingArgs(cursor.paging, pageSize) });
+                if (nominalDiagnostic) {
+                    const envelope = data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+                    const collection = Array.isArray(data) ? data : envelope?.Items ?? envelope?.items ?? envelope?.result ?? envelope?.value ?? envelope?.Value;
+                    Object.assign(nominalDiagnostic, {
+                        stage: "parse", responseShape: Array.isArray(data) ? "array" : envelope ? "object" : typeof data,
+                        collectionField: Array.isArray(data) ? "root" : envelope?.Items != null ? "Items" : envelope?.items != null ? "items" : envelope?.result != null ? "result" : envelope?.value != null ? "value" : envelope?.Value != null ? "Value" : "missing",
+                        collectionType: Array.isArray(collection) ? "array" : collection === null ? "null" : typeof collection,
+                        ...(Array.isArray(collection) ? { rowCount: collection.length, invalidRowCount: collection.filter(row => !row || typeof row !== "object" || Array.isArray(row)).length } : {}),
+                    });
+                }
+                const dump = entity.plural === "nominal_accounts";
+                const rows = records(data, dump ? NOMINAL_DUMP_LIMIT : pageSize, dump);
+                if (nominalDiagnostic)
+                    nominalDiagnostic.stage = "summary";
+                const progress = dump ? pageNominalAccounts(cursor.paging, rows, pageSize, row => identifier(entity, row)) : advancePage(cursor.paging, rows, pageSize, row => identifier(entity, row));
                 const pageResults = [];
                 for (const row of progress.rows) {
                     const summary = summariseRow(row, context.clean);
@@ -317,7 +345,20 @@ export async function searchCopilotEntity(entity, args) {
                     cursor.paging = freshPaging();
                 }
             }
-            catch {
+            catch (error) {
+                if (nominalDiagnostic) {
+                    const knownErrors = {
+                        "Unsupported page": "unsupported_page",
+                        "Unsupported response": "unsupported_handler_response",
+                        "BRC customer request failed.": "upstream_request_failed",
+                        "Page too large": "summary_page_too_large",
+                        "Field too large": "summary_field_too_large",
+                        "Record too deep": "summary_record_too_deep",
+                        "Expired company": "company_expired",
+                    };
+                    nominalFailures.push({ ...nominalDiagnostic,
+                        reason: error instanceof z.ZodError ? "handler_schema_validation_failed" : error instanceof Error && Object.hasOwn(knownErrors, error.message) ? knownErrors[error.message] : "unclassified_failure" });
+                }
                 unavailableCompanies.push(companyName);
                 cursor.index++;
                 cursor.page = 1;
@@ -326,6 +367,7 @@ export async function searchCopilotEntity(entity, args) {
         }
         const nextCursor = cursor.index < context.companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
         return reply({ status: cursor.incomplete || unavailableCompanies.length ? "partial_failure" : "ok", results, unavailableCompanies, paginationWarnings,
+            ...(nominalFailures.length ? { nominalFailures } : {}),
             ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
     }
     catch (error) {

@@ -3,6 +3,7 @@ import test, { type TestContext } from "node:test";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
+import { registerTools as registerListTools } from "./tools/general/list_tools.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
 import { entraRequestOwner } from "./auth/entra_auth.js";
@@ -595,4 +596,55 @@ test("nominal documented arrays preserve OData paging and local code filtering",
   t.mock.method(globalThis,"fetch",async()=>new Response("[]"));
   const empty=(await f.invoke(f.a,"search_nominal_accounts",args)).structuredContent;
   assert.equal(empty.status,"ok"); assert.deepEqual(empty.results,[]); assert.equal(empty.complete,true);
+});
+
+// Full documented NominalAccountDto; no fabricated Name/AcCode/Percentage fields.
+const nominalDto = (id: number) => ({id,accountGroupId:13,code:String(id).padStart(3,"0"),description:"SALES",companyId:0,timeStamp:"QUFBQUFBQUFDcXc9",balance:0,oBalance:0,...Object.fromEntries(Array.from({length:12},(_,i)=>[`month${i+1}`,0])),group:"Sales",type:"Profit and Loss"});
+
+test("nominal normal handler and Copilot accept the same complete Swagger DTO page",async t=>{
+  const f=await fixture(t); let normal:any;
+  registerListTools({tool(name:string,_description:string,schema:any,handler:any){if(name==="brc_list_nominal_accounts") normal={schema:z.object(schema),handler};}} as any);
+  const rows=Array.from({length:19},(_,i)=>nominalDto(i+1)); const urls:string[]=[];
+  t.mock.method(globalThis,"fetch",async(input:any)=>{urls.push(String(input));return new Response(JSON.stringify(rows));});
+  const args=normal.schema.parse({companyName:"Shared",page:1,pageSize:20,top:20,skip:0,orderBy:"id asc"});
+  const raw=await runWithSessionKeyStore(new Map([["shared",{companyName:"Shared",apiKey:"owner-a-key",expiresAt:Date.now()+600_000}]]),()=>normal.handler(args));
+  const parsed=JSON.parse(raw.content[0].text);
+  assert.deepEqual(parsed.result,rows); assert.equal(parsed.connectionStatus,"active");
+  const result=(await f.invoke(f.a,"search_nominal_accounts",{query:"",companyName:"Shared"})).structuredContent;
+  assert.equal(result.status,"ok"); assert.equal(result.results.length,19); assert.equal(result.results[0].nominalAccountId,"1");
+  assert.equal(result.results[0].title,"SALES"); assert.equal(result.complete,true);
+  assert.equal(urls[0],urls[1],"same API arguments through both handlers");
+});
+
+test("nominal oversized dump is locally paged without marking the company unavailable",async t=>{
+  const f=await fixture(t); let normal:any;
+  registerListTools({tool(name:string,_description:string,schema:any,handler:any){if(name==="brc_list_nominal_accounts") normal={schema:z.object(schema),handler};}} as any);
+  const rows=Array.from({length:72},(_,i)=>nominalDto(i+1));
+  t.mock.method(globalThis,"fetch",async()=>new Response(JSON.stringify(rows)));
+  const raw=await runWithSessionKeyStore(new Map([["shared",{companyName:"Shared",apiKey:"owner-a-key",expiresAt:Date.now()+600_000}]]),()=>normal.handler(normal.schema.parse({companyName:"Shared",top:20,skip:0,orderBy:"id asc"})));
+  assert.equal(JSON.parse(raw.content[0].text).result.length,72);
+  const args={query:"",companyName:"Shared"};
+  const first=(await f.invoke(f.a,"search_nominal_accounts",args)).structuredContent;
+  assert.equal(first.status,"ok"); assert.deepEqual(first.unavailableCompanies,[]);
+  assert.equal(first.results.length,60); assert.equal(first.results[0].nominalAccountId,"1");
+  assert.equal(first.results[59].nominalAccountId,"60"); assert.equal(first.complete,false);
+  assert.equal(first.nominalFailures,undefined);
+  const next=(await f.invoke(f.a,"search_nominal_accounts",{...args,nextCursor:first.nextCursor})).structuredContent;
+  assert.equal(next.status,"ok"); assert.equal(next.results.length,12); assert.equal(next.results[0].nominalAccountId,"61");
+  assert.equal(next.complete,true); assert.equal(next.nextCursor,undefined);
+});
+
+test("nominal diagnostics distinguish upstream failures without echoing raw errors or accounts",async t=>{
+  const f=await fixture(t);
+  t.mock.method(globalThis,"fetch",async()=>new Response("owner-a-key secret account values",{status:500}));
+  const result=(await f.invoke(f.a,"search_nominal_accounts",{query:""})).structuredContent;
+  assert.equal(result.nominalFailures[0].stage,"handler");
+  assert.equal(result.nominalFailures[0].reason,"upstream_request_failed");
+  assert.doesNotMatch(JSON.stringify(result),/owner-a-key|secret account values/);
+  t.mock.method(globalThis,"fetch",async()=>{throw new Error("owner-a-key private network details");});
+  const unknown=(await f.invoke(f.a,"search_nominal_accounts",{query:""})).structuredContent;
+  assert.equal(unknown.nominalFailures[0].reason,"unclassified_failure");
+  assert.doesNotMatch(JSON.stringify(unknown),/owner-a-key|private network/);
+  const other=(await f.invoke(f.a,"search_suppliers",{query:""})).structuredContent;
+  assert.equal(other.nominalFailures,undefined);
 });

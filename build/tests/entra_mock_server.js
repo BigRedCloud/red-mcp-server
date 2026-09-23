@@ -22,6 +22,13 @@ globalThis.fetch = async (input, init) => {
         const key = Buffer.from(authorization.replace(/^Basic /, ""), "base64").toString().replace(/:$/, "");
         if (!key.startsWith("test-only-"))
             return json({ error: "invalid" }, 401);
+        if (url.pathname.endsWith("/nominalAccounts")) {
+            if (url.searchParams.has("$filter"))
+                return json({ error: "Filtering is forbidden" }, 400);
+            const rows = Array.from({ length: 21 }, (_, i) => ({ id: i + 1, accountGroupId: 13, code: String(i + 1).padStart(3, "0"), description: "SALES", companyId: 0, timeStamp: "QUFBQUFBQUFDcXc9", balance: 0, oBalance: 0, ...Object.fromEntries(Array.from({ length: 12 }, (_, month) => [`month${month + 1}`, 0])), group: "Sales", type: "Profit and Loss" }));
+            const skip = Number(url.searchParams.get("$skip") ?? 0), top = Number(url.searchParams.get("$top") ?? rows.length);
+            return json(rows.slice(skip, skip + top));
+        }
         const facadePath = /\/(suppliers|products|salesInvoices|purchases|accounts|quotes|salesCreditNotes|bankAccounts|cashPayments|cashReceipts|payments|accruals|prepayments|vatRates|vatCategories|analysisCategories|nominalAccounts)(?:\/(\d+))?$/.exec(url.pathname);
         if (facadePath) {
             if (init?.method && init.method !== "GET")
