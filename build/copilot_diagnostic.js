@@ -2,11 +2,10 @@ import { registerCopilotAccountingFacade } from "./copilot_facade.js";
 import { registerCopilotCustomers } from "./copilot_customers.js";
 import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.js";
 export const COPILOT_INSTRUCTIONS = [
-    "RED by Big Red Cloud is exposed in Microsoft 365 through a federated connector.",
-    "Use search_customers to search customers in companies linked to the verified signed-in Microsoft user. Use an empty query to list customers.",
-    "Start without nextCursor. If a response returns nextCursor, pass it with the same query to continue, even when the current page has no matches.",
-    "Use fetch_customer with the exact customerId and companyName from search results to retrieve one customer. Customer IDs are company-scoped.",
-    "Use the other search tools for suppliers, products, quotes, sales invoices, sales credit notes, purchases, bank accounts, cash payments, cash receipts, payments, accounts, VAT, analysis categories, nominal accounts, accruals, prepayments and ledgers. Omit companyName to search linked companies. Keep all filters unchanged with nextCursor. Fetch a result using its returned identifier and companyName, or use get_financial_year for period dates.",
+    "RED by Big Red Cloud is exposed in Microsoft 365 through a federated connector. Query companies linked to the verified signed-in Microsoft user.",
+    "Use search_customers or other searches; empty query lists records. Fetch with fetch_customer or other fetch tools using exact IDs and companyName from results. Use get_financial_year for period dates. IDs are company-scoped. Omit companyName to search linked companies.",
+    "Start new lists without nextCursor. Keep the same query to continue, even after empty pages.",
+    "For search tools and get_allocation_candidates/get_allocated_transactions: when a response has nextCursor and complete:false and the user asks to continue, show more or show remaining results, invoke the SAME RED tool with the exact previous nextCursor, same companyName and same resource identifier/query parameters, including bookTranId and filters. Do not ask the user to manually copy an opaque cursor. Omit nextCursor only for a new list; do not automatically restart at page one.",
 ].join("\n");
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
     readOnlyHint: true,

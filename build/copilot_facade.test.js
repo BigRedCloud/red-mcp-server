@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
-import { registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
+import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerTools as registerListTools } from "./tools/general/list_tools.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
@@ -17,6 +17,7 @@ const finalTranche = [
     ["user_defined_fields", null, "userDefinedFieldId", "userDefinedFields"],
 ];
 const finalNames = finalTranche.flatMap(([plural, singular]) => singular ? [`search_${plural}`, `fetch_${singular}`] : [`search_${plural}`]);
+const allocationContinuation = "When the user asks to continue or show remaining items, call this same tool using the exact nextCursor from its most recent response and the same bookTranId and companyName. Do not ask the user to copy the cursor. Omit nextCursor only for a new list.";
 const nextTranche = [
     ["sales_reps", "sales_rep", "salesRepId", "salesReps"],
     ["nominal_journal_batches", "nominal_journal_batch", "nominalJournalBatchId", "nominalJournalBatches"],
@@ -103,8 +104,10 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
     const tools = registry();
     const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
     assert.equal(tools.size, 53);
+    // Normalize only the intentionally changed candidate description to retain the existing 52-descriptor lock.
     const current52 = [...tools].filter(([name]) => name !== "get_allocated_transactions").map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(current52.length, 52);
+    current52.find(tool => tool.name === "get_allocation_candidates").description = "Return unmatched transactions eligible to receive an allocation from the specified sender book transaction. These are possible allocations, not allocations already applied. Requires bookTranId and companyName. Use get_allocated_transactions for existing applications. Continue with nextCursor.";
     assert.equal(createHash("sha256").update(JSON.stringify(current52)).digest("hex"), "c7191ea7f3820b7d40db9e9120ddefc115a4a3da5918617a7eb8e96bab3fa6d7");
     const current49 = [...tools].filter(([name]) => !gapNames.includes(name)).map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(current49.length, 49);
@@ -132,7 +135,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
         assert.match(name, /^(search|fetch|get)_/);
         assert.doesNotMatch(name, /^brc_/);
         assert.ok(config.title.length > 10);
-        assert.ok(config.description.length < 400);
+        assert.ok(config.description.length < (["get_allocation_candidates", "get_allocated_transactions"].includes(name) ? 650 : 400));
         assert.deepEqual(config.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
         const schema = z.toJSONSchema(config.inputSchema);
         assert.equal(schema.additionalProperties, false);
@@ -171,9 +174,9 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
     assert.deepEqual(Object.keys(tools.get("get_allocated_transactions").config.inputSchema.shape), ["bookTranId", "companyName", "nextCursor"]);
     assert.deepEqual(Object.keys(tools.get("get_allocation_candidates").config.inputSchema.shape), ["bookTranId", "companyName", "nextCursor"]);
     assert.match(tools.get("get_allocation_candidates").config.description, /unmatched|eligible|possible/i);
-    assert.match(tools.get("get_allocation_candidates").config.description, /Continue with nextCursor/);
+    assert.ok(tools.get("get_allocation_candidates").config.description.endsWith(allocationContinuation));
     assert.match(tools.get("get_allocated_transactions").config.description, /already applied/);
-    assert.match(tools.get("get_allocated_transactions").config.description, /Continue with nextCursor/);
+    assert.ok(tools.get("get_allocated_transactions").config.description.endsWith(allocationContinuation));
     assert.equal("pageSize" in tools.get("get_allocated_transactions").config.inputSchema.shape, false);
 });
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async (t) => {
@@ -1236,4 +1239,23 @@ test("allocated transactions complete in one call at or below page size and reje
     payloadCount = 2001;
     assert.equal((await f.invoke(f.a, "get_allocated_transactions", { bookTranId: "1001", companyName: "Shared" })).structuredContent.status, "query_unavailable");
     assert.equal(calls, 2);
+});
+test("Copilot profile explicitly continues allocation and search results across user turns", () => {
+    for (const phrase of ["get_allocation_candidates/get_allocated_transactions", "nextCursor and complete:false", "continue, show more or show remaining results", "SAME RED tool", "exact previous nextCursor", "same companyName", "same resource identifier/query parameters", "including bookTranId and filters", "Do not ask the user to manually copy an opaque cursor", "do not automatically restart at page one"])
+        assert.ok(COPILOT_INSTRUCTIONS.includes(phrase), phrase);
+});
+test("allocation descriptors retain exact schemas and routing text", () => {
+    const tools = registry();
+    for (const [name, list, prefix] of [
+        ["get_allocation_candidates", "candidate", "Return unmatched transactions eligible to receive an allocation from the specified sender book transaction. These are possible allocations, not allocations already applied. Requires bookTranId and companyName. Use get_allocated_transactions for existing applications."],
+        ["get_allocated_transactions", "allocated", "Return allocations already applied from one sender book transaction, such as a receipt or payment, to receiver invoices or credits. Requires bookTranId from a ledger or document search and companyName. Distinct from get_allocation_candidates, which lists unmatched eligible receivers."],
+    ]) {
+        const config = tools.get(name).config;
+        assert.equal(config.description, `${prefix} ${allocationContinuation}`);
+        assert.deepEqual(z.toJSONSchema(config.inputSchema), z.toJSONSchema(z.object({
+            bookTranId: z.string().min(1).max(256).describe("Sender bookTranId from a ledger, invoice, receipt or payment search."),
+            companyName: z.string().min(1).max(4000).describe("Company name that owns this book transaction."),
+            nextCursor: z.string().max(4096).optional().describe(`Continuation from this ${list} list; keep bookTranId and companyName unchanged.`),
+        }).strict()));
+    }
 });
