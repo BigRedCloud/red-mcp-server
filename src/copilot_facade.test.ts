@@ -11,6 +11,13 @@ import { getConnectionStore } from "./auth/connection_store.js";
 import { encryptCredentialSecret, decryptCredentialSecret } from "./auth/credential_encryption.js";
 import { runWithHttpRequestSessionId, runWithSessionKeyStore } from "./shared.js";
 
+const finalTranche = [
+  ["sales_entries", "sales_entry", "salesEntryId", "salesEntries"],
+  ["account_owner_types", null, "ownerTypeId", "ownerTypes"],
+  ["account_owner_type_groups", null, "ownerTypeGroupId", "ownerTypeGroups"],
+  ["user_defined_fields", null, "userDefinedFieldId", "userDefinedFields"],
+] as const;
+const finalNames = finalTranche.flatMap(([plural,singular])=>singular ? [`search_${plural}`,`fetch_${singular}`] : [`search_${plural}`]);
 const nextTranche = [
   ["sales_reps", "sales_rep", "salesRepId", "salesReps"],
   ["nominal_journal_batches", "nominal_journal_batch", "nominalJournalBatchId", "nominalJournalBatches"],
@@ -82,15 +89,18 @@ async function fixture(t: TestContext) {
   return { a, b, c, store, tools, invoke };
 }
 
-test("normal 159 descriptors remain identical; Copilot advertises exactly 43 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 48 strict read-only tools", () => {
   const normal: any[] = [];
   registerAllTools({ registerTool(name: string, config: any) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() {}, registerPrompt() {} } as any, { profile: "full" });
   assert.equal(normal.length, 159);
   assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a,b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
   const tools = registry();
-  const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames].sort();
-  assert.equal(tools.size, 43);
-  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames].sort();
+  assert.equal(tools.size, 48);
+  const locked=[...tools].filter(([name])=>!finalNames.includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  assert.equal(locked.length,43);
+  assert.equal(createHash("sha256").update(JSON.stringify(locked)).digest("hex"),"c6e6860b46851bb8ae4731853f504bf8f5ab0fdd089482fd44ae26f56c5fec4b");
+  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name) && !finalNames.includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(priorDescriptors.length,35);
   assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"),"c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
   assert.deepEqual([...tools.keys()].sort(), names);
@@ -664,6 +674,10 @@ test("nominal diagnostics distinguish upstream failures without echoing raw erro
 // Selected from https://app.bigredcloud.com/api/swagger/docs/v1; intentionally include
 // heavy journal lines to prove search projections do not return them.
 function nextTrancheRow(path:string) {
+  if(path==="salesEntries") return {id:7,customerId:70583,reference:"000001",details:"Sales entry",note:"Customer 1",acCode:"C001",entryDate:"2024-01-15",total:700,totalNet:636.36,totalVAT:63.64,acEntries:[{id:1,value:636.36}],vatEntries:[{id:2,amount:63.64}],customFields:[{id:3,value:"detail"}],description:"Sales entry"};
+  if(path==="ownerTypes") return {id:1,description:"Prospect",recordTypeGroupId:1};
+  if(path==="ownerTypeGroups") return {id:1,description:"Customer"};
+  if(path==="userDefinedFields") return {id:1,description:"acudf_1_1",orderIndex:1,categoryTypeId:19};
   if(path==="salesReps") return {id:7,code:"SR0001",name:"Sales Rep 1",phone:"1234567890",email:"example@example.test",companyId:123456,timeStamp:"opaque"};
   if(path==="nominalJournalBatches") return {id:7,bookTranTypeId:7,entryDate:"2024-01-15T00:00:00",procDate:"2024-01-15T00:00:00",total:100,timestamp:"opaque",accountTransactions:[{id:1,acCode:"400",description:"Sales",reference:"NJ0001",debit:100,credit:0}]};
   if(path==="vatTypes") return {id:7,description:"VAT Exempt",code:"X",isOnlyZero:true,isNotApplicable:false};
@@ -671,7 +685,7 @@ function nextTrancheRow(path:string) {
   if(path==="categoryTypes") return {id:17,description:"Cash Receipts"};
   return {id:1,description:"Cash Receipt",code:""};
 }
-for(const [plural,singular,idField,path] of nextTranche) {
+for(const [plural,singular,idField,path] of [...nextTranche, ...finalTranche]) {
   test(`next tranche ${plural}: correct handler, summary, real fetch and no fan-out`,async t=>{
     const f=await fixture(t); const calls:URL[]=[]; const row=nextTrancheRow(path);
     t.mock.method(globalThis,"fetch",async(input:any,init:any)=>{
@@ -692,12 +706,16 @@ for(const [plural,singular,idField,path] of nextTranche) {
     assert.equal(result.record.accountTransactions,undefined); assert.equal(result.record.timeStamp,undefined);
     if(path==="salesReps") {assert.equal(result.title,"Sales Rep 1");assert.equal(result.record.email,"example@example.test");assert.equal(result.record.code,"SR0001");}
     else if(path==="nominalJournalBatches") {assert.equal(result.title,"Journal batch 7 - 2024-01-15");assert.equal(result.record.total,100);}
-    else {assert.equal(result.record.description,row.description);assert.equal(result.title,row.description);}
+    else {assert.equal(result.record.description,row.description);if(path!=="salesEntries") assert.equal(result.title,row.description);}
+    if(path==="ownerTypes") assert.equal(result.record.recordTypeGroupId,1);
+    if(path==="userDefinedFields") {assert.equal(result.record.orderIndex,1);assert.equal(result.record.categoryTypeId,19);}
+    if(path==="salesEntries") {assert.equal(result.record.reference,"000001");assert.equal(result.record.total,700);assert.equal(result.record.acEntries,undefined);assert.equal(result.record.vatEntries,undefined);assert.equal(result.record.customFields,undefined);}
     if(path==="vatTypes") {assert.equal(result.record.isOnlyZero,true);assert.equal(result.record.isNotApplicable,false);}
     if(singular) {
       const fetched=(await f.invoke(f.a,`fetch_${singular}`,{companyName:"Shared",[idField]:String(row.id)})).structuredContent;
       assert.equal(fetched.status,"ok"); assert.equal(calls.length,2); assert.equal(calls[1].pathname,`/api/v1/${path}/${row.id}`);
       if(path==="nominalJournalBatches") assert.equal(fetched[singular].accountTransactions[0].debit,100);
+      if(path==="salesEntries") assert.equal(fetched[singular].acEntries[0].value,636.36);
       assert.doesNotMatch(JSON.stringify(fetched),/owner-a-key|ApiKey/);
     } else assert.equal(f.tools.has(`fetch_${plural.replace(/s$/,"")}`),false);
   });
@@ -737,4 +755,26 @@ test("journal search date filters are local and omit line detail text; reference
   for(const name of ["search_nominal_journal_batches","search_vat_analysis_types","search_category_types"]) assert.equal("code" in f.tools.get(name)!.config.inputSchema.shape,false);
   assert.equal((await f.invoke(f.a,"search_nominal_journal_batches",{query:"",dateFrom:"2024-02-01",dateTo:"2024-01-01"})).structuredContent.status,"invalid_request");
   assert.equal(calls,2);
+});
+
+for(const [plural,,,path] of finalTranche) {
+  test(`final tranche ${plural}: local query filtering and repeated-page guard`,async t=>{
+    const f=await fixture(t);let calls=0;
+    t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(JSON.stringify({Items:[nextTrancheRow(path)]}));});
+    const args={query:"does-not-match"};
+    const empty=(await f.invoke(f.a,`search_${plural}`,args)).structuredContent;
+    assert.deepEqual(empty.results,[]);assert.equal(empty.complete,true);assert.equal(calls,1);
+    const repeated=(await f.invoke(f.a,`search_${plural}`,{query:"",pageSize:1})).structuredContent;
+    assert.equal(repeated.results.length,1);assert.equal(repeated.nextCursor,undefined);
+    assert.ok(repeated.paginationWarnings.length>0);assert.ok(calls<=4);
+  });
+}
+test("sales-entry dates and customer code filter summaries without detail fan-out",async t=>{
+  const f=await fixture(t);let calls=0;
+  t.mock.method(globalThis,"fetch",async()=>{calls++;return new Response(JSON.stringify({Items:[nextTrancheRow("salesEntries")]}));});
+  const args={query:"",companyName:"Shared",counterpartyCode:"C001",dateFrom:"2024-01-15",dateTo:"2024-01-15"};
+  assert.equal((await f.invoke(f.a,"search_sales_entries",args)).structuredContent.results.length,1);
+  assert.equal((await f.invoke(f.a,"search_sales_entries",{...args,counterpartyCode:"OTHER"})).structuredContent.results.length,0);
+  assert.equal((await f.invoke(f.a,"search_sales_entries",{...args,dateFrom:"2024-02-01",dateTo:"2024-02-01"})).structuredContent.results.length,0);
+  assert.equal(calls,3);
 });

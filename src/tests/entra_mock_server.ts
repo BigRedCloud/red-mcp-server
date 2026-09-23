@@ -23,6 +23,17 @@ globalThis.fetch=async (input,init)=>{
       const skip=Number(url.searchParams.get("$skip")??0),top=Number(url.searchParams.get("$top")??rows.length);
       return json(rows.slice(skip,skip+top));
     }
+    const finalPath=/\/(salesEntries|ownerTypes|ownerTypeGroups|userDefinedFields)(?:\/(\d+))?$/.exec(url.pathname);
+    if(finalPath) {
+      if(init?.method && init.method!=="GET") throw new Error("Facade must only read");
+      const kind=finalPath[1];
+      const row=kind==="salesEntries" ? {id:1,customerId:1,reference:"SE1",details:"Sales entry",entryDate:"2024-01-15",total:100,acEntries:[{value:100}],vatEntries:[]}
+        : kind==="ownerTypes" ? {id:1,description:"Prospect",recordTypeGroupId:1}
+        : kind==="ownerTypeGroups" ? {id:1,description:"Customer"}
+        : {id:1,description:"acudf_1_1",orderIndex:1,categoryTypeId:19};
+      const skip=Number(url.searchParams.get("$skip")??0),top=Number(url.searchParams.get("$top")??20);
+      return json(finalPath[2]?row:{Items:[row].slice(skip,skip+top),Count:1,NextPageLink:""});
+    }
     const nextPath=/\/(salesReps|nominalJournalBatches|vatTypes|vatAnalysisTypes|categoryTypes|bookTranTypes)(?:\/(\d+))?$/.exec(url.pathname);
     if(nextPath) {
       if(init?.method && init.method!=="GET") throw new Error("New facade tools must only read");

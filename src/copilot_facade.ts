@@ -23,6 +23,7 @@ import { normaliseCompanyName, resolveActiveMcpSessionId, runWithSessionKeyStore
 
 /** Facade mappings only: these do not register, replace or wrap any /mcp tool. */
 export const COPILOT_ENTITIES = [
+  { plural: "sales_entries", singular: "sales_entry", label: "sales entries", idField: "salesEntryId", list: "brc_list_sales_entries", get: "brc_get_sales_entry", ids: ["id", "booktranid"], codes: ["reference"], documents: true },
   { plural: "suppliers", singular: "supplier", label: "suppliers", idField: "supplierId", list: "brc_list_suppliers", get: "brc_get_supplier", ids: ["id", "supplierid"], codes: ["code", "suppliercode", "accode"], documents: false },
   { plural: "products", singular: "product", label: "products", idField: "productId", list: "brc_list_products", get: "brc_get_product", ids: ["id", "productid"], codes: ["stockcode", "code", "productcode"], documents: false },
   { plural: "sales_invoices", singular: "sales_invoice", label: "sales invoices", idField: "salesInvoiceId", list: "brc_list_sales_invoices", get: "brc_get_sales_invoice", ids: ["id", "salesinvoiceid", "invoiceid", "booktranid"], codes: ["reference", "invoicenumber"], documents: true },
@@ -40,6 +41,9 @@ export const COPILOT_ENTITIES = [
   { plural: "nominal_journal_batches", singular: "nominal_journal_batch", label: "nominal journal batches", idField: "nominalJournalBatchId", list: "brc_list_nominal_journal_batches", get: "brc_get_nominal_journal_batch", ids: ["id"], codes: [], documents: false, dated: true, noCode: true },
 ] as const;
 export const COPILOT_SEARCH_ONLY = [
+  { plural: "account_owner_types", singular: "account_owner_type", label: "account owner types", idField: "ownerTypeId", list: "brc_list_owner_types", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true, summaryExtras: ["recordtypegroupid"] },
+  { plural: "account_owner_type_groups", singular: "account_owner_type_group", label: "account owner type groups", idField: "ownerTypeGroupId", list: "brc_list_owner_type_groups", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true },
+  { plural: "user_defined_fields", singular: "user_defined_field", label: "user-defined fields", idField: "userDefinedFieldId", list: "brc_list_user_defined_fields", ids: ["id"], codes: [], documents: false, searchOnly: true, noCode: true, summaryExtras: ["orderindex"] },
   { plural: "vat_rates", singular: "vat_rate", label: "VAT rates", idField: "vatRateId", list: "brc_list_vat_rates", ids: ["id", "vatrateid"], codes: ["code", "name"], documents: false, searchOnly: true },
   { plural: "vat_categories", singular: "vat_category", label: "VAT categories", idField: "vatCategoryId", list: "brc_list_vat_categories", ids: ["id", "vatcategoryid"], codes: ["code", "name"], documents: false, searchOnly: true },
   { plural: "analysis_categories", singular: "analysis_category", label: "analysis categories", idField: "analysisCategoryId", list: "brc_list_analysis_categories", ids: ["id", "analysiscategoryid"], codes: ["code", "accountcode", "accode", "name"], documents: false, searchOnly: true },
@@ -55,6 +59,10 @@ type Searchable = {
   ids: readonly string[]; codes: readonly string[]; documents: boolean; dated?: boolean; searchOnly?: boolean; noCode?: boolean; summaryExtras?: readonly string[];
 };
 const extraSearch: Record<string, { title: string; description: string }> = {
+  sales_entries: { title: "Search Big Red Cloud sales entries", description: "Find sales-book accounting entries by text, date or customer code. Entries contain analysis and VAT allocations; use search_sales_invoices for product invoices, search_sales_credit_notes for credits and search_quotes for quotes. Empty query lists entries." },
+  account_owner_types: { title: "Search Big Red Cloud account owner types", description: "Look up account classifications such as Prospect, Customer and Supplier, including their owner-type group IDs. These classify accounting records, not Microsoft users or company access. Empty query lists definitions." },
+  account_owner_type_groups: { title: "Search Big Red Cloud account owner type groups", description: "Look up reference groups such as Customer and Supplier used by account owner types. These are accounting classifications, not security groups or company access. Empty query lists definitions." },
+  user_defined_fields: { title: "Search Big Red Cloud user-defined fields", description: "Find company user-defined field definitions by description. Returns field IDs, category-type IDs and display order, not field values on transactions. Empty query lists definitions." },
   sales_reps: { title: "Search Big Red Cloud sales representatives", description: "Find sales representatives by name, code or contact details in linked companies. Empty query lists representatives. Use this for sales staff, not customer accounts. Continue with nextCursor." },
   nominal_journal_batches: { title: "Search Big Red Cloud nominal journal batches", description: "Find general-ledger journal batches by date or summary text. Returns batch IDs, dates and totals without debit/credit lines. Use fetch_nominal_journal_batch for lines; use search_nominal_accounts for the chart of accounts." },
   vat_types: { title: "Search Big Red Cloud VAT types", description: "Look up VAT treatments such as Domestic, Other EU, Exempt or Reverse Charge and their IDs/codes. These are treatments, not VAT percentages or sales/purchase VAT categories. Empty query lists types." },
@@ -71,6 +79,7 @@ const extraSearch: Record<string, { title: string; description: string }> = {
   supplier_transactions: { title: "Search a supplier ledger", description: "Search one supplier's account ledger lines (purchases, payments). Requires supplierId from search_suppliers. Distinct from search_purchases, search_payments and search_suppliers. Continue with nextCursor." },
 };
 const extraFetch: Record<string, { title: string; description: string }> = {
+  sales_entry: { title: "Fetch Big Red Cloud sales entry", description: "Retrieve one sales-book accounting entry with its analysis, VAT and custom-field detail using the exact salesEntryId and companyName from search_sales_entries." },
   sales_rep: { title: "Fetch Big Red Cloud sales representative", description: "Retrieve one sales representative and contact details using the exact salesRepId and companyName from search_sales_reps." },
   nominal_journal_batch: { title: "Fetch Big Red Cloud nominal journal batch", description: "Retrieve one general-ledger journal batch with its debit/credit lines using the exact nominalJournalBatchId and companyName from search_nominal_journal_batches." },
   accrual: { title: "Fetch Big Red Cloud accrual journal", description: "Retrieve one parent accrual journal using accrualId from search_accruals. Child reversing accruals are not returned." },

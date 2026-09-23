@@ -179,6 +179,7 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
   assert.equal((await b.callTool({name:"search_supplier_transactions",arguments:{supplierId:"1",companyName:"A"}})).isError,true);
   assert.equal((await b.callTool({name:"search_customer_transactions",arguments:{customerId:"1",companyName:"A"}})).isError,true);
   for(const [plural,singular,idField] of [
+    ["sales_entries","sales_entry","salesEntryId"],["account_owner_types",null,"ownerTypeId"],["account_owner_type_groups",null,"ownerTypeGroupId"],["user_defined_fields",null,"userDefinedFieldId"],
     ["sales_reps","sales_rep","salesRepId"],["nominal_journal_batches","nominal_journal_batch","nominalJournalBatchId"],
     ["vat_types",null,"vatTypeId"],["vat_analysis_types",null,"vatAnalysisTypeId"],["category_types",null,"categoryTypeId"],["book_transaction_types",null,"bookTranTypeId"],
   ] as const) {
