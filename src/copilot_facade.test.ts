@@ -28,6 +28,7 @@ const nextTranche = [
 ] as const;
 const nextNames = nextTranche.flatMap(([plural,singular])=>singular ? [`search_${plural}`,`fetch_${singular}`] : [`search_${plural}`]);
 const remainderNames = ["fetch_nominal_account"] as const;
+const gapNames = ["get_customer_aged_balance", "get_supplier_aged_balance", "get_allocated_transactions", "get_allocation_candidates"] as const;
 const original = [
   ["suppliers", "supplier", "supplierId", "suppliers"],
   ["products", "product", "productId", "products"],
@@ -90,21 +91,24 @@ async function fixture(t: TestContext) {
   return { a, b, c, store, tools, invoke };
 }
 
-test("normal 159 descriptors remain identical; Copilot advertises exactly 49 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 53 strict read-only tools", () => {
   const normal: any[] = [];
   registerAllTools({ registerTool(name: string, config: any) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() {}, registerPrompt() {} } as any, { profile: "full" });
   assert.equal(normal.length, 159);
   assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a,b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
   const tools = registry();
-  const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames].sort();
-  assert.equal(tools.size, 49);
-  const current=[...tools].filter(([name])=>!(remainderNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
+  assert.equal(tools.size, 53);
+  const current49=[...tools].filter(([name])=>!(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  assert.equal(current49.length,49);
+  assert.equal(createHash("sha256").update(JSON.stringify(current49)).digest("hex"),"57b3b243870c49293ae54f45734f917db1ab382b0026bd07b1143f3a09ed3ca6");
+  const current=[...tools].filter(([name])=>!(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(current.length,48);
   assert.equal(createHash("sha256").update(JSON.stringify(current)).digest("hex"),"0826018dac5c81ce321e65e9ad54f3f408a916274352048c71bb177eb4cfcaa2");
-  const locked=[...tools].filter(([name])=>!finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const locked=[...tools].filter(([name])=>!finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(locked.length,43);
   assert.equal(createHash("sha256").update(JSON.stringify(locked)).digest("hex"),"c6e6860b46851bb8ae4731853f504bf8f5ab0fdd089482fd44ae26f56c5fec4b");
-  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name) && !finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name) && !finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(priorDescriptors.length,35);
   assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"),"c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
   assert.deepEqual([...tools.keys()].sort(), names);
@@ -113,6 +117,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 49 str
   for (const name of existingNames) assert.equal(tools.has(name), true, name);
   assert.equal(tools.has("fetch_vat_rate"), false);
   assert.equal(tools.has("fetch_nominal_account"), true);
+  for (const name of gapNames) assert.equal(tools.has(name), true, name);
   for (const [name, { config }] of tools) {
     assert.match(name, /^(search|fetch|get)_/);
     assert.doesNotMatch(name, /^brc_/);
@@ -122,6 +127,10 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 49 str
     const schema = z.toJSONSchema(config.inputSchema) as any;
     assert.equal(schema.additionalProperties, false);
     for (const field of ["apiKey", "connectionRef", "tenantId", "objectId", "confirmWrite", "routeToken", "filter"]) assert.equal(field in schema.properties, false, name);
+  }
+  for (const name of gapNames) {
+    const config = tools.get(name)!.config;
+    assert.doesNotMatch(`${config.title}\n${config.description}`, /opening balance/i, name);
   }
   for (const [plural, singular, label, documents] of existingMeta) {
     const search = tools.get(`search_${plural}`)!;
@@ -146,6 +155,12 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 49 str
   assert.deepEqual(Object.keys(tools.get("search_customer_transactions")!.config.inputSchema.shape), ["customerId", "companyName", "query", "pageSize", "nextCursor"]);
   assert.deepEqual(Object.keys(tools.get("get_financial_year")!.config.inputSchema.shape), ["companyName"]);
   assert.deepEqual(Object.keys(tools.get("fetch_nominal_account")!.config.inputSchema.shape), ["nominalAccountId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("get_customer_aged_balance")!.config.inputSchema.shape), ["customerId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("get_supplier_aged_balance")!.config.inputSchema.shape), ["supplierId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("get_allocated_transactions")!.config.inputSchema.shape), ["bookTranId", "companyName"]);
+  assert.deepEqual(Object.keys(tools.get("get_allocation_candidates")!.config.inputSchema.shape), ["bookTranId", "companyName"]);
+  assert.match(tools.get("get_allocation_candidates")!.config.description, /unmatched|eligible|possible/i);
+  assert.match(tools.get("get_allocated_transactions")!.config.description, /already applied/);
 });
 
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async t => {
@@ -504,6 +519,10 @@ test("tranche tools stay owner-scoped and reject credential injection", async t 
     ["search_supplier_transactions", { supplierId: "9", companyName: "Shared" }],
     ["get_financial_year", { companyName: "Shared" }],
     ["fetch_nominal_account", { nominalAccountId: "7", companyName: "Shared" }],
+    ["get_customer_aged_balance", { customerId: "42", companyName: "Shared" }],
+    ["get_supplier_aged_balance", { supplierId: "9", companyName: "Shared" }],
+    ["get_allocated_transactions", { bookTranId: "1001", companyName: "Shared" }],
+    ["get_allocation_candidates", { bookTranId: "1001", companyName: "Shared" }],
   ] as const) {
     assert.equal((await f.invoke(undefined, name, args)).structuredContent.status, "authentication_required");
     assert.equal((await f.invoke(f.c, name, args)).structuredContent.status, "company_unavailable");
@@ -814,4 +833,64 @@ test("fetch_nominal_account uses GET /v1/nominalAccounts/{id} and keeps monthly 
   assert.equal((await f.invoke(f.a,"fetch_nominal_account",{nominalAccountId:"7",companyName:"Foreign"})).isError,true);
   assert.equal(calls.length,3);
   assert.throws(()=>f.tools.get("fetch_nominal_account")!.config.inputSchema.parse({nominalAccountId:"7",companyName:"Shared",connectionRef:"foreign"}));
+});
+
+const agedDto = { currentMonth: 10, oneMonthOld: 20, twoMonthsOld: 30, threeMonthsOld: 40, ApiKey: "owner-a-key" };
+const allocationDto = {
+  bookTran: { id: 1001, bookTranTypeId: 5, total: 500, unAllocated: 150, discount: 0, unAllocatedDiscount: 0, ownerId: 3001, ownerName: "Acme Ltd", ApiKey: "owner-a-key" },
+  allocationResolvers: [
+    { id: 5001, allocated: 200, discount: 10, date: "2026-06-03T00:00:00", bookTranId: 1001, bookTranIdReceiver: 2001, receiverReference: "INV001", receiverTotal: 250, receiverOutstanding: 40, receiverBookTranTypeId: 3, secret: "omit" },
+  ],
+};
+
+test("aged balances use one GET per party and project period fields without opening-balance wording",async t=>{
+  const f=await fixture(t); const calls:URL[]=[];
+  t.mock.method(globalThis,"fetch",async(input:any,init:any)=>{
+    const url=new URL(String(input)); calls.push(url); assert.equal(init.method??"GET","GET");
+    assert.equal(Buffer.from(init.headers.Authorization.replace("Basic ",""),"base64").toString(),"owner-a-key:");
+    return new Response(JSON.stringify(agedDto));
+  });
+  const customer=(await f.invoke(f.a,"get_customer_aged_balance",{customerId:"42",companyName:"Shared"})).structuredContent;
+  assert.equal(customer.status,"ok"); assert.equal(customer.customerId,"42");
+  assert.deepEqual(customer.aged_balance,{currentMonth:10,oneMonthOld:20,twoMonthsOld:30,threeMonthsOld:40});
+  assert.equal(calls.length,1); assert.equal(calls[0].pathname,"/api/v1/customers/42/openingBalance");
+  const supplier=(await f.invoke(f.a,"get_supplier_aged_balance",{supplierId:"9",companyName:"Shared"})).structuredContent;
+  assert.equal(supplier.status,"ok"); assert.equal(supplier.supplierId,"9");
+  assert.equal(supplier.aged_balance.threeMonthsOld,40);
+  assert.equal(calls.length,2); assert.equal(calls[1].pathname,"/api/v1/suppliers/9/openingBalance");
+  assert.doesNotMatch(JSON.stringify([customer,supplier]),/owner-a-key|ApiKey|openingBalance|opening_balance/);
+  assert.equal((await f.invoke(f.a,"get_customer_aged_balance",{customerId:"abc",companyName:"Shared"})).structuredContent.status,"invalid_request");
+  assert.equal(calls.length,2);
+});
+
+test("allocated transactions and allocation candidates use distinct GETs and are not confused",async t=>{
+  const f=await fixture(t); const calls:URL[]=[];
+  t.mock.method(globalThis,"fetch",async(input:any,init:any)=>{
+    const url=new URL(String(input)); calls.push(url); assert.equal(init.method??"GET","GET");
+    assert.equal(url.searchParams.get("bookTranId"),"1001");
+    const allocated=url.pathname.endsWith("/allocated");
+    return new Response(JSON.stringify({
+      ...allocationDto,
+      bookTran:{...allocationDto.bookTran,unAllocated:allocated?150:350},
+      allocationResolvers:allocated?allocationDto.allocationResolvers:[{...allocationDto.allocationResolvers[0],id:0,allocated:0,receiverReference:"INV002"}],
+    }));
+  });
+  const applied=(await f.invoke(f.a,"get_allocated_transactions",{bookTranId:"1001",companyName:"Shared"})).structuredContent;
+  assert.equal(applied.status,"ok"); assert.equal(applied.bookTranId,"1001");
+  assert.equal(applied.allocated_transactions.bookTran.unAllocated,150);
+  assert.equal(applied.allocated_transactions.allocations[0].receiverReference,"INV001");
+  assert.equal(applied.allocated_transactions.allocations[0].secret,undefined);
+  assert.equal(applied.allocation_candidates,undefined);
+  assert.equal(calls[0].pathname,"/api/v1/allocationResolvers/allocated");
+  const candidates=(await f.invoke(f.a,"get_allocation_candidates",{bookTranId:"1001",companyName:"Shared"})).structuredContent;
+  assert.equal(candidates.status,"ok");
+  assert.equal(candidates.allocation_candidates.bookTran.unAllocated,350);
+  assert.equal(candidates.allocation_candidates.candidates[0].allocated,0);
+  assert.equal(candidates.allocation_candidates.candidates[0].receiverReference,"INV002");
+  assert.equal(candidates.allocated_transactions,undefined);
+  assert.equal(calls[1].pathname,"/api/v1/allocationResolvers");
+  assert.equal(calls.length,2);
+  assert.doesNotMatch(JSON.stringify([applied,candidates]),/owner-a-key|ApiKey|secret/);
+  assert.equal((await f.invoke(f.a,"get_allocated_transactions",{bookTranId:"INV001",companyName:"Shared"})).structuredContent.status,"invalid_request");
+  assert.equal(calls.length,2);
 });

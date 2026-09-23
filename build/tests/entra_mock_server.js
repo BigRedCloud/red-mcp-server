@@ -62,8 +62,20 @@ globalThis.fetch = async (input, init) => {
         }
         if (url.pathname.includes("getFinancialYear"))
             return json({ yearStart: "2026-01-01", yearEnd: "2026-12-31" });
+        if (/\/(customers|suppliers)\/\d+\/openingBalance$/.test(url.pathname)) {
+            return json({ currentMonth: 10, oneMonthOld: 20, twoMonthsOld: 30, threeMonthsOld: 40, ApiKey: key });
+        }
         if (/\/(customers|suppliers)\/\d+\/accountTrans$/.test(url.pathname)) {
             return json([{ Id: 1, BookTranId: 1, Reference: "INV-1", Debit: 10, Credit: 0, BookTypeDesc: "Sales Invoice", ApiKey: key }]);
+        }
+        if (url.pathname.endsWith("/allocationResolvers/allocated") || url.pathname.endsWith("/allocationResolvers")) {
+            if (init?.method && init.method !== "GET")
+                throw new Error("Facade must only read");
+            const allocated = url.pathname.endsWith("/allocated");
+            return json({
+                bookTran: { id: Number(url.searchParams.get("bookTranId") ?? 1), bookTranTypeId: 5, total: 500, unAllocated: allocated ? 150 : 350, ownerId: 1, ownerName: "Acme Ltd" },
+                allocationResolvers: [{ id: allocated ? 5001 : 0, allocated: allocated ? 200 : 0, discount: 0, bookTranId: 1, bookTranIdReceiver: 2001, receiverReference: allocated ? "INV001" : "INV002", receiverTotal: 250, receiverOutstanding: allocated ? 40 : 250, receiverBookTranTypeId: 3 }],
+            });
         }
         if (/\/customers\/\d+$/.test(url.pathname)) {
             const Id = Number(url.pathname.split("/").at(-1));
