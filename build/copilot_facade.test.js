@@ -1,3 +1,4 @@
+import { COPILOT_HELP_NAMES } from "./copilot_help.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
@@ -96,12 +97,14 @@ async function fixture(t) {
     };
     return { a, b, c, store, tools, invoke };
 }
-test("normal 159 descriptors remain identical; Copilot advertises exactly 53 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 56 strict read-only tools", () => {
     const normal = [];
     registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
     assert.equal(normal.length, 159);
     assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
-    const tools = registry();
+    const allTools = registry();
+    const tools = new Map([...allTools].filter(([name]) => !COPILOT_HELP_NAMES.includes(name)));
+    assert.equal(allTools.size, 56);
     const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
     assert.equal(tools.size, 53);
     // Normalize only the intentionally changed candidate description to retain the existing 52-descriptor lock.
@@ -122,7 +125,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 53 str
     assert.equal(priorDescriptors.length, 35);
     assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"), "c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
     assert.deepEqual([...tools.keys()].sort(), names);
-    assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), names);
+    assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), [...names, ...COPILOT_HELP_NAMES].sort());
     for (const name of originalNames)
         assert.equal(tools.has(name), true, name);
     for (const name of existingNames)

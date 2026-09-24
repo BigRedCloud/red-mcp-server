@@ -37,6 +37,15 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     for (const caller of [anon, invalid]) {
         await assert.rejects(caller.callTool({ name: "fetch_customer", arguments: { customerId: "1", companyName: "A" } }));
     }
+    // Public help needs verified Microsoft identity, but no company link or BRC key.
+    for (const name of ["search_help_resources", "get_red_help"]) {
+        await assert.rejects(anon.callTool({ name, arguments: { query: "bank reconciliation" } }));
+        const help = await a.callTool({ name, arguments: { query: "bank reconciliation" } });
+        assert.equal(help.structuredContent.status, "ok", name);
+        assert.equal(help.structuredContent.connectionUrl, undefined);
+    }
+    const missingHelp = await a.callTool({ name: "fetch_help_resource", arguments: { resourceId: "recorded_webinar:missing-fixture" } });
+    assert.equal(missingHelp.structuredContent.status, "resource_unavailable");
     const invalidArguments = await a.callTool({ name: "search_customers", arguments: { apiKey: "must-never-be-used", tenantId: TEST_USER, connectionRef: "untrusted" } });
     assert.equal(invalidArguments.isError, true);
     assert.equal(JSON.stringify(invalidArguments).includes("must-never-be-used"), false);

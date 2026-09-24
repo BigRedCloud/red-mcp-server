@@ -1,3 +1,4 @@
+import { COPILOT_HELP_NAMES } from "./copilot_help.js";
 import { advancePage, freshPaging, pagingArgs, pagingSchema } from "./copilot_paging.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -87,6 +88,7 @@ const extraFetch = {
 };
 const supplierLedgers = new Set(["purchase", "cash_payment", "payment"]);
 export const COPILOT_FEDERATED_TOOL_NAMES = new Set([
+    ...COPILOT_HELP_NAMES,
     "search_customers", "fetch_customer",
     ...COPILOT_ENTITIES.flatMap(entity => [`search_${entity.plural}`, `fetch_${entity.singular}`]),
     ...COPILOT_SEARCH_ONLY.map(entity => `search_${entity.plural}`),
