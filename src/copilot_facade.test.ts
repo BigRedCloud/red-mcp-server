@@ -93,14 +93,19 @@ async function fixture(t: TestContext) {
   return { a, b, c, store, tools, invoke };
 }
 
-test("normal 159 descriptors remain identical; Copilot advertises exactly 56 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 57 strict read-only tools", () => {
   const normal: any[] = [];
   registerAllTools({ registerTool(name: string, config: any) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() {}, registerPrompt() {} } as any, { profile: "full" });
   assert.equal(normal.length, 159);
   assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a,b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
   const allTools = registry();
-  const tools = new Map([...allTools].filter(([name])=>!(COPILOT_HELP_NAMES as readonly string[]).includes(name)));
-  assert.equal(allTools.size,56);
+  const tools = new Map([...allTools].filter(([name])=>!(COPILOT_HELP_NAMES as readonly string[]).includes(name) && name!=="search_product_types"));
+  assert.equal(allTools.size,57);
+  assert.equal(allTools.has("search_product_types"), true);
+  for (const name of COPILOT_HELP_NAMES) assert.equal(allTools.has(name), true, name);
+  const prior56=[...allTools].filter(([name])=>name!=="search_product_types").map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  assert.equal(prior56.length,56);
+  assert.equal(createHash("sha256").update(JSON.stringify(prior56)).digest("hex"),"531e5ba099c0f656d321df63c893f300036338c3ae686ef307361ffd4d8e764d");
   const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
   assert.equal(tools.size, 53);
   // Normalize only the intentionally changed candidate description to retain the existing 52-descriptor lock.
@@ -121,7 +126,17 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 56 str
   assert.equal(priorDescriptors.length,35);
   assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"),"c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
   assert.deepEqual([...tools.keys()].sort(), names);
-  assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), [...names,...COPILOT_HELP_NAMES].sort());
+  assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), [...names,...COPILOT_HELP_NAMES,"search_product_types"].sort());
+  const productTypes = allTools.get("search_product_types")!.config;
+  assert.equal(productTypes.title, "Search Big Red Cloud product types");
+  assert.match(productTypes.description, /product-type|product classifications|configured/i);
+  assert.match(productTypes.description, /search_products/);
+  assert.deepEqual(productTypes.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+  assert.ok(productTypes.description.length < 400);
+  assert.equal(allTools.has("fetch_product_type"), false);
+  assert.equal("code" in productTypes.inputSchema.shape, false);
+  assert.deepEqual(Object.keys(productTypes.inputSchema.shape), ["query", "companyName", "pageSize", "nextCursor"]);
+  for (const name of COPILOT_HELP_NAMES) assert.ok(prior56.some(tool => tool.name === name), name);
   for (const name of originalNames) assert.equal(tools.has(name), true, name);
   for (const name of existingNames) assert.equal(tools.has(name), true, name);
   assert.equal(tools.has("fetch_vat_rate"), false);
@@ -173,6 +188,85 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 56 str
   assert.match(tools.get("get_allocated_transactions")!.config.description, /already applied/);
   assert.ok(tools.get("get_allocated_transactions")!.config.description.endsWith(allocationContinuation));
   assert.equal("pageSize" in tools.get("get_allocated_transactions")!.config.inputSchema.shape, false);
+});
+
+test("search_product_types reuses brc_list_product_types without fan-out, fetch or write tools", async t => {
+  const f = await fixture(t);
+  const calls: URL[] = [];
+  t.mock.method(globalThis, "fetch", async (input: any, init: any) => {
+    assert.equal(init.method ?? "GET", "GET");
+    assert.equal(Buffer.from(init.headers.Authorization.replace("Basic ", ""), "base64").toString(), "owner-a-key:");
+    const url = new URL(String(input));
+    calls.push(url);
+    return new Response(JSON.stringify({
+      Items: [
+        { id: 4, description: "Stock", recordTypeGroupId: 3, ApiKey: "owner-a-key", timeStamp: "opaque" },
+        { id: 5, description: "Service", recordTypeGroupId: 3 },
+      ],
+      Count: 2,
+      NextPageLink: "",
+    }));
+  });
+  const search = (await f.invoke(f.a, "search_product_types", { query: "", companyName: "Shared" })).structuredContent;
+  assert.equal(search.status, "ok");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].pathname, "/api/v1/productTypes");
+  assert.equal(calls[0].searchParams.get("page"), "1");
+  assert.equal(calls[0].searchParams.get("pageSize"), "20");
+  assert.equal(calls[0].searchParams.get("$top"), "20");
+  assert.equal(calls[0].searchParams.get("$skip"), "0");
+  assert.equal(calls[0].searchParams.get("$orderby"), "id asc");
+  assert.equal(calls[0].searchParams.has("$filter"), false);
+  assert.equal(search.results.length, 2);
+  assert.equal(search.results[0].productTypeId, "4");
+  assert.equal(search.results[0].title, "Stock");
+  assert.equal(search.results[0].fetchAvailable, false);
+  assert.equal(search.results[0].record.recordTypeGroupId, 3);
+  assert.equal(search.results[0].record.ApiKey, undefined);
+  assert.equal(search.results[0].record.timeStamp, undefined);
+  assert.equal(search.complete, true);
+  assert.doesNotMatch(JSON.stringify(search), /owner-a-key|ApiKey|Prospect|Customer|Supplier/);
+  assert.equal(f.tools.has("fetch_product_type"), false);
+  for (const name of ["brc_create_product", "brc_batch_products", "brc_open_edu_admin"]) assert.equal(f.tools.has(name), false);
+  assert.equal((await f.invoke(undefined, "search_product_types", { query: "", companyName: "Shared" })).structuredContent.status, "authentication_required");
+  assert.equal((await f.invoke(f.c, "search_product_types", { query: "", companyName: "Shared" })).structuredContent.status, "company_unavailable");
+  assert.equal((await f.invoke(f.a, "search_product_types", { query: "", companyName: "Foreign" })).structuredContent.status, "company_unavailable");
+  assert.throws(() => f.tools.get("search_product_types")!.config.inputSchema.parse({ query: "", companyName: "Shared", connectionRef: "foreign" }));
+  assert.equal(calls.length, 1);
+});
+
+test("search_product_types pages locally with deterministic id order and owner-bound cursors", async t => {
+  const f = await fixture(t);
+  const offsets: number[] = [];
+  t.mock.method(globalThis, "fetch", async (input: any) => {
+    const url = new URL(String(input));
+    assert.equal(url.pathname, "/api/v1/productTypes");
+    assert.equal(url.searchParams.get("$orderby"), "id asc");
+    const skip = Number(url.searchParams.get("$skip"));
+    offsets.push(skip);
+    const remaining = Math.max(0, Math.min(2, 7 - skip));
+    return new Response(JSON.stringify({
+      Items: Array.from({ length: remaining }, (_, i) => ({ id: skip + i + 1, description: `Type ${skip + i + 1}` })),
+      Count: 7,
+      NextPageLink: "",
+    }));
+  });
+  const args = { query: "", companyName: "Shared", pageSize: 2 };
+  const first = (await f.invoke(f.a, "search_product_types", args)).structuredContent;
+  assert.equal(first.status, "ok");
+  assert.equal(first.results.length, 6);
+  assert.equal(first.complete, false);
+  assert.deepEqual(first.results.map((row: { productTypeId: string }) => row.productTypeId), ["1", "2", "3", "4", "5", "6"]);
+  assert.deepEqual(offsets, [0, 2, 4]);
+  for (const owner of [f.b, f.c]) assert.notEqual((await f.invoke(owner, "search_product_types", { ...args, nextCursor: first.nextCursor })).structuredContent.status, "ok");
+  assert.equal((await f.invoke(f.a, "search_product_types", { ...args, query: "changed", nextCursor: first.nextCursor })).structuredContent.status, "invalid_cursor");
+  const next = (await f.invoke(f.a, "search_product_types", { ...args, nextCursor: first.nextCursor })).structuredContent;
+  assert.equal(next.complete, true);
+  assert.deepEqual(offsets, [0, 2, 4, 6]);
+  assert.equal(new Set([...first.results, ...next.results].map((row: { productTypeId: string }) => row.productTypeId)).size, 7);
+  const filtered = (await f.invoke(f.a, "search_product_types", { query: "Type 2", companyName: "Shared" })).structuredContent;
+  assert.equal(filtered.results.length, 1);
+  assert.equal(filtered.results[0].productTypeId, "2");
 });
 
 test("each new facade reuses the correct list/get endpoint, scopes credentials, and sanitizes responses", async t => {
