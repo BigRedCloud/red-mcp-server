@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerNormalCompanyManagementRoutes, resolveNormalManagementContext, normalManagementView } from "./auth/normal_company_management.js";
 import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
 
 import "dotenv/config";
@@ -544,7 +545,7 @@ app.use(express.json());
 // Body-parser errors can include submitted text. Never surface that text on
 // the SSO credential or MCP boundary; preserve existing routes' error handling.
 app.use((error: unknown, req: Request, res: Response, next: (error?: unknown) => void) => {
-  if (req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/") || req.path.startsWith("/manage-companies")) {
+  if (req.path === "/connect/companies" || req.path === "/connect/companies/disconnect" || req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/") || req.path.startsWith("/manage-companies")) {
     res.status(400).json({ error: "Invalid request body." });
     return;
   }
@@ -577,6 +578,8 @@ function toStringArray(value: unknown): string[] {
 
   return [String(value).trim()];
 }
+
+registerNormalCompanyManagementRoutes(app, upload.single("companyFile"), toStringArray);
 
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
   await ensureConnectionStoreInitialized();
@@ -945,8 +948,11 @@ app.get("/connect", async (req, res) => {
     telemetryClientId: clientId,
   });
 
+  const managementContext = await resolveNormalManagementContext("pending", code);
+  const management = managementContext ? await normalManagementView(req, res, managementContext) : undefined;
+  applyConnectionSuccessPageHeaders(res);
   return runWithRedTelemetryContext(telemetryContext, () => {
-    res.send(renderConnectPage(code, { telemetryClientId: clientId }));
+    res.send(renderConnectPage(code, { telemetryClientId: clientId, management }));
   });
 });
 
@@ -962,14 +968,17 @@ app.get("/connect/success/:successId", async (req, res) => {
     return;
   }
 
+  const managementContext = await resolveNormalManagementContext("success", successId);
+  const management = managementContext ? await normalManagementView(req, res, managementContext) : undefined;
   // Do not log confirmationCode — it must not appear in access/App Insights URLs.
   res
     .type("html")
     .send(
       renderSuccessPage(
-        successPage.connectedNames,
+        management?.companies ?? successPage.connectedNames,
         successPage.confirmationCode,
-        successPage.failedCompanies
+        successPage.failedCompanies,
+        management
       )
     );
 });

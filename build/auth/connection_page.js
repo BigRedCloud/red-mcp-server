@@ -499,75 +499,18 @@ export function renderConnectPage(code, options = {}) {
         options.telemetryClientId.trim().length > 0
         ? escapeHtml(options.telemetryClientId.trim().toLowerCase())
         : "";
-    const sessionDuration = formatCredentialTtlForUser();
     const content = `
       <div class="card">
         <p class="lead">
           Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
         </p>
 
-        <form method="POST" action="/connect" enctype="multipart/form-data">
-          <input type="hidden" name="code" value="${escapeHtml(code)}" />
-          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${clientId}" />
-          <div class="trust-notes">
-            <div class="trust-note">
-              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
-            </div>
-            <div class="trust-note">
-              <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
-            </div>
-          </div>
-
-          <div class="connect-layout">
-          <div class="section">
-            <p class="section-title">Connect one company</p>
-            <p class="section-hint">Enter a company name and its Big Red Cloud API key.</p>
-
-            <label for="companyName">Company name</label>
-            <input
-              id="companyName"
-              name="companyName"
-              type="text"
-              autocomplete="organization"
-              placeholder="e.g. Company A"
-            />
-
-            <label for="apiKey">Big Red Cloud API key</label>
-            <input
-              id="apiKey"
-              name="apiKey"
-              type="password"
-              autocomplete="off"
-              placeholder="Enter your API key"
-            />
-          </div>
-
-          <div class="divider connect-divider">or</div>
-
-          <div class="section">
-            <p class="section-title">Connect multiple companies</p>
-            <p class="section-hint">Upload a CSV file with one company per row.</p>
-
-            <div class="csv-example">companyName,apiKey
-Company A,xxxxxxxx
-Company B,xxxxxxxx</div>
-
-            <label for="companyFile">CSV file</label>
-            <input
-              id="companyFile"
-              name="companyFile"
-              type="file"
-              accept=".csv,text/csv"
-            />
-          </div>
-          </div>
-
-          <button type="submit" class="btn-primary">Connect companies</button>
-        </form>
+        ${options.management ? normalCompanyList(options.management) : ""}
+        ${options.management?.companies.length ? `<details class="normal-add"><summary>+ Add another company</summary>${normalCompanyForm(code, clientId, options.management)}</details>` : normalCompanyForm(code, clientId, options.management)}
 
 
       </div>`;
-    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript(options.telemetryClientId));
+    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript(options.telemetryClientId) + (options.management ? normalManagementStyles : ""));
 }
 export function renderExpiredLinkPage() {
     const content = `
@@ -588,7 +531,7 @@ export function applyConnectionSuccessPageHeaders(res) {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Referrer-Policy", "no-referrer");
 }
-export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
+export function renderSuccessPage(connectedNames, code, failedCompanies = [], management) {
     const count = connectedNames.length;
     const summary = count === 1
         ? "1 company was connected to Red for this session."
@@ -614,7 +557,8 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
         <p class="centered">${escapeHtml(summary)}</p>
-        <ul class="company-list">${listItems}</ul>
+        ${management ? normalCompanyList(management) : `<ul class="company-list">${listItems}</ul>`}
+        ${management ? `<details class="normal-add"><summary>+ Add another company</summary>${normalCompanyForm("", "", management)}</details>` : ""}
         ${failedSection}
         <div class="next-step">
           <p style="margin:0 0 12px;">
@@ -682,7 +626,7 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
   }
 })();
 </script>`;
-    return pageShell("Companies connected", brandBar(), content, copyScript, { noReferrer: true });
+    return pageShell("Companies connected", brandBar(), content, copyScript + (management ? normalManagementStyles : ""), { noReferrer: true });
 }
 export function renderConnectionFailedPage(message) {
     const content = `
@@ -909,4 +853,109 @@ export function renderManageErrorPage(message = "Sign in with the Microsoft acco
     <p class="error-message" role="alert">${escapeHtml(message)}</p>
     <div class="next-step">Return to Microsoft Copilot and open the RED company management page again.</div>
   </div>`);
+}
+function normalManagementFields(view) {
+    return `<input type="hidden" name="normalContextKind" value="${view.kind}">
+    <input type="hidden" name="normalContext" value="${escapeHtml(view.token)}">
+    <input type="hidden" name="normalCsrf" value="${escapeHtml(view.csrf)}">`;
+}
+const normalManagementStyles = `<style>
+.normal-companies li::before { content: none; }
+.normal-companies li { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.normal-companies .normal-company-name { flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+.normal-companies form { margin-left: auto; }
+.normal-companies .btn-secondary { margin: 0; width: auto; padding: 6px 12px; }
+.normal-add { margin: 20px 0; }
+.normal-add summary { cursor: pointer; color: #991b1b; font-weight: 600; padding: 12px; border: 1px solid #fecaca; border-radius: 10px; }
+.normal-add[open] summary { margin-bottom: 20px; }
+.normal-add summary:focus-visible { outline: 3px solid #b5121b; outline-offset: 3px; }
+</style>`;
+function normalCompanyList(view) {
+    return `<section aria-labelledby="normal-connected-heading">
+    <h2 id="normal-connected-heading">Connected companies</h2>
+    ${view.notice ? `<p class="error-message" role="status">${escapeHtml(view.notice)}</p>` : ""}
+    ${view.companies.length ? `<ul class="company-list normal-companies">${view.companies.map(name => `<li>
+      <span class="normal-company-name"><span aria-hidden="true">✓</span> ${escapeHtml(name)}</span>
+      <form method="post" action="/connect/companies/disconnect">
+        ${normalManagementFields(view)}
+        <input type="hidden" name="companyName" value="${escapeHtml(name)}">
+        <button class="btn-secondary" type="submit" aria-label="Disconnect ${escapeHtml(name)}">Disconnect</button>
+      </form></li>`).join("")}</ul>` : '<p>No companies are connected. Add a company before confirming the code in chat.</p>'}
+  </section>`;
+}
+function normalCompanyForm(code, clientId, management) {
+    const sessionDuration = formatCredentialTtlForUser();
+    return `        <form method="POST" action="${management?.kind === "success" ? "/connect/companies" : "/connect"}" enctype="multipart/form-data">
+          ${management ? normalManagementFields(management) : ""}
+          <input type="hidden" name="code" value="${escapeHtml(code)}" />
+          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${clientId}" />
+          <div class="trust-notes">
+            <div class="trust-note">
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
+            </div>
+            <div class="trust-note">
+              <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
+            </div>
+          </div>
+
+          <div class="connect-layout">
+          <div class="section">
+            <p class="section-title">Connect one company</p>
+            <p class="section-hint">Enter a company name and its Big Red Cloud API key.</p>
+
+            <label for="companyName">Company name</label>
+            <input
+              id="companyName"
+              name="companyName"
+              type="text"
+              autocomplete="organization"
+              placeholder="e.g. Company A"
+            />
+
+            <label for="apiKey">Big Red Cloud API key</label>
+            <input
+              id="apiKey"
+              name="apiKey"
+              type="password"
+              autocomplete="off"
+              placeholder="Enter your API key"
+            />
+          </div>
+
+          <div class="divider connect-divider">or</div>
+
+          <div class="section">
+            <p class="section-title">Connect multiple companies</p>
+            <p class="section-hint">Upload a CSV file with one company per row.</p>
+
+            <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+
+            <label for="companyFile">CSV file</label>
+            <input
+              id="companyFile"
+              name="companyFile"
+              type="file"
+              accept=".csv,text/csv"
+            />
+          </div>
+          </div>
+
+          <button type="submit" class="btn-primary">Connect companies</button>
+        </form>`;
+}
+export function renderNormalDisconnectConfirmation(view, companyName) {
+    const back = view.kind === "success" ? `/connect/success/${encodeURIComponent(view.token)}` : `/connect?code=${encodeURIComponent(view.token)}`;
+    return pageShell("Disconnect company — Red", brandBar(), `<div class="card">
+    <h2>Disconnect ${escapeHtml(companyName)}?</h2>
+    <p>RED will no longer be able to access this company through this connection. Other companies will stay connected.</p>
+    <form method="post" action="/connect/companies/disconnect">
+      ${normalManagementFields(view)}
+      <input type="hidden" name="companyName" value="${escapeHtml(companyName)}">
+      <input type="hidden" name="confirm" value="yes">
+      <a href="${escapeHtml(back)}">Cancel</a>
+      <button type="submit" class="btn-primary">Disconnect ${escapeHtml(companyName)}</button>
+    </form>
+  </div>`, "", { noReferrer: true });
 }

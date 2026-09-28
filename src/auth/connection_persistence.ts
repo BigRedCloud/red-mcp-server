@@ -66,6 +66,8 @@ export async function validateAndPersistConnectedCompanies(args: {
   connectionId: string;
   companies: Array<{ companyName: string; apiKey: string }>;
   expiresAt: number;
+  /** Browser management must not remove a working key when a replacement fails. */
+  preserveExistingOnFailure?: boolean;
 }): Promise<{
   connectedCompanies: string[];
   failedCompanies: FailedCompanyConnection[];
@@ -74,8 +76,10 @@ export async function validateAndPersistConnectedCompanies(args: {
 
   const store = getConnectionStore();
 
-  for (const company of args.companies) {
-    await store.clearConnectedCompany(args.connectionId, company.companyName);
+  if (!args.preserveExistingOnFailure) {
+    for (const company of args.companies) {
+      await store.clearConnectedCompany(args.connectionId, company.companyName);
+    }
   }
 
   const { validated, failed } = await partitionCompanyCredentials(args.companies);
