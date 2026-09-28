@@ -1,3 +1,4 @@
+import { registerCopilotCompanyManagement } from "./copilot_company_management.js";
 import { registerCopilotHelp } from "./copilot_help.js";
 import { registerCopilotAccountingFacade } from "./copilot_facade.js";
 import { registerCopilotCustomers } from "./copilot_customers.js";
@@ -5,7 +6,8 @@ import { registerFindHelpResourcesTool } from "./tools/edu/help_resources_tools.
 export const COPILOT_INSTRUCTIONS = [
     "RED is exposed in Microsoft 365 through a federated connector. Data requires companies linked to the verified signed-in Microsoft user. Use search_customers/fetch_customer and other accounting tools for data.",
     "For how-to/support use get_red_help; discover documentation, training and webinars with search_help_resources; fetch_help_resource loads selected details. Help needs no company connection. Do not use accounting tools for how-to questions.",
-    "Start new lists without nextCursor; keep the same query to continue. For searches and get_allocation_candidates/get_allocated_transactions, when nextCursor and complete:false are returned and users ask to continue, show more or show remaining results, invoke the SAME RED tool with the exact previous nextCursor, same companyName and same resource identifier/query parameters, including bookTranId and filters. Do not ask the user to manually copy an opaque cursor. Omit nextCursor only for a new list; do not automatically restart at page one.",
+    "Lists without nextCursor; keep the same query to continue. For searches and get_allocation_candidates/get_allocated_transactions, when nextCursor and complete:false, continue, show more or show remaining results, invoke the SAME RED tool with the exact previous nextCursor, same companyName and same resource identifier/query parameters, including bookTranId and filters. Do not ask the user to manually copy an opaque cursor; do not automatically restart at page one.",
+    "Use get_company_management_link to connect, manage or disconnect companies.",
 ].join("\n");
 export const COPILOT_DIAGNOSTIC_ANNOTATIONS = {
     readOnlyHint: true,
@@ -25,6 +27,7 @@ export function registerCopilotDiagnosticTools(server, authenticated = false) {
         registerCopilotCustomers(server);
         registerCopilotAccountingFacade(server);
         registerCopilotHelp(server);
+        registerCopilotCompanyManagement(server);
         return;
     }
     server.registerTool("brc_copilot_connector_status", {

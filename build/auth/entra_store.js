@@ -129,6 +129,31 @@ export class EntraConnectionStore {
                 throw new Error("Connection update conflict. Please retry.");
         }
     }
+    /** Creates the empty owner partition when a verified browser session is the first connection. */
+    async ensureOwner(owner) {
+        if (!await this.owner(owner, true))
+            throw new Error("Connection unavailable.");
+    }
+    /** Deletes one company in this owner's partition. A name that exists only for another owner is a no-op. */
+    async removeCompany(owner, companyName) {
+        const record = await this.owner(owner);
+        const name = companyName.trim();
+        if (!record || !name || name.length > 200)
+            return false;
+        const id = `company:${createHash("sha256").update(name.toLowerCase()).digest("hex")}`;
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const doc = await this.backend.read(record.pk, id);
+            if (!doc || doc.type !== "entraCompany" || doc.ownerKey !== record.ownerKey || doc.connectionId !== record.connectionId || !doc.credential)
+                return false;
+            if (doc.credential.companyName.trim().toLowerCase() !== name.toLowerCase())
+                return false;
+            if (!doc._etag)
+                return false;
+            if (await this.backend.remove(record.pk, id, doc._etag))
+                return true;
+        }
+        return false;
+    }
 }
 export function createMemorySsoBackend() {
     const records = new Map();
@@ -139,6 +164,8 @@ export function createMemorySsoBackend() {
             return false; records.set(k, structuredClone({ ...d, _etag: randomUUID() })); return true; },
         async replace(d, etag) { const k = key(d.pk, d.id); if (!etag || records.get(k)?._etag !== etag)
             return false; records.set(k, structuredClone({ ...d, _etag: randomUUID() })); return true; },
+        async remove(pk, id, etag) { const k = key(pk, id); if (!etag || records.get(k)?._etag !== etag)
+            return false; records.delete(k); return true; },
         async list(pk) { return [...records.values()].filter(d => d.pk === pk).map(d => structuredClone(d)); },
     };
 }

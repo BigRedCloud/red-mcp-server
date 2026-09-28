@@ -857,3 +857,117 @@ export function renderSsoResultPage(names: string[], failedNames: string[]): str
     ${connected ? '<div class="next-step">Return to Microsoft Copilot and retry your question.</div>' : ""}
   </div>`, '<style>.sso-result-list li::before { content: none; } .sso-result-list li { overflow-wrap: anywhere; }</style>');
 }
+
+const manageCompanyRows = Array.from({ length: 5 }, (_, i) => `<div class="company-entry">
+    <p class="section-title">Company ${i + 1}</p>
+    <label for="manage-companyName-${i}">Company name</label>
+    <input id="manage-companyName-${i}" type="text" name="companyName" maxlength="200" autocomplete="organization" placeholder="e.g. Company A">
+    <label for="manage-apiKey-${i}">Big Red Cloud API key</label>
+    <input id="manage-apiKey-${i}" name="apiKey" type="password" maxlength="4096" autocomplete="off" placeholder="Enter your API key">
+  </div>`).join('<div class="divider company-gap" aria-hidden="true"></div>');
+
+const manageCompanyScript = `<style>#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; } .disconnect-form { margin-top: 8px; } .disconnect-form .btn-secondary { margin-top: 0; }</style><script>
+(function () {
+  var rows = document.querySelectorAll('.company-entry');
+  var gaps = document.querySelectorAll('.company-gap');
+  var button = document.getElementById('add-company');
+  var count = 1;
+  rows.forEach(function (row, i) { row.hidden = i > 0; });
+  gaps.forEach(function (gap) { gap.hidden = true; });
+  if (!button) return;
+  button.hidden = false;
+  button.addEventListener('click', function () {
+    if (count >= rows.length) return;
+    gaps[count - 1].hidden = false;
+    rows[count].hidden = false;
+    rows[count].querySelector('input').focus();
+    count++;
+    button.hidden = count === rows.length;
+  });
+})();
+</script>`;
+
+export function renderManageSignInPage(): string {
+  return pageShell("Manage companies — Red", brandBar(), `<div class="card">
+    <h2>Manage your Big Red Cloud companies</h2>
+    <p class="lead">Sign in with Microsoft to see and manage the companies connected to RED in Microsoft Copilot.</p>
+    <form method="post" action="/manage-companies/start">
+      <button class="btn-primary" id="sign-in" type="submit">Sign in with Microsoft</button>
+    </form>
+    <div class="next-step">Use the same Microsoft account you use in Copilot. This page does not accept an API key until after that sign-in.</div>
+  </div>`);
+}
+
+export function renderManagePage(options: { csrfToken: string; companies: string[]; notice?: string }): string {
+  const connected = options.companies.length
+    ? `<ul class="company-list" id="connected-companies">${options.companies.map(name => `<li>
+        <strong>${escapeHtml(name)}</strong>
+        <form class="disconnect-form" method="post" action="/manage-companies/disconnect">
+          <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+          <input type="hidden" name="companyName" value="${escapeHtml(name)}">
+          <button class="btn-secondary" type="submit">Disconnect</button>
+        </form>
+      </li>`).join("")}</ul>`
+    : `<p id="connected-companies">No Big Red Cloud companies are currently connected.</p>`;
+  return pageShell("Manage companies — Red", brandBar(), `<div class="card">
+    <h2>Manage your Big Red Cloud companies</h2>
+    <p class="lead">These companies are available to RED in Microsoft Copilot.</p>
+    ${options.notice ? `<p class="centered" role="status">${escapeHtml(options.notice)}</p>` : ""}
+    <section>
+      <p class="section-title">Connected companies</p>
+      ${connected}
+    </section>
+    <form method="post" action="/manage-companies/companies" enctype="multipart/form-data">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+      <p class="section-title">Connect more companies</p>
+      <div class="trust-notes">
+        <div class="trust-note"><strong>Your credentials stay private.</strong> API keys are submitted directly to RED and stored encrypted. Never paste API keys into chat.</div>
+        <div class="trust-note"><strong>Connect up to five companies at a time.</strong> Companies already linked stay linked. If you upload a CSV, it is used instead of the manual entries.</div>
+      </div>
+      <div class="connect-layout">
+        <div class="section">
+          <p class="section-title">Manual connection</p>
+          <p class="section-hint">Enter each company name and its Big Red Cloud API key.</p>
+          ${manageCompanyRows}
+          <button class="btn-secondary" type="button" id="add-company" hidden>+ Add another company</button>
+        </div>
+        <div class="divider connect-divider">or</div>
+        <div class="section">
+          <p class="section-title">Upload companies from CSV</p>
+          <p class="section-hint">Use the format below, with up to five companies. Maximum file size: 1 MB. The file is processed when you select Connect companies.</p>
+          <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+          <label for="companyFile">CSV file</label>
+          <input id="companyFile" name="companyFile" type="file" accept=".csv,text/csv">
+        </div>
+      </div>
+      <button class="btn-primary" type="submit">Connect companies</button>
+    </form>
+    <div class="next-step">When you finish, return to Microsoft Copilot and retry your question.</div>
+  </div>`, manageCompanyScript);
+}
+
+export function renderManageConfirmPage(options: { csrfToken: string; companyName: string }): string {
+  const name = escapeHtml(options.companyName);
+  return pageShell("Disconnect company — Red", brandBar(), `<div class="card">
+    <h2>Disconnect ${name}?</h2>
+    <p class="lead">RED will no longer be able to access ${name} in Microsoft Copilot.</p>
+    <form method="post" action="/manage-companies/disconnect">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+      <input type="hidden" name="companyName" value="${name}">
+      <input type="hidden" name="confirm" value="yes">
+      <p><a href="/manage-companies">Cancel</a></p>
+      <button class="btn-primary" type="submit">Disconnect ${name}</button>
+    </form>
+  </div>`);
+}
+
+export function renderManageErrorPage(message = "Sign in with the Microsoft account you use in Copilot. Open the company management page again if this session has expired."): string {
+  return pageShell("Company management — Red", brandBar(), `<div class="card">
+    <div class="status-icon error" aria-hidden="true">✕</div>
+    <h2>Company management was not completed</h2>
+    <p class="error-message" role="alert">${escapeHtml(message)}</p>
+    <div class="next-step">Return to Microsoft Copilot and open the RED company management page again.</div>
+  </div>`);
+}

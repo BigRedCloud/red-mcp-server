@@ -13,6 +13,7 @@ export interface SsoBackend {
   read(pk: string, id: string): Promise<SsoRecord | null>;
   create(record: SsoRecord): Promise<boolean>;
   replace(record: SsoRecord, etag: string): Promise<boolean>;
+  remove(pk: string, id: string, etag: string): Promise<boolean>;
   list(pk: string): Promise<SsoRecord[]>;
 }
 export const SSO_LINK_TTL_MS = 10 * 60_000;
@@ -122,6 +123,25 @@ export class EntraConnectionStore {
       if (!saved) throw new Error("Connection update conflict. Please retry.");
     }
   }
+  /** Creates the empty owner partition when a verified browser session is the first connection. */
+  async ensureOwner(owner: EntraOwner): Promise<void> {
+    if (!await this.owner(owner, true)) throw new Error("Connection unavailable.");
+  }
+  /** Deletes one company in this owner's partition. A name that exists only for another owner is a no-op. */
+  async removeCompany(owner: EntraOwner, companyName: string): Promise<boolean> {
+    const record = await this.owner(owner);
+    const name = companyName.trim();
+    if (!record || !name || name.length > 200) return false;
+    const id = `company:${createHash("sha256").update(name.toLowerCase()).digest("hex")}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const doc = await this.backend.read(record.pk, id);
+      if (!doc || doc.type !== "entraCompany" || doc.ownerKey !== record.ownerKey || doc.connectionId !== record.connectionId || !doc.credential) return false;
+      if (doc.credential.companyName.trim().toLowerCase() !== name.toLowerCase()) return false;
+      if (!doc._etag) return false;
+      if (await this.backend.remove(record.pk, id, doc._etag)) return true;
+    }
+    return false;
+  }
 }
 
 export function createMemorySsoBackend(): SsoBackend {
@@ -131,6 +151,7 @@ export function createMemorySsoBackend(): SsoBackend {
     async read(pk,id) { const d = records.get(key(pk,id)); return d ? structuredClone(d) : null; },
     async create(d) { const k = key(d.pk,d.id); if (records.has(k)) return false; records.set(k, structuredClone({...d,_etag:randomUUID()})); return true; },
     async replace(d, etag) { const k = key(d.pk,d.id); if (!etag || records.get(k)?._etag !== etag) return false; records.set(k, structuredClone({...d,_etag:randomUUID()})); return true; },
+    async remove(pk, id, etag) { const k = key(pk,id); if (!etag || records.get(k)?._etag !== etag) return false; records.delete(k); return true; },
     async list(pk) { return [...records.values()].filter(d => d.pk === pk).map(d => structuredClone(d)); },
   };
 }

@@ -15,6 +15,10 @@ function cosmosFixture() {
   (store as unknown as {container:unknown}).container={
     item:(id:string,pk:string)=>({read:async()=>{const resource=await backend.read(pk,id);return resource?{resource}:conflict(404);},replace:async(d:SsoRecord,options:{accessCondition:{type:string;condition:string}})=>{
       assert.equal(options.accessCondition.type,"IfMatch");return await backend.replace(d,options.accessCondition.condition)?{}:conflict(412);
+    },delete:async(options:{accessCondition:{type:string;condition:string}})=>{
+      assert.equal(options.accessCondition.type,"IfMatch");
+      if(!await backend.read(pk,id)) conflict(404);
+      return await backend.remove(pk,id,options.accessCondition.condition)?{}:conflict(412);
     }}),
     items:{
       create:async(d:SsoRecord)=>await backend.create(d)?{}:conflict(409),
@@ -97,4 +101,30 @@ test("pending request original deadline is authoritative and records contain no 
   now++;
   assert.equal(await store.checkPendingRequest(owner,handle,true),false);
   assert.equal(await store.pendingRequestExpiry(owner,handle),null);
+});
+
+for (const kind of ["memory","cosmos"] as const) test(`${kind}: disconnect removes one owner company and replacement keeps the other`,async t=>{
+  env(t, "RED_CONNECT_ENCRYPTION_KEY","test-only-generated-encryption-material");
+  const store=(kind==="memory"?new MemoryConnectionStore():cosmosFixture()).entra;
+  const a={tenantId:randomUUID(),objectId:randomUUID()},b={...a,objectId:randomUUID()};
+  await store.createLink(a);await store.createLink(b);
+  await store.saveCompanies(a,["Company B","Company C"].map(companyName=>({companyName,apiKey:`test-only-${companyName}`,expiresAt:Date.now()+60_000,credentialValidatedAt:5})));
+  await store.saveCompanies(b,[{companyName:"Company B",apiKey:"test-only-other",expiresAt:Date.now()+60_000}]);
+  const before=await store.listCompanies(a);
+  await store.saveCompanies(a,[{companyName:"company b",apiKey:"test-only-replaced",expiresAt:Date.now()+90_000,credentialValidatedAt:9}]);
+  const replaced=(await store.listCompanies(a)).find(company=>company.companyName.toLowerCase()==="company b")!;
+  assert.equal(replaced.companyName,"company b");
+  assert.equal(decodeStoredApiKey(replaced.encryptedSecret),"test-only-replaced");
+  assert.equal(replaced.createdAt,before.find(company=>company.companyName==="Company B")!.createdAt);
+  assert.deepEqual((await store.listCompanies(a)).map(company=>company.companyName.toLowerCase()).sort(),["company b","company c"]);
+  assert.equal(await store.removeCompany(a,"Company B"),true);
+  assert.deepEqual((await store.listCompanies(a)).map(company=>company.companyName),["Company C"]);
+  assert.equal(decodeStoredApiKey((await store.listCompanies(a))[0].encryptedSecret),"test-only-Company C");
+  assert.equal(await store.removeCompany(a,"Company B"),false);
+  assert.equal(await store.removeCompany(a,"company:forged"),false);
+  assert.equal(await store.removeCompany(a,"Company C"),true);
+  assert.deepEqual(await store.listCompanies(a),[]);
+  assert.equal((await store.listCompanies(b)).length,1);
+  assert.equal(decodeStoredApiKey((await store.listCompanies(b))[0].encryptedSecret),"test-only-other");
+  assert.equal(await store.removeCompany(b,"Company C"),false);
 });

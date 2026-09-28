@@ -1,6 +1,6 @@
 # Copilot company connection and Entra SSO
 
-The current `/mcp/copilot` facade exposes 57 read-only tools. The main `/mcp`
+The current `/mcp/copilot` facade exposes 58 read-only tools. The main `/mcp`
 registry remains unchanged at 159 tools. See [the current catalogue](copilot-read-only-catalogue.md)
 for tool coverage. This document describes company connection and its original
 SSO implementation; historical customer-tool details below are retained as context.
@@ -61,6 +61,22 @@ short-lived flow state; origin and CSRF checks protect submission. Consumption
 happens before BRC validation: failed validation requires a new link.
 Credentials use the existing AES-GCM encoder; SSO refuses its unencrypted memory
 fallback. Multiple links can add/update companies; existing companies are retained.
+
+## Returning-user company management
+
+A user who already has a linked company can ask Copilot to connect another company, manage companies, change an API key, or disconnect a company. Copilot should call the read-only tool `get_company_management_link`. That tool does not accept an API key and does not connect, update, or disconnect anything. It returns a stable `https://<red-host>/manage-companies` URL plus the signed-in owner's company names. It does not return API keys, encrypted secrets, tenant IDs, object IDs, or storage identifiers.
+
+Opening the URL does not authorize access. The browser repeats the existing Entra authorization-code flow with PKCE, state, and nonce, using the same `/connect/sso/callback` redirect. After sign-in, RED resolves the verified Microsoft owner and loads only that owner's companies. The management session is a separate short-lived HttpOnly cookie. The URL has no identity claims.
+
+From that page the user can:
+
+- see the companies currently linked, or a message that none are connected
+- add companies manually or by CSV, up to five companies and 1 MB per submission
+- replace a company by submitting the same name with a new valid API key; other linked companies stay, and the previous key remains if the new one fails validation
+- disconnect one company at a time after a confirmation POST
+- disconnect the final company
+
+Disconnect requires the verified owner, same-origin POST, and the session CSRF token. The first POST only asks for confirmation. GET never disconnects. A confirmed disconnect deletes only that company in the caller's partition. After the last company is removed, an accounting question uses the existing connection-required link again. A brand-new user can still reach that link by asking an accounting question; the management tool is an additional entry point, not a replacement.
 
 ## Historical proof-of-concept customer-tool results and limits
 
@@ -162,8 +178,9 @@ Trust requires HTTPS, protected encryption/application secrets, correct admin
 configuration, and trusted application/storage administrators. Do not enable
 request-body, Authorization/Cookie/header, response-body or credential-form
 logging at the proxy or APM layer. The code does not emit those secrets, but
-cannot control a separately configured external logger. Connection URLs are
-intentionally returned only when linking is required. New request handles are
+cannot control a separately configured external logger. One-time connection URLs are
+intentionally returned only when linking is required. The management tool may
+also return the stable, non-secret `/manage-companies` page. New request handles are
 public locators, not authorization credentials; avoid unnecessary diagnostic logging.
 
 ## Restore the previous diagnostic profile
@@ -188,6 +205,7 @@ New files:
 - `src/auth/entra_store.ts`
 - `src/auth/entra_browser.ts`
 - `src/copilot_customers.ts`
+- `src/copilot_company_management.ts`
 - `src/auth/entra_auth.test.ts`
 - `src/auth/entra_store.test.ts`
 - `src/copilot_customers.test.ts`

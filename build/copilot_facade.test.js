@@ -97,18 +97,19 @@ async function fixture(t) {
     };
     return { a, b, c, store, tools, invoke };
 }
-test("normal 159 descriptors remain identical; Copilot advertises exactly 57 strict read-only tools", () => {
+test("normal 159 descriptors remain identical; Copilot advertises exactly 58 strict read-only tools", () => {
     const normal = [];
     registerAllTools({ registerTool(name, config) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() { }, registerPrompt() { } }, { profile: "full" });
     assert.equal(normal.length, 159);
     assert.equal(createHash("sha256").update(JSON.stringify(normal.sort((a, b) => a.name.localeCompare(b.name)))).digest("hex"), "c5e420ed1f7e9f3201fadb283b72e4b90a00eb58c64bfd641d3c8cab0d684f6f");
     const allTools = registry();
-    const tools = new Map([...allTools].filter(([name]) => !COPILOT_HELP_NAMES.includes(name) && name !== "search_product_types"));
-    assert.equal(allTools.size, 57);
+    const tools = new Map([...allTools].filter(([name]) => !COPILOT_HELP_NAMES.includes(name) && name !== "search_product_types" && name !== "get_company_management_link"));
+    assert.equal(allTools.size, 58);
+    assert.equal(allTools.has("get_company_management_link"), true);
     assert.equal(allTools.has("search_product_types"), true);
     for (const name of COPILOT_HELP_NAMES)
         assert.equal(allTools.has(name), true, name);
-    const prior56 = [...allTools].filter(([name]) => name !== "search_product_types").map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
+    const prior56 = [...allTools].filter(([name]) => name !== "search_product_types" && name !== "get_company_management_link").map(([name, { config }]) => ({ name, ...config, inputSchema: z.toJSONSchema(config.inputSchema) })).sort((a, b) => a.name.localeCompare(b.name));
     assert.equal(prior56.length, 56);
     assert.equal(createHash("sha256").update(JSON.stringify(prior56)).digest("hex"), "531e5ba099c0f656d321df63c893f300036338c3ae686ef307361ffd4d8e764d");
     const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
@@ -131,7 +132,7 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 57 str
     assert.equal(priorDescriptors.length, 35);
     assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"), "c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
     assert.deepEqual([...tools.keys()].sort(), names);
-    assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), [...names, ...COPILOT_HELP_NAMES, "search_product_types"].sort());
+    assert.deepEqual([...COPILOT_FEDERATED_TOOL_NAMES].sort(), [...names, ...COPILOT_HELP_NAMES, "search_product_types", "get_company_management_link"].sort());
     const productTypes = allTools.get("search_product_types").config;
     assert.equal(productTypes.title, "Search Big Red Cloud product types");
     assert.match(productTypes.description, /product-type|product classifications|configured/i);

@@ -331,7 +331,7 @@ app.use(express.json());
 // Body-parser errors can include submitted text. Never surface that text on
 // the SSO credential or MCP boundary; preserve existing routes' error handling.
 app.use((error, req, res, next) => {
-    if (req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/")) {
+    if (req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/") || req.path.startsWith("/manage-companies")) {
         res.status(400).json({ error: "Invalid request body." });
         return;
     }

@@ -239,6 +239,11 @@ export class CosmosConnectionStore implements ConnectionStore {
       try { await this.getContainer().item(record.id, record.pk).replace(record, { accessCondition: { type: "IfMatch", condition: etag } }); return true; }
       catch (error) { if ([404,412].includes((error as {code: number}).code)) return false; throw new Error("SSO storage unavailable."); }
     },
+    remove: async (pk, id, etag) => {
+      if (!etag) return false;
+      try { await this.getContainer().item(id, pk).delete({ accessCondition: { type: "IfMatch", condition: etag } }); return true; }
+      catch (error) { if ([404,412].includes((error as {code: number}).code)) return false; throw new Error("SSO storage unavailable."); }
+    },
     list: async (pk) => {
       try { return (await this.getContainer().items.query<SsoRecord>({ query: "SELECT * FROM c WHERE c.pk = @pk AND c.type = 'entraCompany'", parameters: [{name:"@pk",value:pk}] }, { partitionKey: pk }).fetchAll()).resources; }
       catch { throw new Error("SSO storage unavailable."); }

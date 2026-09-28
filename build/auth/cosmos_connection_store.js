@@ -106,6 +106,19 @@ export class CosmosConnectionStore {
                 throw new Error("SSO storage unavailable.");
             }
         },
+        remove: async (pk, id, etag) => {
+            if (!etag)
+                return false;
+            try {
+                await this.getContainer().item(id, pk).delete({ accessCondition: { type: "IfMatch", condition: etag } });
+                return true;
+            }
+            catch (error) {
+                if ([404, 412].includes(error.code))
+                    return false;
+                throw new Error("SSO storage unavailable.");
+            }
+        },
         list: async (pk) => {
             try {
                 return (await this.getContainer().items.query({ query: "SELECT * FROM c WHERE c.pk = @pk AND c.type = 'entraCompany'", parameters: [{ name: "@pk", value: pk }] }, { partitionKey: pk }).fetchAll()).resources;

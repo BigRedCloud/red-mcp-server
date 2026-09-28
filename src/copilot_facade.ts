@@ -1,3 +1,4 @@
+import { COMPANY_MANAGEMENT_TOOL } from "./copilot_company_management.js";
 import { COPILOT_HELP_NAMES } from "./copilot_help.js";
 import { advancePage, freshPaging, pagingArgs, pagingSchema } from "./copilot_paging.js";
 import { createHash } from "node:crypto";
@@ -102,6 +103,7 @@ export const COPILOT_FEDERATED_TOOL_NAMES = new Set<string>([
   ...COPILOT_SEARCH_ONLY.map(entity => `search_${entity.plural}`),
   "search_customer_transactions", "search_supplier_transactions", "get_financial_year", "fetch_nominal_account",
   "get_customer_aged_balance", "get_supplier_aged_balance", "get_allocated_transactions", "get_allocation_candidates",
+  COMPANY_MANAGEMENT_TOOL,
 ]);
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const MAX_PAGES = 3;
