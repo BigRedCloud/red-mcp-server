@@ -866,7 +866,14 @@ const manageCompanyRows = Array.from({ length: 5 }, (_, i) => `<div class="compa
     <input id="manage-apiKey-${i}" name="apiKey" type="password" maxlength="4096" autocomplete="off" placeholder="Enter your API key">
   </div>`).join('<div class="divider company-gap" aria-hidden="true"></div>');
 
-const manageCompanyScript = `<style>#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; } .disconnect-form { margin-top: 8px; } .disconnect-form .btn-secondary { margin-top: 0; }</style><script>
+const manageCompanyScript = `<style>
+#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; }
+#connected-companies li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+#connected-companies li::before { margin-right: -6px; }
+#connected-companies li strong { min-width: 0; overflow-wrap: anywhere; }
+#connected-companies .disconnect-form { margin: 0 0 0 auto; flex: 0 0 auto; }
+#connected-companies .disconnect-form .btn-secondary { display: inline-block; width: auto; max-width: 100%; margin: 0; }
+</style><script>
 (function () {
   var rows = document.querySelectorAll('.company-entry');
   var gaps = document.querySelectorAll('.company-gap');
