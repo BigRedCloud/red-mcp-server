@@ -93,6 +93,19 @@ async function fixture(t: TestContext) {
   return { a, b, c, store, tools, invoke };
 }
 
+const historicalCustomerDescription = "Search customers across Big Red Cloud companies linked to the signed-in Microsoft user. Supports bounded pagination.";
+const historicalCustomerSchema = z.object({
+  query: z.string().max(1000).describe("Customer text to match; use an empty string to list customers."),
+  nextCursor: z.string().max(4096).optional().describe("Continuation returned by the previous search; keep the same query."),
+}).strict();
+function hashedTool(name: string, config: any) {
+  return {
+    name, ...config,
+    ...(name === "search_customers" ? { description: historicalCustomerDescription } : {}),
+    inputSchema: z.toJSONSchema(name === "search_customers" ? historicalCustomerSchema : config.inputSchema),
+  };
+}
+
 test("normal 159 descriptors remain identical; Copilot advertises exactly 58 strict read-only tools", () => {
   const normal: any[] = [];
   registerAllTools({ registerTool(name: string, config: any) { normal.push({ name, ...config, inputSchema: config.inputSchema ? z.toJSONSchema(z.object(config.inputSchema)) : undefined }); }, registerResource() {}, registerPrompt() {} } as any, { profile: "full" });
@@ -104,26 +117,26 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 58 str
   assert.equal(allTools.has("get_company_management_link"), true);
   assert.equal(allTools.has("search_product_types"), true);
   for (const name of COPILOT_HELP_NAMES) assert.equal(allTools.has(name), true, name);
-  const prior56=[...allTools].filter(([name])=>name!=="search_product_types" && name!=="get_company_management_link").map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const prior56=[...allTools].filter(([name])=>name!=="search_product_types" && name!=="get_company_management_link").map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(prior56.length,56);
   assert.equal(createHash("sha256").update(JSON.stringify(prior56)).digest("hex"),"531e5ba099c0f656d321df63c893f300036338c3ae686ef307361ffd4d8e764d");
   const names = [...existingNames, ...tranchePairs.flatMap(([plural, singular]) => [`search_${plural}`, `fetch_${singular}`]), ...searchOnly.map(plural => `search_${plural}`), ...purposeNames, ...nextNames, ...finalNames, ...remainderNames, ...gapNames].sort();
   assert.equal(tools.size, 53);
   // Normalize only the intentionally changed candidate description to retain the existing 52-descriptor lock.
-  const current52=[...tools].filter(([name])=>name!=="get_allocated_transactions").map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const current52=[...tools].filter(([name])=>name!=="get_allocated_transactions").map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(current52.length,52);
   current52.find(tool=>tool.name==="get_allocation_candidates")!.description="Return unmatched transactions eligible to receive an allocation from the specified sender book transaction. These are possible allocations, not allocations already applied. Requires bookTranId and companyName. Use get_allocated_transactions for existing applications. Continue with nextCursor.";
   assert.equal(createHash("sha256").update(JSON.stringify(current52)).digest("hex"),"c7191ea7f3820b7d40db9e9120ddefc115a4a3da5918617a7eb8e96bab3fa6d7");
-  const current49=[...tools].filter(([name])=>!(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const current49=[...tools].filter(([name])=>!(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(current49.length,49);
   assert.equal(createHash("sha256").update(JSON.stringify(current49)).digest("hex"),"57b3b243870c49293ae54f45734f917db1ab382b0026bd07b1143f3a09ed3ca6");
-  const current=[...tools].filter(([name])=>!(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const current=[...tools].filter(([name])=>!(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(current.length,48);
   assert.equal(createHash("sha256").update(JSON.stringify(current)).digest("hex"),"0826018dac5c81ce321e65e9ad54f3f408a916274352048c71bb177eb4cfcaa2");
-  const locked=[...tools].filter(([name])=>!finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const locked=[...tools].filter(([name])=>!finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(locked.length,43);
   assert.equal(createHash("sha256").update(JSON.stringify(locked)).digest("hex"),"c6e6860b46851bb8ae4731853f504bf8f5ab0fdd089482fd44ae26f56c5fec4b");
-  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name) && !finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>({name,...config,inputSchema:z.toJSONSchema(config.inputSchema)})).sort((a,b)=>a.name.localeCompare(b.name));
+  const priorDescriptors=[...tools].filter(([name])=>!nextNames.includes(name) && !finalNames.includes(name) && !(remainderNames as readonly string[]).includes(name) && !(gapNames as readonly string[]).includes(name)).map(([name,{config}])=>hashedTool(name, config)).sort((a,b)=>a.name.localeCompare(b.name));
   assert.equal(priorDescriptors.length,35);
   assert.equal(createHash("sha256").update(JSON.stringify(priorDescriptors)).digest("hex"),"c87254d84410000d20aea40cb44aec236fe0d8f1675202808cfc5b5300f361ec");
   assert.deepEqual([...tools.keys()].sort(), names);
@@ -164,7 +177,19 @@ test("normal 159 descriptors remain identical; Copilot advertises exactly 58 str
     const fetchTool = tools.get(`fetch_${singular}`)!;
     assert.equal(fetchTool.config.title, `Fetch Big Red Cloud ${label === "purchases" ? "purchase" : label.replace(/s$/, "")}`);
   }
-  assert.deepEqual(Object.keys(tools.get("search_customers")!.config.inputSchema.shape), ["query", "nextCursor"]);
+  const customerSearch = tools.get("search_customers")!.config;
+  assert.ok(customerSearch.description.length < 400);
+  assert.match(customerSearch.description, /customers in Company A/);
+  assert.match(customerSearch.description, /companyName="Company A", query=""/);
+  assert.match(customerSearch.description, /find Paul in Company C/);
+  assert.match(customerSearch.description, /companyName="Company C", query="Paul"/);
+  assert.match(customerSearch.description, /find customer Paul/);
+  assert.match(customerSearch.description, /omit companyName/);
+  assert.deepEqual(Object.keys(customerSearch.inputSchema.shape), ["query", "companyName", "nextCursor"]);
+  assert.equal(customerSearch.inputSchema.safeParse({ query: "" }).success, true);
+  assert.equal(customerSearch.inputSchema.safeParse({ query: "Paul", companyName: "Company C" }).success, true);
+  assert.match(customerSearch.inputSchema.shape.companyName.description, /Do not put company names in `query`/);
+  assert.match(customerSearch.inputSchema.shape.query.description, /Do not put the Big Red Cloud company name here/);
   assert.deepEqual(Object.keys(tools.get("fetch_customer")!.config.inputSchema.shape), ["customerId", "companyName"]);
   assert.deepEqual(Object.keys(tools.get("search_suppliers")!.config.inputSchema.shape), ["query", "companyName", "code", "pageSize", "nextCursor"]);
   assert.deepEqual(Object.keys(tools.get("fetch_supplier")!.config.inputSchema.shape), ["supplierId", "companyName"]);

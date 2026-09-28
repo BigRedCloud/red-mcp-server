@@ -74,7 +74,7 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
   ]);
   assert.doesNotMatch(instructions, /brc_[a-z0-9_]+/);
   const [search, fetchCustomer] = diagnosticResponse.tools;
-  assert.deepEqual(Object.keys(search.inputSchema.properties ?? {}), ["query", "nextCursor"]);
+  assert.deepEqual(Object.keys(search.inputSchema.properties ?? {}), ["query", "companyName", "nextCursor"]);
   assert.deepEqual(search.inputSchema.required, ["query"]);
   assert.deepEqual(Object.keys(fetchCustomer.inputSchema.properties ?? {}), ["customerId", "companyName"]);
   assert.deepEqual(fetchCustomer.inputSchema.required, ["customerId", "companyName"]);

@@ -74,6 +74,98 @@ test("customer search bounds scans, lists with empty query and binds continuatio
     assert.equal(next.structuredContent.companies[0].customers[0].Id, 61);
     assert.equal(next.structuredContent.complete, true);
 });
+test("search_customers queries only the named company and binds the cursor to it", async (t) => {
+    const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    t.after(() => { if (old === undefined)
+        delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+    else
+        process.env.RED_CONNECT_ENCRYPTION_KEY = old; });
+    const owner = { tenantId: randomUUID(), objectId: randomUUID() }, other = { ...owner, objectId: randomUUID() };
+    const oldHttpMode = process.env.RED_CONNECT_HTTP_MODE;
+    process.env.RED_CONNECT_HTTP_MODE = "true";
+    t.after(() => { if (oldHttpMode === undefined)
+        delete process.env.RED_CONNECT_HTTP_MODE;
+    else
+        process.env.RED_CONNECT_HTTP_MODE = oldHttpMode; });
+    const store = getConnectionStore().entra;
+    await store.createLink(owner);
+    await store.createLink(other);
+    const expiresAt = Date.now() + 60_000;
+    await store.saveCompanies(owner, [
+        { companyName: "Company A", apiKey: "key-a", expiresAt },
+        { companyName: "Company B", apiKey: "key-b", expiresAt },
+        { companyName: "Company C", apiKey: "key-c", expiresAt },
+    ]);
+    await store.saveCompanies(other, [{ companyName: "Secret Co", apiKey: "secret-owner-b", expiresAt }]);
+    const calls = [];
+    let wide = false;
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        const key = Buffer.from(String(new Headers(init?.headers).get("authorization") ?? "").replace(/^Basic /, ""), "base64").toString().replace(/:$/, "");
+        calls.push(key);
+        const skip = Number(new URL(String(input)).searchParams.get("$skip") ?? 0);
+        const size = Number(new URL(String(input)).searchParams.get("$top") ?? 20);
+        const names = key === "key-a" && wide ? Array.from({ length: 65 }, (_, i) => `Customer ${i + 1}`) : key === "key-a" ? ["Ann", "Zoe"] : key === "key-c" ? ["Paul", "Ann"] : key === "secret-owner-b" ? ["Secret customer"] : ["Other"];
+        return new Response(JSON.stringify({ Items: names.slice(skip, skip + size).map((Name, i) => ({ Id: skip + i + 1, Name })) }));
+    });
+    const invoke = (who, args) => entraRequestOwner.run(who, () => listCopilotCustomers(args));
+    calls.length = 0;
+    const companyA = await invoke(owner, { query: "", companyName: "Company A" });
+    assert.equal(companyA.structuredContent.status, "ok");
+    assert.deepEqual(companyA.structuredContent.unavailableCompanies, []);
+    assert.ok(companyA.structuredContent.companies.every(group => group.companyName === "Company A" && group.status === "ok"));
+    assert.deepEqual(companyA.structuredContent.companies.flatMap(group => group.customers).map(row => row.Name), ["Ann", "Zoe"]);
+    assert.deepEqual(calls, ["key-a"]);
+    calls.length = 0;
+    const folded = await invoke(owner, { query: "", companyName: "company a" });
+    assert.equal(folded.structuredContent.status, "ok");
+    assert.deepEqual(calls, ["key-a"]);
+    calls.length = 0;
+    const paul = await invoke(owner, { query: "Paul", companyName: "Company C" });
+    assert.equal(paul.structuredContent.status, "ok");
+    assert.deepEqual(calls, ["key-c"]);
+    assert.deepEqual(paul.structuredContent.companies.flatMap(group => group.customers).map(row => row.Name), ["Paul"]);
+    calls.length = 0;
+    const textOnly = await invoke(owner, { query: "Company A" });
+    assert.ok(calls.includes("key-a") && calls.includes("key-b") && calls.includes("key-c"));
+    assert.equal(textOnly.structuredContent.companies.flatMap(group => group.customers).length, 0);
+    calls.length = 0;
+    const missing = await invoke(owner, { query: "", companyName: "Company D" });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.structuredContent.status, "company_unavailable");
+    assert.deepEqual(missing.structuredContent.companies, []);
+    assert.deepEqual(missing.structuredContent.unavailableCompanies, ["Company D"]);
+    assert.equal(calls.length, 0);
+    calls.length = 0;
+    const none = await invoke(owner, { query: "XYZ", companyName: "Company A" });
+    assert.equal(none.structuredContent.status, "ok");
+    assert.equal(none.isError, undefined);
+    assert.deepEqual(none.structuredContent.unavailableCompanies, []);
+    assert.ok(none.structuredContent.companies.every(group => group.companyName === "Company A" && group.status === "ok" && group.customers.length === 0));
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    wide = true;
+    calls.length = 0;
+    const paged = await invoke(owner, { query: "", companyName: "Company A" });
+    assert.equal(paged.structuredContent.complete, false);
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    const cursor = String(paged.structuredContent.nextCursor);
+    calls.length = 0;
+    const continued = await invoke(owner, { query: "", companyName: "Company A", cursor });
+    assert.equal(continued.structuredContent.status, "ok");
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    calls.length = 0;
+    assert.equal((await invoke(owner, { query: "", companyName: "Company B", cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(owner, { query: "Smith", companyName: "Company A", cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(other, { query: "", companyName: "Company A", cursor })).structuredContent.status, "company_unavailable");
+    assert.equal(calls.length, 0);
+    calls.length = 0;
+    const isolated = await invoke(owner, { query: "", companyName: "Secret Co" });
+    assert.equal(isolated.structuredContent.status, "company_unavailable");
+    const own = await invoke(other, { query: "", companyName: "Secret Co" });
+    assert.equal(own.structuredContent.status, "ok");
+    assert.deepEqual([...new Set(calls)], ["secret-owner-b"]);
+    assert.equal(JSON.stringify(own).includes("secret-owner-b"), false);
+});
 test("customer fetch uses a linked company, exact ID and safe projection", async (t) => {
     const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
     process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");

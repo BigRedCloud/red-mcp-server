@@ -7,7 +7,7 @@ import { getConnectionStore, ensureConnectionStoreInitialized } from "./auth/con
 import { encryptCredentialSecret } from "./auth/credential_encryption.js";
 import { decodeStoredApiKey } from "./auth/credential_secret.js";
 import { openSsoEnvelope, ssoPublicBase } from "./auth/entra_browser.js";
-import { brcFetch, runWithSessionKeyStore } from "./shared.js";
+import { brcFetch, normaliseCompanyName, runWithSessionKeyStore } from "./shared.js";
 import { buildListQuery } from "./tools/general/list_tools.js";
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const response = (data, isError = false) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, ...(isError ? { isError: true } : {}) });
@@ -44,15 +44,26 @@ export async function listCopilotCustomers(args) {
     try {
         await ensureConnectionStoreInitialized();
         const store = getConnectionStore().entra;
-        const companies = await store.listCompanies(owner);
-        if (!companies.length) {
+        const linked = await store.listCompanies(owner);
+        if (!linked.length) {
             const base = ssoPublicBase();
             const request = await store.createPendingRequest(owner);
             return response({ status: "connection_required", message: "Connect your Big Red Cloud companies securely using your Microsoft sign-in. Enter credentials only on the connection page.", connectionUrl: `${base}/connect?request=${request}` });
         }
+        const requested = args.companyName?.trim() ?? "";
+        const companyKey = requested ? normaliseCompanyName(requested) : "";
+        const companies = companyKey ? linked.filter(company => normaliseCompanyName(company.companyName) === companyKey) : linked;
+        if (companyKey && companies.length !== 1) {
+            return response({
+                status: companies.length ? "company_ambiguous" : "company_unavailable",
+                message: companies.length ? "More than one connected company matches that name." : `${requested} is not connected.`,
+                companies: [],
+                unavailableCompanies: companies.length ? companies.map(company => company.companyName) : [requested],
+            }, true);
+        }
         const snapshot = createHash("sha256").update(JSON.stringify(companies.map(c => [c.companyName, c.updatedAt]))).digest("hex");
         const query = (args.query ?? "").trim().toLowerCase();
-        let cursor = { version: 2, paging: freshPaging(), incomplete: false, owner: ownerKey(owner), snapshot, index: 0, page: 1, pageSize: args.pageSize ?? 20, exp: Date.now() + 600_000, query };
+        let cursor = { version: 2, paging: freshPaging(), incomplete: false, owner: ownerKey(owner), snapshot, index: 0, page: 1, pageSize: args.pageSize ?? 20, exp: Date.now() + 600_000, query, company: companyKey };
         if (args.cursor) {
             try {
                 cursor = JSON.parse(openSsoEnvelope(args.cursor));
@@ -60,14 +71,14 @@ export async function listCopilotCustomers(args) {
             catch {
                 return response({ status: "invalid_cursor", message: "Restart the customer list." }, true);
             }
-            if ((cursor.query ?? "") !== query)
-                return response({ status: "invalid_cursor", message: "Restart the customer search when changing the query." }, true);
+            if ((cursor.query ?? "") !== query || (cursor.company ?? "") !== companyKey)
+                return response({ status: "invalid_cursor", message: "Restart the customer search when changing the query or company." }, true);
             if (cursor.version !== 2 || !pagingSchema.safeParse(cursor.paging).success || typeof cursor.incomplete !== "boolean" || cursor.owner !== ownerKey(owner) || cursor.snapshot !== snapshot || cursor.exp <= Date.now() || !Number.isInteger(cursor.index) || cursor.index < 0 || cursor.index >= companies.length || !Number.isInteger(cursor.page) || cursor.page < 1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize < 1 || cursor.pageSize > 50 || (args.pageSize !== undefined && args.pageSize !== cursor.pageSize))
                 return response({ status: "invalid_cursor", message: "Restart the customer list." }, true);
         }
         if (cursor.pageSize < 1 || cursor.pageSize > 50)
             return response({ status: "invalid_request" }, true);
-        const secrets = [owner.tenantId, owner.objectId, ...companies.flatMap(c => { const key = decodeStoredApiKey(c.encryptedSecret); return [key, Buffer.from(`${key}:`).toString("base64")]; })];
+        const secrets = [owner.tenantId, owner.objectId, ...linked.flatMap(c => { const key = decodeStoredApiKey(c.encryptedSecret); return [key, Buffer.from(`${key}:`).toString("base64")]; })];
         const clean = redactCustomerText(secrets);
         const groups = [];
         // At most three BRC pages per invocation; cursor retains the next company/page.
@@ -109,7 +120,7 @@ export async function listCopilotCustomers(args) {
             groups.push(group);
         }
         const nextCursor = cursor.index < companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
-        return response({ status: cursor.incomplete || groups.some(g => g.status !== "ok") ? "partial_failure" : "ok", companies: groups, ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
+        return response({ status: cursor.incomplete || groups.some(g => g.status !== "ok") ? "partial_failure" : "ok", companies: groups, unavailableCompanies: [], ...(nextCursor ? { nextCursor } : {}), complete: !nextCursor && !cursor.incomplete });
     }
     catch {
         return response({ status: "service_unavailable", message: "Customer listing is unavailable. Please try again." }, true);
@@ -118,13 +129,14 @@ export async function listCopilotCustomers(args) {
 export function registerCopilotCustomers(server) {
     server.registerTool("search_customers", {
         title: "Search Big Red Cloud customers",
-        description: "Search customers across Big Red Cloud companies linked to the signed-in Microsoft user. Supports bounded pagination.",
+        description: "Search customers linked to the signed-in Microsoft user. Named companies belong in companyName, not query. \"customers in Company A\" → companyName=\"Company A\", query=\"\". \"find Paul in Company C\" → companyName=\"Company C\", query=\"Paul\". \"find customer Paul\" → query=\"Paul\" and omit companyName.",
         annotations,
         inputSchema: z.object({
-            query: z.string().max(1000).describe("Customer text to match; use an empty string to list customers."),
-            nextCursor: z.string().max(4096).optional().describe("Continuation returned by the previous search; keep the same query."),
+            query: z.string().max(1000).describe("Optional customer search text such as customer name, code, email or other customer identifier. Do not put the Big Red Cloud company name here."),
+            companyName: z.string().min(1).max(4000).optional().describe("The connected Big Red Cloud company to search. When the user names a company, put that company name here. Do not put company names in `query`."),
+            nextCursor: z.string().max(4096).optional().describe("Continuation returned by the previous search; keep the same query and companyName."),
         }).strict(),
-    }, ({ query, nextCursor }) => listCopilotCustomers({ query, cursor: nextCursor }));
+    }, ({ query, companyName, nextCursor }) => listCopilotCustomers({ query, companyName, cursor: nextCursor }));
     server.registerTool("fetch_customer", {
         title: "Fetch Big Red Cloud customer",
         description: "Fetch one Big Red Cloud customer by its exact customer identifier from companies linked to the signed-in Microsoft user.",
