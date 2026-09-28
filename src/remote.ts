@@ -97,7 +97,7 @@ import {
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
 import multer from "multer";
-import { parse } from "csv-parse/sync";
+import { parseCompanyCsv } from "./auth/company_csv.js";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
 import {
   BRC_EDU_SYNC_SECRET_HEADER,
@@ -576,35 +576,6 @@ function toStringArray(value: unknown): string[] {
   }
 
   return [String(value).trim()];
-}
-
-function parseCompanyCsv(buffer: Buffer): UploadedCompanyCredential[] {
-  const rows = parse(buffer, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-  }) as Array<Record<string, string>>;
-
-  return rows
-    .map((row) => ({
-      companyName: String(
-        row.companyName ??
-          row.CompanyName ??
-          row.company ??
-          row.Company ??
-          row["Company Name"] ??
-          ""
-      ).trim(),
-      apiKey: String(
-        row.apiKey ??
-          row.ApiKey ??
-          row.api_key ??
-          row.APIKey ??
-          row["API Key"] ??
-          ""
-      ).trim(),
-    }))
-    .filter((row) => row.companyName && row.apiKey);
 }
 
 app.post("/connect", upload.single("companyFile"), async (req, res) => {

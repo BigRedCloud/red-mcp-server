@@ -27,7 +27,7 @@ import { applyConnectionSuccessPageHeaders, renderConnectPage, renderConnectionF
 import { createConnectionSuccessPage, getConnectionSuccessPage, } from "./auth/connection_success_session.js";
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 import multer from "multer";
-import { parse } from "csv-parse/sync";
+import { parseCompanyCsv } from "./auth/company_csv.js";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
 import { BRC_EDU_SYNC_SECRET_HEADER, handleBrcEduResourcesSyncRequest, } from "./edu/brc_edu_synced_store.js";
 import { invalidateEduResourcesCache } from "./edu/brc_edu_resources.js";
@@ -353,29 +353,6 @@ function toStringArray(value) {
         return [];
     }
     return [String(value).trim()];
-}
-function parseCompanyCsv(buffer) {
-    const rows = parse(buffer, {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-    });
-    return rows
-        .map((row) => ({
-        companyName: String(row.companyName ??
-            row.CompanyName ??
-            row.company ??
-            row.Company ??
-            row["Company Name"] ??
-            "").trim(),
-        apiKey: String(row.apiKey ??
-            row.ApiKey ??
-            row.api_key ??
-            row.APIKey ??
-            row["API Key"] ??
-            "").trim(),
-    }))
-        .filter((row) => row.companyName && row.apiKey);
 }
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
     await ensureConnectionStoreInitialized();

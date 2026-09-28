@@ -3,9 +3,31 @@ import { decryptCredentialSecret, encryptCredentialSecret } from "./credential_e
 import { ensureConnectionStoreInitialized, getConnectionStore } from "./connection_store.js";
 import { entraRequestOwner, verifyEntraToken } from "./entra_auth.js";
 import { isPendingRequestHandle, ownerKey } from "./entra_store.js";
-import { escapeHtml, renderConnectPage } from "./connection_page.js";
+import { renderConnectPage, renderSsoSignInPage, renderSsoErrorPage, renderSsoSuccessPage } from "./connection_page.js";
+import multer from "multer";
+import { parseCompanyCsv, CompanyInputError, COMPANY_CSV_MAX_BYTES, SSO_MAX_COMPANIES } from "./company_csv.js";
 import { validateCompanyApiKeyCredential } from "./credential_validation.js";
 import { getApiKeyExpirationMs } from "../config/server_config.js";
+const companyUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: COMPANY_CSV_MAX_BYTES, files: 1, fields: 11, parts: 13, fieldSize: 8192 },
+    fileFilter: (_req, file, done) => {
+        if (!/\.csv$/i.test(file.originalname))
+            return done(new CompanyInputError("Choose a CSV file with the .csv extension."));
+        done(null, true);
+    },
+}).single("companyFile");
+async function readCompanyUpload(req, res) {
+    await new Promise((resolve, reject) => companyUpload(req, res, error => {
+        if (!error)
+            return resolve();
+        if (error instanceof CompanyInputError)
+            return reject(error);
+        reject(new CompanyInputError(error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE"
+            ? "The CSV file is too large. Choose a file no larger than 1 MB."
+            : "The upload could not be read. Use one CSV file with up to five companies."));
+    }));
+}
 const COOKIE = "__Host-red-sso";
 const random = () => randomBytes(32).toString("base64url");
 export function ssoPublicBase() {
@@ -46,8 +68,8 @@ function safe(handler) {
     return async (req, res) => { headers(res); try {
         await handler(req, res);
     }
-    catch {
-        res.status(401).send("Sign-in or connection link is invalid, expired, or already used. Return to Copilot and try again.");
+    catch (error) {
+        res.status(error instanceof CompanyInputError ? 400 : 401).type("html").send(renderSsoErrorPage(error instanceof CompanyInputError ? error.message : undefined));
     } };
 }
 export function registerEntraBrowserRoutes(app) {
@@ -60,7 +82,7 @@ export function registerEntraBrowserRoutes(app) {
         headers(res);
         if (req.query.sso !== "1") {
             const request = isPendingRequestHandle(req.query.request) ? req.query.request : "";
-            res.type("html").send(`<!doctype html><title>Connect RED</title><p>Continue with Microsoft to connect your companies.</p><p id="link-error" ${request ? "hidden" : ""}>Return to Copilot and request a new connection link.</p><form method="post" action="/connect/sso/start"><input type="hidden" name="request" id="request" value="${escapeHtml(request)}"><button id="sign-in" ${request ? "" : "disabled"}>Sign in with Microsoft</button></form><script>history.replaceState(null,'','/connect');</script>`);
+            res.type("html").send(renderSsoSignInPage(request));
             return;
         }
         void safe(async (request, response) => {
@@ -114,35 +136,48 @@ export function registerEntraBrowserRoutes(app) {
     app.post("/connect/sso/complete", safe(async (req, res) => {
         sameOrigin(req);
         const session = readCookie(req);
-        if (session.purpose !== "connected" || !session.owner || req.body.code !== session.state)
+        if (session.purpose !== "connected" || !session.owner)
+            throw new Error();
+        await readCompanyUpload(req, res);
+        if (req.body.csrfToken !== session.state)
             throw new Error();
         ownerKey(session.owner);
-        const names = Array.isArray(req.body.companyName) ? req.body.companyName : [req.body.companyName];
-        const keys = Array.isArray(req.body.apiKey) ? req.body.apiKey : [req.body.apiKey];
-        if (names.length !== keys.length || names.length > 5)
-            throw new Error();
+        const imported = req.file ? parseCompanyCsv(req.file.buffer, true) : undefined;
+        const names = imported ? imported.map(c => c.companyName) : Array.isArray(req.body.companyName) ? req.body.companyName : [req.body.companyName];
+        const keys = imported ? imported.map(c => c.apiKey) : Array.isArray(req.body.apiKey) ? req.body.apiKey : [req.body.apiKey];
+        if (names.length !== keys.length || names.length > SSO_MAX_COMPANIES)
+            throw new CompanyInputError("Enter a matching company name and API key for up to five companies.");
         const companies = [];
         for (let i = 0; i < names.length; i++) {
             if (!names[i] && !keys[i])
                 continue;
             if (typeof names[i] !== "string" || typeof keys[i] !== "string" || !names[i].trim() || !keys[i].trim() || names[i].length > 200 || keys[i].length > 4096)
-                throw new Error();
+                throw new CompanyInputError("Enter a company name (up to 200 characters) and API key (up to 4096 characters) for each company.");
             companies.push({ companyName: names[i].trim(), apiKey: keys[i].trim(), expiresAt: Date.now() + getApiKeyExpirationMs(), credentialValidatedAt: Date.now() });
         }
         if (!companies.length)
-            throw new Error();
+            throw new CompanyInputError("Enter at least one company name and API key, or choose a CSV file.");
         await ensureConnectionStoreInitialized();
         const store = getConnectionStore().entra;
         if (!await store.checkPendingRequest(session.owner, session.request, true))
             throw new Error();
-        const validated = [];
-        for (const company of companies) {
-            const result = await entraRequestOwner.run(session.owner, () => validateCompanyApiKeyCredential(company.companyName, company.apiKey));
-            if (result.valid)
-                validated.push(company);
+        try {
+            const validated = [];
+            for (const company of companies) {
+                const result = await entraRequestOwner.run(session.owner, () => validateCompanyApiKeyCredential(company.companyName, company.apiKey));
+                if (result.valid)
+                    validated.push(company);
+            }
+            await store.saveCompanies(session.owner, validated);
+            res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=0`);
+            if (!validated.length) {
+                res.status(400).type("html").send(renderSsoErrorPage("No companies were connected because the credentials could not be validated. Check the company details and API keys, then request a new connection link."));
+                return;
+            }
+            res.type("html").send(renderSsoSuccessPage(validated.map(c => c.companyName), companies.length - validated.length));
         }
-        await store.saveCompanies(session.owner, validated);
-        res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=0`);
-        res.type("html").send(`<title>RED connection</title><p>${validated.length} of ${companies.length} companies connected. Return to Copilot. If any failed, request a new connection link and retry.</p>`);
+        catch {
+            res.status(500).type("html").send(renderSsoErrorPage("RED could not finish connecting your companies. Please request a new connection link and try again."));
+        }
     }));
 }

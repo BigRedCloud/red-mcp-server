@@ -128,7 +128,8 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     const page = await fetch(`${base}/connect?sso=1`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.doesNotMatch(html, /companyFile|<input[^>]*type="file"|telemetryClientId/);
+    assert.match(html, /name="companyFile"/);
+    assert.doesNotMatch(html, /name="code"|telemetryClientId|confirmation code/i);
     assert.equal(page.headers.get("referrer-policy"), "strict-origin");
     assert.doesNotMatch(html, /<meta[^>]+content="no-referrer"/);
     // Submit the actual rendered company form and verify browser-generated Origin.
@@ -146,23 +147,39 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
             await route.fulfill({ status: 200, contentType: "text/html", headers: { "referrer-policy": page.headers.get("referrer-policy") }, body: html });
     });
     await companyPage.goto("https://red.example.test/connect?sso=1");
+    assert.equal(await companyPage.locator('.company-entry:visible').count(), 1);
+    for (let i = 2; i <= 5; i++) {
+        await companyPage.locator('#add-company').click();
+        assert.equal(await companyPage.locator('.company-entry:visible').count(), i);
+    }
+    assert.equal(await companyPage.locator('#add-company').isVisible(), false);
+    await companyPage.locator('#companyName-0').fill('Browser company');
+    await companyPage.locator('#apiKey-0').fill('browser-only-secret');
     const nativeComplete = companyPage.waitForResponse(r => r.url().endsWith("/connect/sso/complete"));
-    await companyPage.locator("form").evaluate((form) => form.submit());
+    await companyPage.locator("button[type=submit]").click();
     assert.equal((await nativeComplete).status(), 200);
     const anonymousPage = await fetch(base + "/connect?code=invalid-code");
     assert.doesNotMatch(await anonymousPage.text(), /id="sign-in"|Continue with Microsoft/);
-    const csrf = /name="code" value="([^"]+)"/.exec(html)[1];
+    const csrf = /name="csrfToken" value="([^"]+)"/.exec(html)[1];
     assert.equal((await fetch(`${base}/connect?sso=1`, { headers: { cookie: cookie + "tampered" } })).status, 401);
-    assert.equal((await fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie, origin: "https://evil.example" }, body: new URLSearchParams({ code: csrf }) })).status, 401);
-    assert.equal((await fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie, origin: "https://red.example.test" }, body: new URLSearchParams({ code: "wrong" }) })).status, 401);
-    const form = new URLSearchParams({ code: csrf });
-    for (const [name, key] of [["A", "a"], ["B", "b"], ["C", "fail"]]) {
+    assert.equal((await fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie, origin: "https://evil.example" }, body: new URLSearchParams({ csrfToken: csrf }) })).status, 401);
+    assert.equal((await fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie, origin: "https://red.example.test" }, body: new URLSearchParams({ csrfToken: "wrong" }) })).status, 401);
+    const form = new FormData();
+    form.append("csrfToken", csrf);
+    for (const [name, key] of [["A", "test-only-a"], ["B", "test-only-b"], ["C", "test-only-fail"], ["", ""], ["", ""]]) {
         form.append("companyName", name);
-        form.append("apiKey", `test-only-${key}`);
+        form.append("apiKey", key);
     }
-    const complete = () => fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie, origin: "https://red.example.test" }, body: form });
+    // Browsers submit an empty file part even when no CSV has been selected.
+    form.append("companyFile", new Blob([]), "");
+    const complete = () => fetch(`${base}/connect/sso/complete`, { method: "POST", headers: { cookie, origin: "https://red.example.test" }, body: form });
     const submissions = await Promise.all([complete(), complete()]);
     assert.deepEqual(submissions.map(r => r.status).sort(), [200, 401]);
+    const successHtml = await submissions.find(r => r.status === 200).text();
+    assert.match(successHtml, /<li>A<\/li>/);
+    assert.match(successHtml, /<li>B<\/li>/);
+    assert.match(successHtml, /Return to Microsoft Copilot and retry your question/);
+    assert.doesNotMatch(successHtml, /test-only-|req_|tenantId|objectId|connectionId/);
     assert.equal((await fetch(`${base}/connect?sso=1`, { headers: { cookie } })).status, 401);
     assert.equal((await signIn()).status, 401, "consumed request cannot reopen");
     const first = await a.callTool({ name: "search_customers", arguments: { query: "" } });
@@ -274,4 +291,79 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     for (const secret of [linkToken, token, TEST_USER, TEST_OTHER, "test-only-a", "test-only-b"])
         assert.equal((logs + browserErrors.join("\n")).includes(secret), false);
     assert.equal((await b.callTool({ name: "search_customers", arguments: { query: "" } })).structuredContent?.status, "connection_required");
+    const csvNeeded = await b.callTool({ name: "search_customers", arguments: { query: "" } });
+    const csvHandle = new URL(csvNeeded.structuredContent.connectionUrl).searchParams.get("request");
+    const csvCallback = await signIn(true, csvHandle);
+    assert.equal(csvCallback.status, 303);
+    const csvCookie = csvCallback.headers.get("set-cookie").split(";")[0];
+    const csvPage = await fetch(base + "/connect?sso=1", { headers: { cookie: csvCookie } });
+    const csvHtml = await csvPage.text();
+    const csvCsrf = /name="csrfToken" value="([^"]+)"/.exec(csvHtml)[1];
+    async function postCsv(contents, filename = "companies.csv", csrfToken = csvCsrf) {
+        const data = new FormData();
+        data.append("csrfToken", csrfToken);
+        data.append("companyFile", new Blob([contents], { type: "text/csv" }), filename);
+        data.append("companyName", "Ignored manual company");
+        data.append("apiKey", "ignored-manual-secret");
+        return fetch(base + "/connect/sso/complete", { method: "POST", headers: { cookie: csvCookie, origin: "https://red.example.test" }, body: data });
+    }
+    assert.equal((await postCsv("companyName,apiKey\nA,test-only-a", "companies.csv", "wrong")).status, 401);
+    for (const [csv, filename, message] of [
+        ['companyName,apiKey\nA,"csv-secret-malformed', 'companies.csv', /could not be read/],
+        ['companyName,apiKey\n' + "A,csv-secret\n".repeat(6), 'companies.csv', /five/],
+        ['companyName,apiKey\nA,' + "x".repeat(1024 * 1024), 'companies.csv', /too large/],
+        ['companyName,apiKey\nA,csv-secret', 'companies.txt', /CSV file/],
+    ]) {
+        const rejected = await postCsv(csv, filename);
+        assert.equal(rejected.status, 400);
+        const errorHtml = await rejected.text();
+        assert.match(errorHtml, message);
+        assert.match(errorHtml, /class="brand-bar"/);
+        assert.doesNotMatch(errorHtml, /csv-secret|ignored-manual-secret|req_|tenantId|objectId/);
+        assert.equal((await fetch(base + "/connect?sso=1", { headers: { cookie: csvCookie } })).status, 200, "bad input must not consume the request");
+    }
+    const csvComplete = await postCsv('companyName,apiKey\n"CSV <company>",test-only-a\nCSV B,test-only-b');
+    assert.equal(csvComplete.status, 200);
+    const csvSuccess = await csvComplete.text();
+    assert.match(csvSuccess, /CSV &lt;company&gt;/);
+    assert.match(csvSuccess, /<li>CSV B<\/li>/);
+    assert.doesNotMatch(csvSuccess, /test-only-|ignored-manual|<company>|req_/);
+    assert.equal((await postCsv('companyName,apiKey\nReplay,test-only-a')).status, 401);
+    const csvRead = await b.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "CSV B" } });
+    assert.equal(csvRead.structuredContent.status, "ok", "CSV companies use the existing owner-bound store");
+    const csvDenied = await a.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "CSV B" } });
+    assert.equal(csvDenied.isError, true);
+    for (const secret of ["csv-secret", "CSV <company>", "ignored-manual-secret", csvHandle, "test-only-a", "test-only-b"])
+        assert.equal(logs.includes(secret), false);
+    // The existing anonymous /mcp page, CSV precedence and confirmation flow stay intact.
+    const normal = new Client({ name: "normal-connect-regression", version: "1" });
+    t.after(() => normal.close());
+    await normal.connect(new StreamableHTTPClientTransport(new URL(base + "/mcp")));
+    for (const useCsv of [false, true]) {
+        const started = await normal.callTool({ name: "brc_start_company_connection", arguments: {} });
+        const text = started.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+        const normalCode = /[?]code=([A-Za-z0-9_-]+)/.exec(text)[1];
+        const normalPage = await fetch(base + "/connect?code=" + normalCode);
+        assert.equal(normalPage.status, 200);
+        const normalHtml = await normalPage.text();
+        assert.match(normalHtml, /name="code"/);
+        assert.match(normalHtml, /name="companyFile"/);
+        assert.doesNotMatch(normalHtml, /csrfToken|Sign in with Microsoft/);
+        const normalForm = new FormData();
+        normalForm.append("code", normalCode);
+        normalForm.append("companyName", "Legacy manual");
+        normalForm.append("apiKey", "test-only-a");
+        if (useCsv)
+            normalForm.append("companyFile", new Blob(['companyName,apiKey\nLegacy CSV,test-only-b'], { type: "text/csv" }), "companies.csv");
+        const normalPost = await fetch(base + "/connect", { method: "POST", body: normalForm, redirect: "manual" });
+        assert.equal(normalPost.status, 303);
+        const normalSuccess = await fetch(new URL(normalPost.headers.get("location"), base));
+        const normalSuccessHtml = await normalSuccess.text();
+        assert.match(normalSuccessHtml, useCsv ? /Legacy CSV/ : /Legacy manual/);
+        assert.doesNotMatch(normalSuccessHtml, /test-only-/);
+        const confirmation = /id="confirmation-code">([^<]+)</.exec(normalSuccessHtml)[1];
+        const confirmed = await normal.callTool({ name: "brc_confirm_company_connection", arguments: { code: confirmation } });
+        assert.notEqual(confirmed.isError, true);
+        assert.match(JSON.stringify(confirmed), useCsv ? /Legacy CSV/ : /Legacy manual/);
+    }
 });

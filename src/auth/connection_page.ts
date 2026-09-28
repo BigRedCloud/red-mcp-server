@@ -512,8 +512,7 @@ export function renderConnectPage(
   options: { telemetryClientId?: string; sso?: boolean } = {}
 ): string {
   if (options.sso) {
-    const rows = Array.from({length:5}, (_,i) => `<fieldset><legend>Company ${i+1}</legend><label>Company name <input type="text" name="companyName" maxlength="200" autocomplete="off"></label><label>API key <input name="apiKey" type="password" maxlength="4096" autocomplete="off"></label></fieldset>`).join("");
-    return pageShell("Connect — Red", brandBar(), `<div class="card"><p>Connect up to five companies to your Microsoft sign-in. Enter credentials only on this page. Existing linked companies are kept.</p><form method="post" action="/connect/sso/complete"><input type="hidden" name="code" value="${escapeHtml(code)}">${rows}<button type="submit" class="btn-primary">Connect companies</button></form></div>`);
+    return renderSsoConnectPage(code);
   }
   const clientId =
     options.telemetryClientId &&
@@ -754,4 +753,97 @@ export function renderConnectionFailedPage(message: string): string {
       </div>`;
 
   return pageShell("Connection failed", brandBar(), content);
+}
+
+
+export function renderSsoSignInPage(request: string): string {
+  return pageShell("Connect — Red", brandBar(), `<div class="card">
+    <h2>Connect your Big Red Cloud companies</h2>
+    <p class="lead">Continue with Microsoft to connect your companies to RED in Microsoft Copilot.</p>
+    <p id="link-error" class="error-message" ${request ? "hidden" : ""}>This connection link is invalid. Return to Microsoft Copilot and request a new connection link.</p>
+    <form method="post" action="/connect/sso/start">
+      <input type="hidden" name="request" id="request" value="${escapeHtml(request)}">
+      <button class="btn-primary" id="sign-in" ${request ? "" : "disabled"}>Sign in with Microsoft</button>
+    </form>
+    <div class="next-step">Use the same Microsoft account you use in Copilot. Connection links expire after 10 minutes.</div>
+  </div>`, "<script>history.replaceState(null,'','/connect');</script>");
+}
+
+function renderSsoConnectPage(csrfToken: string): string {
+  const rows = Array.from({ length: 5 }, (_, i) => `<div class="company-entry">
+    <p class="section-title">Company ${i + 1}</p>
+    <label for="companyName-${i}">Company name</label>
+    <input id="companyName-${i}" type="text" name="companyName" maxlength="200" autocomplete="organization" placeholder="e.g. Company A">
+    <label for="apiKey-${i}">Big Red Cloud API key</label>
+    <input id="apiKey-${i}" name="apiKey" type="password" maxlength="4096" autocomplete="off" placeholder="Enter your API key">
+  </div>`).join('<div class="divider company-gap" aria-hidden="true"></div>');
+  return pageShell("Connect — Red", brandBar(), `<div class="card">
+    <h2>Connect your Big Red Cloud companies</h2>
+    <p class="lead">Connect the Big Red Cloud companies you want to use with RED in Microsoft Copilot.</p>
+    <div class="trust-notes">
+      <div class="trust-note"><strong>Your credentials stay private.</strong> API keys are submitted directly to RED and stored encrypted. Never paste API keys into chat.</div>
+      <div class="trust-note"><strong>Connect up to five companies.</strong> Existing linked companies are kept. If you upload a CSV, it is used instead of the manual entries.</div>
+    </div>
+    <form method="post" action="/connect/sso/complete" enctype="multipart/form-data">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}">
+      <div class="connect-layout">
+        <div class="section">
+          <p class="section-title">Manual connection</p>
+          <p class="section-hint">Enter each company name and its Big Red Cloud API key.</p>
+          ${rows}
+          <button class="btn-secondary" type="button" id="add-company" hidden>+ Add another company</button>
+        </div>
+        <div class="divider connect-divider">or</div>
+        <div class="section">
+          <p class="section-title">Upload companies from CSV</p>
+          <p class="section-hint">Use the format below, with up to five companies. Maximum file size: 1 MB. The file is processed when you select Connect companies.</p>
+          <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+          <label for="companyFile">CSV file</label>
+          <input id="companyFile" name="companyFile" type="file" accept=".csv,text/csv">
+        </div>
+      </div>
+      <button class="btn-primary" type="submit">Connect companies</button>
+    </form>
+    <div class="next-step">When you finish, return to Microsoft Copilot and retry your question.</div>
+  </div>`, `<style>#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; }</style><script>
+(function () {
+  var rows = document.querySelectorAll('.company-entry');
+  var gaps = document.querySelectorAll('.company-gap');
+  var button = document.getElementById('add-company');
+  var count = 1;
+  rows.forEach(function (row, i) { row.hidden = i > 0; });
+  gaps.forEach(function (gap) { gap.hidden = true; });
+  button.hidden = false;
+  button.addEventListener('click', function () {
+    if (count >= rows.length) return;
+    gaps[count - 1].hidden = false;
+    rows[count].hidden = false;
+    rows[count].querySelector('input').focus();
+    count++;
+    button.hidden = count === rows.length;
+  });
+})();
+</script>`);
+}
+
+export function renderSsoErrorPage(message = "Sign-in or connection link is invalid, expired, or already used. Use the same Microsoft account as Copilot and request a new connection link."): string {
+  return pageShell("Connection not completed — Red", brandBar(), `<div class="card">
+    <div class="status-icon error" aria-hidden="true">✕</div>
+    <h2>Connection not completed</h2>
+    <p class="error-message" role="alert">${escapeHtml(message)}</p>
+    <div class="next-step">Return to Microsoft Copilot and ask RED to start a new company connection.</div>
+  </div>`);
+}
+
+export function renderSsoSuccessPage(names: string[], failedCount: number): string {
+  return pageShell("Companies connected — Red", brandBar(), `<div class="card">
+    <div class="status-icon success" aria-hidden="true">✓</div>
+    <h2>Companies connected</h2>
+    <p class="centered">RED is now connected to the following Big Red Cloud companies:</p>
+    <ul class="company-list">${names.map(name => `<li>${escapeHtml(name)}</li>`).join("")}</ul>
+    ${failedCount ? `<p class="error-message" role="alert">${failedCount} ${failedCount === 1 ? "company could" : "companies could"} not be connected. Check the company details and API keys, then request a new connection link for those companies.</p>` : ""}
+    <div class="next-step">Return to Microsoft Copilot and retry your question.</div>
+  </div>`);
 }
