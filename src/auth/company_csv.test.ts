@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCompanyCsv, COMPANY_CSV_MAX_BYTES, CompanyInputError } from "./company_csv.js";
-import { renderConnectPage, renderSsoSignInPage, renderSsoSuccessPage, renderSsoErrorPage } from "./connection_page.js";
+import { renderConnectPage, renderSsoSignInPage, renderSsoResultPage, renderSsoErrorPage } from "./connection_page.js";
 
 test("normal form keeps the anonymous code and CSV contract; SSO uses only CSRF", () => {
   const normal = renderConnectPage("legacy-code");
@@ -53,12 +53,33 @@ test("strict CSV enforces size and company limits and accepts UTF-8 BOM", () => 
   assert.deepEqual(parseCompanyCsv(Buffer.from("\ufeffcompanyName,apiKey\nA,secret"), true), [{ companyName: "A", apiKey: "secret" }]);
 });
 test("SSO output escapes names and has no internal identifiers or credential inputs", () => {
-  const html = renderSsoSuccessPage(['<script>alert("x")</script>'], 1);
+  const html = renderSsoResultPage(['<script>alert("x")</script>'], ['<img onerror=alert(1)>']);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>|apiKey|csrfToken|tenantId|objectId|connectionId|req_/);
   assert.match(html, /Return to Microsoft Copilot and retry your question/);
-  assert.match(html, /1 company could not be connected/);
+  assert.match(html, /&lt;img onerror=alert\(1\)&gt;/);
+  assert.match(html, /request a new connection link to try again/);
   assert.match(renderSsoErrorPage("<img>"), /&lt;img&gt;/);
   assert.match(renderSsoSignInPage(""), /id="sign-in" disabled/);
   assert.match(renderSsoErrorPage(), /class="brand-bar"/);
+});
+
+for (const [label, names, failed] of [
+  ["all success", ["Connected A", "Connected B"], []],
+  ["partial success", ["Connected A"], ["Failed B"]],
+  ["all failed", [], ["Failed A", "Failed B"]],
+] as const) test(`SSO result: ${label}`, () => {
+  const html = renderSsoResultPage([...names], [...failed]);
+  for (const name of [...names, ...failed]) assert.ok(html.includes(name));
+  assert.doesNotMatch(html, /tenantId|objectId|connectionId|req_|csrfToken|HTTP|stack/);
+  assert.match(html, /aria-hidden="true"/);
+  if (names.length) {
+    assert.match(html, /<h2>Companies connected<\/h2>/);
+    assert.match(html, /Return to Microsoft Copilot and retry your question/);
+  } else {
+    assert.match(html, /<h2>Companies could not be connected<\/h2>/);
+    assert.doesNotMatch(html, /Companies connected|RED is now connected|retry your question/);
+  }
+  if (failed.length) assert.match(html, /request a new connection link to try again/);
+  else assert.doesNotMatch(html, /Could not connect|request a new connection link/);
 });

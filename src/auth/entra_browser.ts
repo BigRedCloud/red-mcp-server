@@ -4,7 +4,7 @@ import { decryptCredentialSecret, encryptCredentialSecret } from "./credential_e
 import { ensureConnectionStoreInitialized, getConnectionStore } from "./connection_store.js";
 import { entraRequestOwner, verifyEntraToken } from "./entra_auth.js";
 import { isPendingRequestHandle, ownerKey, type EntraOwner } from "./entra_store.js";
-import { renderConnectPage, renderSsoSignInPage, renderSsoErrorPage, renderSsoSuccessPage } from "./connection_page.js";
+import { renderConnectPage, renderSsoSignInPage, renderSsoErrorPage, renderSsoResultPage } from "./connection_page.js";
 import multer from "multer";
 import { parseCompanyCsv, CompanyInputError, COMPANY_CSV_MAX_BYTES, SSO_MAX_COMPANIES } from "./company_csv.js";
 
@@ -135,17 +135,17 @@ export function registerEntraBrowserRoutes(app: Express): void {
     if (!await store.checkPendingRequest(session.owner,session.request,true)) throw new Error();
     try {
       const validated = [];
+      const failedNames: string[] = [];
       for (const company of companies) {
         const result = await entraRequestOwner.run(session.owner, () => validateCompanyApiKeyCredential(company.companyName,company.apiKey));
         if (result.valid) validated.push(company);
+        else failedNames.push(company.companyName);
       }
       await store.saveCompanies(session.owner,validated);
       res.setHeader("Set-Cookie",`${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=0`);
-      if (!validated.length) {
-        res.status(400).type("html").send(renderSsoErrorPage("No companies were connected because the credentials could not be validated. Check the company details and API keys, then request a new connection link."));
-        return;
-      }
-      res.type("html").send(renderSsoSuccessPage(validated.map(c => c.companyName), companies.length - validated.length));
+      res.status(validated.length ? 200 : 400).type("html").send(
+        renderSsoResultPage(validated.map(c => c.companyName), failedNames)
+      );
     } catch {
       res.status(500).type("html").send(renderSsoErrorPage("RED could not finish connecting your companies. Please request a new connection link and try again."));
     }

@@ -837,13 +837,23 @@ export function renderSsoErrorPage(message = "Sign-in or connection link is inva
   </div>`);
 }
 
-export function renderSsoSuccessPage(names: string[], failedCount: number): string {
-  return pageShell("Companies connected — Red", brandBar(), `<div class="card">
-    <div class="status-icon success" aria-hidden="true">✓</div>
-    <h2>Companies connected</h2>
-    <p class="centered">RED is now connected to the following Big Red Cloud companies:</p>
-    <ul class="company-list">${names.map(name => `<li>${escapeHtml(name)}</li>`).join("")}</ul>
-    ${failedCount ? `<p class="error-message" role="alert">${failedCount} ${failedCount === 1 ? "company could" : "companies could"} not be connected. Check the company details and API keys, then request a new connection link for those companies.</p>` : ""}
-    <div class="next-step">Return to Microsoft Copilot and retry your question.</div>
-  </div>`);
+export function renderSsoResultPage(names: string[], failedNames: string[]): string {
+  const connected = names.length > 0;
+  const title = connected ? "Companies connected" : "Companies could not be connected";
+  const companyList = (companyNames: string[], icon: string) =>
+    `<ul class="company-list sso-result-list">${companyNames.map(name =>
+      `<li><span aria-hidden="true">${icon}</span> ${escapeHtml(name)}</li>`).join("")}</ul>`;
+  const failedSection = failedNames.length ? `
+    <section aria-labelledby="failed-companies">
+      <h3 id="failed-companies">${connected ? "Could not connect:" : "RED could not connect to:"}</h3>
+      ${companyList(failedNames, "✕")}
+      <p class="error-message">Check the ${failedNames.length === 1 ? "company name and API key for the company above" : "company names and API keys for the companies above"}, then return to Microsoft Copilot and request a new connection link to try again.</p>
+    </section>` : "";
+  return pageShell(`${title} — Red`, brandBar(), `<div class="card">
+    <div class="status-icon ${connected ? "success" : "error"}" aria-hidden="true">${connected ? "✓" : "✕"}</div>
+    <h2>${title}</h2>
+    ${connected ? `<p class="centered">RED is now connected to the following Big Red Cloud companies:</p>${companyList(names, "✓")}` : ""}
+    ${failedSection}
+    ${connected ? '<div class="next-step">Return to Microsoft Copilot and retry your question.</div>' : ""}
+  </div>`, '<style>.sso-result-list li::before { content: none; } .sso-result-list li { overflow-wrap: anywhere; }</style>');
 }

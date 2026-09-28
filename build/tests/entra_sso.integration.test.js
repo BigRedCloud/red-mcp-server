@@ -149,7 +149,9 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     await companyPage.goto("https://red.example.test/connect?sso=1");
     assert.equal(await companyPage.locator('.company-entry:visible').count(), 1);
     for (let i = 2; i <= 5; i++) {
-        await companyPage.locator('#add-company').click();
+        await companyPage.locator('#add-company').focus();
+        await companyPage.keyboard.press('Enter');
+        assert.equal(await companyPage.locator(`#companyName-${i - 1}`).evaluate(el => el === document.activeElement), true);
         assert.equal(await companyPage.locator('.company-entry:visible').count(), i);
     }
     assert.equal(await companyPage.locator('#add-company').isVisible(), false);
@@ -176,8 +178,8 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     const submissions = await Promise.all([complete(), complete()]);
     assert.deepEqual(submissions.map(r => r.status).sort(), [200, 401]);
     const successHtml = await submissions.find(r => r.status === 200).text();
-    assert.match(successHtml, /<li>A<\/li>/);
-    assert.match(successHtml, /<li>B<\/li>/);
+    assert.match(successHtml, /<li><span aria-hidden="true">✓<\/span> A<\/li>/);
+    assert.match(successHtml, /<li><span aria-hidden="true">✓<\/span> B<\/li>/);
     assert.match(successHtml, /Return to Microsoft Copilot and retry your question/);
     assert.doesNotMatch(successHtml, /test-only-|req_|tenantId|objectId|connectionId/);
     assert.equal((await fetch(`${base}/connect?sso=1`, { headers: { cookie } })).status, 401);
@@ -291,6 +293,30 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
     for (const secret of [linkToken, token, TEST_USER, TEST_OTHER, "test-only-a", "test-only-b"])
         assert.equal((logs + browserErrors.join("\n")).includes(secret), false);
     assert.equal((await b.callTool({ name: "search_customers", arguments: { query: "" } })).structuredContent?.status, "connection_required");
+    // A fully rejected submission still consumes its link and names each failure safely.
+    const failedNeeded = await b.callTool({ name: "search_customers", arguments: { query: "" } });
+    const failedHandle = new URL(failedNeeded.structuredContent.connectionUrl).searchParams.get("request");
+    const failedCallback = await signIn(true, failedHandle);
+    const failedCookie = failedCallback.headers.get("set-cookie").split(";")[0];
+    const failedPage = await fetch(base + "/connect?sso=1", { headers: { cookie: failedCookie } });
+    const failedCsrf = /name="csrfToken" value="([^"]+)"/.exec(await failedPage.text())[1];
+    const failedForm = new URLSearchParams({ csrfToken: failedCsrf });
+    for (const name of ['Rejected <A>', 'Rejected & B']) {
+        failedForm.append("companyName", name);
+        failedForm.append("apiKey", "invalid-private-credential");
+    }
+    const submitFailed = () => fetch(base + "/connect/sso/complete", { method: "POST", headers: { cookie: failedCookie, origin: "https://red.example.test", "content-type": "application/x-www-form-urlencoded" }, body: failedForm });
+    const failedResponse = await submitFailed();
+    assert.equal(failedResponse.status, 400);
+    const failedHtml = await failedResponse.text();
+    assert.match(failedHtml, /<h2>Companies could not be connected<\/h2>/);
+    assert.match(failedHtml, /Rejected &lt;A&gt;/);
+    assert.match(failedHtml, /Rejected &amp; B/);
+    assert.match(failedHtml, /request a new connection link to try again/);
+    assert.doesNotMatch(failedHtml, /Companies connected|invalid-private-credential|tenantId|objectId|connectionId|req_|<A>/);
+    assert.equal((await submitFailed()).status, 401);
+    assert.equal((await signIn(true, failedHandle)).status, 401);
+    assert.equal(logs.includes("invalid-private-credential"), false);
     const csvNeeded = await b.callTool({ name: "search_customers", arguments: { query: "" } });
     const csvHandle = new URL(csvNeeded.structuredContent.connectionUrl).searchParams.get("request");
     const csvCallback = await signIn(true, csvHandle);
@@ -322,12 +348,16 @@ test("SSO HTTP: verified identity, secure browser linking, multiple companies, p
         assert.doesNotMatch(errorHtml, /csv-secret|ignored-manual-secret|req_|tenantId|objectId/);
         assert.equal((await fetch(base + "/connect?sso=1", { headers: { cookie: csvCookie } })).status, 200, "bad input must not consume the request");
     }
-    const csvComplete = await postCsv('companyName,apiKey\n"CSV <company>",test-only-a\nCSV B,test-only-b');
+    const csvComplete = await postCsv('companyName,apiKey\n"CSV <company>",test-only-a\nCSV B,test-only-b\n"Rejected <CSV>",invalid-private-csv');
     assert.equal(csvComplete.status, 200);
     const csvSuccess = await csvComplete.text();
     assert.match(csvSuccess, /CSV &lt;company&gt;/);
-    assert.match(csvSuccess, /<li>CSV B<\/li>/);
-    assert.doesNotMatch(csvSuccess, /test-only-|ignored-manual|<company>|req_/);
+    assert.match(csvSuccess, /<li><span aria-hidden="true">✓<\/span> CSV B<\/li>/);
+    assert.match(csvSuccess, /Could not connect:/);
+    assert.match(csvSuccess, /Rejected &lt;CSV&gt;/);
+    assert.match(csvSuccess, /request a new connection link to try again/);
+    assert.doesNotMatch(csvSuccess, /test-only-|ignored-manual|invalid-private-csv|<company>|<CSV>|req_|tenantId|objectId|connectionId/);
+    assert.equal(logs.includes("invalid-private-csv"), false);
     assert.equal((await postCsv('companyName,apiKey\nReplay,test-only-a')).status, 401);
     const csvRead = await b.callTool({ name: "search_suppliers", arguments: { query: "", companyName: "CSV B" } });
     assert.equal(csvRead.structuredContent.status, "ok", "CSV companies use the existing owner-bound store");

@@ -1,8 +1,9 @@
-# Copilot Entra SSO proof of concept
+# Copilot company connection and Entra SSO
 
-This revision keeps `/mcp/copilot` and exposes exactly the public
-`brc_copilot_connector_status` and authenticated
-`brc_copilot_list_all_customers`. The main `/mcp` registry is unchanged.
+The current `/mcp/copilot` facade exposes 57 read-only tools. The main `/mcp`
+registry remains unchanged at 159 tools. See [the current catalogue](copilot-read-only-catalogue.md)
+for tool coverage. This document describes company connection and its original
+SSO implementation; historical customer-tool details below are retained as context.
 Nothing in this work deploys code or changes Microsoft configuration.
 
 ## Identity and storage
@@ -41,14 +42,27 @@ uses atomic ETag consumption; wrong users, unknown handles, expired requests
 and replays receive the same generic failure. The browser preserves authorization
 code flow with PKCE, state and nonce. Old secret link records are not exposed in
 URLs or reinterpreted as public requests.
-The credential form uses the existing RED page, with up to five manual company
-entries and no file upload. Encrypted Secure/HttpOnly host-only cookies carry
+The Microsoft-authenticated, owner-bound credential form uses the same RED-branded
+connection experience as other clients, without the normal `/mcp` connection code.
+Users can enter companies manually or upload a CSV, with a maximum of five
+companies per Copilot connection request. CSV uploads are limited to 1 MB and
+processed in memory; the original file is never persisted. The expected columns
+are `companyName,apiKey`; existing supported header aliases remain accepted.
+CSV takes precedence over manual entries and submits directly without a preview.
+Successful and failed companies are shown separately by HTML-escaped company
+name. All-success results direct users back to Microsoft Copilot; partial results
+also identify the failed companies. When every company fails, the heading is
+“Companies could not be connected”. API keys are never redisplayed, and validation
+internals are not included. Once a request is consumed, failed companies require
+a new connection link requested through Microsoft Copilot.
+
+Encrypted Secure/HttpOnly host-only cookies carry
 short-lived flow state; origin and CSRF checks protect submission. Consumption
 happens before BRC validation: failed validation requires a new link.
 Credentials use the existing AES-GCM encoder; SSO refuses its unencrypted memory
 fallback. Multiple links can add/update companies; existing companies are retained.
 
-## Customer results and limits
+## Historical proof-of-concept customer-tool results and limits
 
 The tool accepts only optional `pageSize` (1–50) and `cursor`. It uses the existing
 customer endpoint/query builder and BRC client in a request-local credential map.
@@ -192,7 +206,7 @@ Updated files:
   authenticated customer tool for the current profile.
 - `src/auth/connection_store_types.ts`, `src/auth/memory_connection_store.ts`,
   `src/auth/cosmos_connection_store.ts`: additive owner-store integration.
-- `src/auth/connection_page.ts`: SSO manual-entry form within the existing page.
+- `src/auth/connection_page.ts`: RED-branded SSO manual/CSV entry and named connection results.
 - `src/auth/credential_validation.ts`, `src/shared.ts`: suppress credential
   debugging/raw BRC errors in the SSO request context only.
 - `src/tools/general/list_tools.ts`: reuse customer endpoint, query builder and
