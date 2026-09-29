@@ -1,41 +1,71 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createRemoteJWKSet, customFetch, decodeJwt, jwtVerify } from "jose";
+import { decodeJwt, decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 export class EntraAuthError extends Error {
     constructor() { super("Microsoft sign-in is required or the token is not valid."); }
 }
 const csv = (value) => (value ?? "").split(",").map(s => s.trim()).filter(Boolean);
+const TENANT_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+const ISSUER_TEMPLATE = "https://login.microsoftonline.com/{tenantid}/v2.0";
+const ORGANIZATIONS_METADATA = "https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration";
+const expectedIssuer = (tenantId) => `https://login.microsoftonline.com/${tenantId}/v2.0`;
+const resolvedJwkIssuer = (issuer, tenantId) => issuer.includes("{tenantid}") ? issuer.replaceAll("{tenantid}", tenantId) : issuer;
 export function entraConfig() {
-    return { tenants: csv(process.env.RED_ENTRA_ALLOWED_TENANTS).map(t => t.toLowerCase()), audiences: csv(process.env.RED_ENTRA_AUDIENCES),
+    return { audiences: csv(process.env.RED_ENTRA_AUDIENCES),
         scope: process.env.RED_ENTRA_REQUIRED_SCOPE?.trim() || "access_as_user", clients: csv(process.env.RED_ENTRA_ALLOWED_CLIENTS) };
 }
 export function createEntraVerifier(config, fetcher = fetch) {
-    const discoveries = new Map();
+    let discovery;
     return async (token, idToken) => {
         try {
-            if (!token || token.length > 16_384 || !config.tenants.length || !config.audiences.length)
+            if (!token || token.length > 16_384 || !config.audiences.length)
                 throw new EntraAuthError();
             const unverified = decodeJwt(token);
             const tid = unverified.tid;
-            if (typeof tid !== "string" || !/^[0-9a-f-]{36}$/i.test(tid) || !config.tenants.includes(tid.toLowerCase()))
+            if (typeof tid !== "string" || !TENANT_GUID.test(tid))
                 throw new EntraAuthError();
-            const issuer = `https://login.microsoftonline.com/${tid}/v2.0`;
-            let discovery = discoveries.get(tid);
+            const tenantId = tid.toLowerCase();
+            if (tenantId === CONSUMER_TENANT)
+                throw new EntraAuthError();
+            const header = decodeProtectedHeader(token);
+            if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid)
+                throw new EntraAuthError();
             if (!discovery || discovery.until < Date.now()) {
-                const response = await fetcher(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(10_000), redirect: "error" });
+                const response = await fetcher(ORGANIZATIONS_METADATA, { signal: AbortSignal.timeout(10_000), redirect: "error" });
                 if (!response.ok)
                     throw new EntraAuthError();
                 const metadata = await response.json();
-                if (metadata.issuer !== issuer || !metadata.jwks_uri)
+                if (metadata.issuer !== ISSUER_TEMPLATE || !metadata.jwks_uri)
                     throw new EntraAuthError();
                 const url = new URL(metadata.jwks_uri);
                 if (url.protocol !== "https:" || url.hostname !== "login.microsoftonline.com" || url.username || url.password)
                     throw new EntraAuthError();
-                discovery = { until: Date.now() + 3600_000, keys: createRemoteJWKSet(url, { [customFetch]: fetcher, timeoutDuration: 10_000 }) };
-                discoveries.set(tid, discovery);
+                const jwksResponse = await fetcher(url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
+                if (!jwksResponse.ok)
+                    throw new EntraAuthError();
+                const jwks = await jwksResponse.json();
+                if (!Array.isArray(jwks.keys))
+                    throw new EntraAuthError();
+                discovery = { until: Date.now() + 3600_000, keys: jwks.keys };
             }
-            const { payload } = await jwtVerify(token, discovery.keys, { algorithms: ["RS256"], issuer,
+            const matches = discovery.keys.filter(key => key.kid === header.kid && (key.alg === undefined || key.alg === "RS256") && (key.use === undefined || key.use === "sig"));
+            if (matches.length !== 1)
+                throw new EntraAuthError();
+            const published = matches[0];
+            if (typeof published.issuer !== "string" || !published.issuer)
+                throw new EntraAuthError();
+            const issuer = expectedIssuer(tenantId);
+            const keyIssuer = resolvedJwkIssuer(published.issuer, tenantId);
+            if (keyIssuer !== issuer)
+                throw new EntraAuthError();
+            const signing = { ...published };
+            delete signing.issuer;
+            const key = await importJWK(signing, "RS256");
+            const { payload } = await jwtVerify(token, key, { algorithms: ["RS256"], issuer,
                 audience: idToken?.audience ?? config.audiences, requiredClaims: ["exp", "nbf", "iat", "tid", "oid", "sub"], clockTolerance: 0 });
-            if (payload.tid !== tid || typeof payload.oid !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.oid))
+            if (payload.iss !== keyIssuer || typeof payload.tid !== "string" || payload.tid.toLowerCase() !== tenantId)
+                throw new EntraAuthError();
+            if (typeof payload.oid !== "string" || !TENANT_GUID.test(payload.oid))
                 throw new EntraAuthError();
             if (idToken) {
                 if (!idToken.nonce || payload.nonce !== idToken.nonce)
@@ -47,7 +77,7 @@ export function createEntraVerifier(config, fetcher = fetch) {
                 if (config.clients.length && (typeof payload.azp !== "string" || !config.clients.includes(payload.azp)))
                     throw new EntraAuthError();
             }
-            return { tenantId: tid.toLowerCase(), objectId: payload.oid.toLowerCase() };
+            return { tenantId, objectId: payload.oid.toLowerCase() };
         }
         catch {
             throw new EntraAuthError();

@@ -9,10 +9,18 @@ Nothing in this work deploys code or changes Microsoft configuration.
 ## Identity and storage
 
 Every customer-tool HTTP call verifies its own bearer token with `jose`.
-Only RS256, configured tenants/audiences, the exact tenant-specific v2 issuer,
-valid time claims, a GUID `tid`/`oid`, and a delegated scope are accepted.
-App-only tokens are rejected. An optional authorized-client allowlist checks `azp`.
-Discovery/JWKS are obtained from Microsoft over HTTPS and cached with key rotation.
+Only RS256 is accepted. `tid` must be a canonical tenant GUID and must not be
+the Microsoft personal-account tenant. Discovery uses the tenant-independent
+`/organizations` v2 metadata. That document's issuer must be the
+`https://login.microsoftonline.com/{tenantid}/v2.0` template, and the token
+`iss` must equal `https://login.microsoftonline.com/<tid>/v2.0` exactly. The
+JWK selected by `kid` must publish an `issuer`. A `{tenantid}` placeholder in
+that issuer is resolved with the validated `tid`; a tenant-specific value is
+used as published. Either result must equal `iss`. A key with a missing or
+different issuer is rejected. Configured audiences, valid time claims, a GUID
+`oid`, and delegated `access_as_user` are required. App-only tokens are
+rejected. An optional authorized-client allowlist checks `azp`. Signing keys
+are obtained from Microsoft over HTTPS and cached.
 Identity headers, MCP session IDs, connection references and cookies cannot
 authorize accounting calls. No Microsoft tokens are persisted.
 
@@ -98,13 +106,13 @@ changes during pagination can still affect results.
 
 ## Manual staging configuration
 
-Decide the allowed pilot tenant(s), API app ID, browser app ID, public staging
-origin and authorized Microsoft caller IDs. Values below are placeholders.
+Decide the API app ID, browser app ID, public staging origin and authorized
+Microsoft caller IDs. Values below are placeholders.
 Configure only staging; this document is not authorization to modify production.
 
 1. In Entra register the API application and expose delegated `access_as_user`.
-   Set `api.requestedAccessTokenVersion` to `2`. Use organizational accounts,
-   not personal Microsoft accounts. Use a tenant allowlist even with multitenancy.
+   Set `api.requestedAccessTokenVersion` to `2`. Use organizational accounts
+   in any Microsoft Entra directory. Do not enable personal Microsoft accounts.
 2. In Teams Developer Portal, Tools → Microsoft Entra SSO client ID registration,
    register the API client ID, existing MCP URL, organization/app restrictions,
    and delegated scope. Copy its SSO registration ID and generated Application
@@ -125,11 +133,13 @@ Configure only staging; this document is not authorization to modify production.
    Do not enable implicit grants. Store its client secret through staging secret
    configuration/Key Vault references, never in source. This implementation uses
    the `organizations` authority: configure the browser app for organizational
-   multi-tenant sign-in and restrict admitted tenants in server configuration.
+   multi-tenant sign-in. RED admits any organisational tenant GUID and rejects
+   the Microsoft personal-account tenant.
    It requests only `openid profile`, with no Graph or offline-access permission.
-5. For eventual cross-tenant distribution, use organizational multi-tenant app
-   registrations and explicit tenant onboarding. A single-tenant API can serve
-   an initial single-tenant pilot, but not general customer distribution.
+5. For cross-tenant distribution, keep the organizational multi-tenant app
+   registrations. RED does not keep a tenant allowlist. Customer administrators
+   must still consent where their tenant requires it. A single-tenant API
+   registration cannot serve general customer distribution.
    Tenant administrators must approve scope consent where admin-only scope or
    tenant user-consent policy requires it; connector setup also requires the
    appropriate Microsoft 365/Entra administrative roles. Plan customer-tenant
@@ -139,7 +149,6 @@ Set these Azure staging environment variables:
 
 | Variable | Value |
 | --- | --- |
-| `RED_ENTRA_ALLOWED_TENANTS` | `<pilot-tenant-guid>[,<approved-customer-tenant-guid>]` |
 | `RED_ENTRA_AUDIENCES` | `<API-client-id>,<Teams-generated-application-ID-URI>`; explicit accepted audiences only |
 | `RED_ENTRA_REQUIRED_SCOPE` | `access_as_user` (scope claim value, not full URI) |
 | `RED_ENTRA_ALLOWED_CLIENTS` | `<authorized-Microsoft-client-id>[,...]`; optional additional restriction |
@@ -151,7 +160,8 @@ Set these Azure staging environment variables:
 | `RED_CONNECT_COSMOS_DATABASE` / `RED_CONNECT_COSMOS_CONTAINER` | existing staging database/container |
 | `RED_CONNECT_ENCRYPTION_KEY` | secure existing encryption material; shared across instances |
 
-No BRC company credentials belong in these settings. Missing Entra configuration
+Remove `RED_ENTRA_ALLOWED_TENANTS` if it is still set. RED no longer reads it.
+No BRC company credentials belong in these settings. Missing audience configuration
 fails closed for customers while the status tool remains public. Configure HTTPS
 at the public ingress; do not configure Easy Auth to redirect anonymous MCP
 status/initialize calls. The application does not trust Easy Auth identity headers.

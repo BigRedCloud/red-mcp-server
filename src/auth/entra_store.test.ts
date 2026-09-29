@@ -53,6 +53,12 @@ for(const kind of ["memory","cosmos"] as const) test(`${kind}: unique Entra owne
   assert.equal(decodeStoredApiKey(found[0].encryptedSecret),"test-only-A");
   assert.deepEqual(await store.listCompanies(b),[]);
   await assert.rejects(store.saveCompanies(b,companies));
+  const sameOidOtherTenant={tenantId:randomUUID(),objectId:a.objectId};
+  assert.notEqual(ownerKey(a),ownerKey(sameOidOtherTenant));
+  assert.deepEqual(await store.listCompanies(sameOidOtherTenant),[]);
+  await assert.rejects(store.saveCompanies(sameOidOtherTenant,companies));
+  assert.equal(await store.removeCompany(sameOidOtherTenant,"A"),false);
+  assert.deepEqual((await store.listCompanies(a)).map(c=>c.companyName),["A","B"]);
   const legacy=implementation;
   await legacy.saveConnectedCompanies("anonymous-test",companies);
   assert.equal((await legacy.listConnectedCompanies("anonymous-test")).length,2);

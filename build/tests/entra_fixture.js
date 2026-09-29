@@ -7,8 +7,8 @@ export async function createEntraFixture() {
     const keys = await generateKeyPair("RS256", { extractable: true });
     const jwk = await exportJWK(keys.privateKey);
     return {
-        env: { NODE_OPTIONS: "--import=./build/tests/entra_mock_server.js", RED_ENTRA_TEST_PRIVATE_JWK: JSON.stringify(jwk), RED_ENTRA_ALLOWED_TENANTS: TEST_TENANT, RED_ENTRA_AUDIENCES: "test-api", RED_ENTRA_REQUIRED_SCOPE: "access_as_user", RED_ENTRA_ALLOWED_CLIENTS: "test-client", RED_ENTRA_PUBLIC_BASE_URL: "https://red.example.test", RED_ENTRA_WEB_CLIENT_ID: "test-web", RED_ENTRA_WEB_CLIENT_SECRET: "test-only-web-secret", RED_CONNECT_ENCRYPTION_KEY: randomBytes(32).toString("base64"), RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG: "false" },
-        token: (oid = TEST_USER) => signFixtureJwt(jwk, { oid }),
+        env: { NODE_OPTIONS: "--import=./build/tests/entra_mock_server.js", RED_ENTRA_TEST_PRIVATE_JWK: JSON.stringify(jwk), RED_ENTRA_AUDIENCES: "test-api", RED_ENTRA_REQUIRED_SCOPE: "access_as_user", RED_ENTRA_ALLOWED_CLIENTS: "test-client", RED_ENTRA_PUBLIC_BASE_URL: "https://red.example.test", RED_ENTRA_WEB_CLIENT_ID: "test-web", RED_ENTRA_WEB_CLIENT_SECRET: "test-only-web-secret", RED_CONNECT_ENCRYPTION_KEY: randomBytes(32).toString("base64"), RED_CONNECT_CREDENTIAL_VALIDATION_DEBUG: "false" },
+        token: (oid = TEST_USER, tid = TEST_TENANT) => signFixtureJwt(jwk, { oid, sub: oid, tid, iss: `https://login.microsoftonline.com/${tid}/v2.0` }),
     };
 }
 export async function signFixtureJwt(jwk, claims = {}) {

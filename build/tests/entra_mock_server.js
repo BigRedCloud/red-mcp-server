@@ -1,5 +1,5 @@
 // Explicit test/demo preload only. Production never imports this module.
-import { TEST_TENANT, TEST_USER, TEST_OTHER, signFixtureJwt } from "./entra_fixture.js";
+import { TEST_USER, TEST_OTHER, signFixtureJwt } from "./entra_fixture.js";
 const jwk = JSON.parse(process.env.RED_ENTRA_TEST_PRIVATE_JWK ?? "null");
 if (!jwk)
     throw new Error("Test fixture key required.");
@@ -8,9 +8,9 @@ globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "login.microsoftonline.com") {
         if (url.pathname.endsWith("openid-configuration"))
-            return json({ issuer: `https://login.microsoftonline.com/${TEST_TENANT}/v2.0`, jwks_uri: `https://login.microsoftonline.com/${TEST_TENANT}/discovery/v2.0/keys` });
+            return json({ issuer: "https://login.microsoftonline.com/{tenantid}/v2.0", jwks_uri: "https://login.microsoftonline.com/organizations/discovery/v2.0/keys" });
         if (url.pathname.endsWith("/keys"))
-            return json({ keys: [{ kty: jwk.kty, n: jwk.n, e: jwk.e, kid: "test", alg: "RS256", use: "sig" }] });
+            return json({ keys: [{ kty: jwk.kty, n: jwk.n, e: jwk.e, kid: "test", alg: "RS256", use: "sig", issuer: "https://login.microsoftonline.com/{tenantid}/v2.0" }] });
         if (url.pathname.endsWith("/token")) {
             const params = new URLSearchParams(String(init?.body));
             const code = params.get("code") ?? "";
