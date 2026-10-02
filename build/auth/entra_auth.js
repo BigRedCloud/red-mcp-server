@@ -16,6 +16,31 @@ export function entraConfig() {
 }
 export function createEntraVerifier(config, fetcher = fetch) {
     let discovery;
+    let refreshing;
+    let nextUnknownRefresh = 0;
+    const refresh = () => {
+        if (refreshing)
+            return refreshing;
+        refreshing = (async () => {
+            const response = await fetcher(ORGANIZATIONS_METADATA, { signal: AbortSignal.timeout(10_000), redirect: "error" });
+            if (!response.ok)
+                throw new EntraAuthError();
+            const metadata = await response.json();
+            if (metadata.issuer !== ISSUER_TEMPLATE || !metadata.jwks_uri)
+                throw new EntraAuthError();
+            const url = new URL(metadata.jwks_uri);
+            if (url.protocol !== "https:" || url.hostname !== "login.microsoftonline.com" || url.username || url.password)
+                throw new EntraAuthError();
+            const jwksResponse = await fetcher(url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
+            if (!jwksResponse.ok)
+                throw new EntraAuthError();
+            const jwks = await jwksResponse.json();
+            if (!Array.isArray(jwks.keys))
+                throw new EntraAuthError();
+            discovery = { until: Date.now() + 3600_000, keys: jwks.keys };
+        })().finally(() => { refreshing = undefined; });
+        return refreshing;
+    };
     return async (token, idToken) => {
         try {
             if (!token || token.length > 16_384 || !config.audiences.length)
@@ -30,23 +55,16 @@ export function createEntraVerifier(config, fetcher = fetch) {
             const header = decodeProtectedHeader(token);
             if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid)
                 throw new EntraAuthError();
-            if (!discovery || discovery.until < Date.now()) {
-                const response = await fetcher(ORGANIZATIONS_METADATA, { signal: AbortSignal.timeout(10_000), redirect: "error" });
-                if (!response.ok)
-                    throw new EntraAuthError();
-                const metadata = await response.json();
-                if (metadata.issuer !== ISSUER_TEMPLATE || !metadata.jwks_uri)
-                    throw new EntraAuthError();
-                const url = new URL(metadata.jwks_uri);
-                if (url.protocol !== "https:" || url.hostname !== "login.microsoftonline.com" || url.username || url.password)
-                    throw new EntraAuthError();
-                const jwksResponse = await fetcher(url, { signal: AbortSignal.timeout(10_000), redirect: "error" });
-                if (!jwksResponse.ok)
-                    throw new EntraAuthError();
-                const jwks = await jwksResponse.json();
-                if (!Array.isArray(jwks.keys))
-                    throw new EntraAuthError();
-                discovery = { until: Date.now() + 3600_000, keys: jwks.keys };
+            const wasCached = Boolean(discovery && discovery.until >= Date.now());
+            if (!wasCached)
+                await refresh();
+            if (wasCached && !discovery.keys.some(key => key.kid === header.kid)) {
+                if (refreshing)
+                    await refreshing;
+                else if (Date.now() >= nextUnknownRefresh) {
+                    nextUnknownRefresh = Date.now() + 30_000;
+                    await refresh();
+                }
             }
             const matches = discovery.keys.filter(key => key.kid === header.kid && (key.alg === undefined || key.alg === "RS256") && (key.use === undefined || key.use === "sig"));
             if (matches.length !== 1)

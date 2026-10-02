@@ -9,9 +9,6 @@ import { requiresRouteToken } from "../routing/route-token.js";
 import { COPILOT_INSTRUCTIONS } from "../copilot_diagnostic.js";
 import { getBrcMcpServerInstructions } from "../config/mcp_config.js";
 import { getMaxBatchItems } from "../config/server_config.js";
-import {
-  COPILOT_FULL_TOOL_ALLOWLIST,
-} from "../tool_profiles.js";
 import { getFreePort, startHttpTestServer } from "./http_test_server.js";
 
 async function connectClient(t: TestContext, endpoint: URL) {
@@ -24,7 +21,7 @@ async function connectClient(t: TestContext, endpoint: URL) {
   return { client, transport };
 }
 
-test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot catalogues", async (t) => {
+test("HTTP MCP paths expose isolated normal and read-only Copilot catalogues", async (t) => {
   const port = await getFreePort();
   await startHttpTestServer(
     t,
@@ -36,28 +33,23 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
   const [
     { client: fullClient, transport: fullTransport },
     { client: diagnosticClient, transport: diagnosticTransport },
-    { client: copilotFullClient, transport: copilotFullTransport },
   ] =
     await Promise.all([
       connectClient(t, new URL(`http://127.0.0.1:${port}/mcp`)),
       connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot`)),
-      connectClient(t, new URL(`http://127.0.0.1:${port}/mcp/copilot-full`)),
     ]);
 
-  const [fullResponse, diagnosticResponse, copilotFullResponse] = await Promise.all([
+  const [fullResponse, diagnosticResponse] = await Promise.all([
     fullClient.listTools(),
     diagnosticClient.listTools(),
-    copilotFullClient.listTools(),
   ]);
   const fullNames: string[] = fullResponse.tools.map((tool) => tool.name).sort();
   const diagnosticNames = diagnosticResponse.tools.map((tool) => tool.name).sort();
-  const copilotFullNames = copilotFullResponse.tools.map((tool) => tool.name).sort();
   const routeToolName: string = "brc_route_request";
 
   assert.equal(fullNames.length, 159);
   assert.equal(new Set(fullNames).size, 159);
   assert.equal(fullClient.getInstructions(), getBrcMcpServerInstructions(getMaxBatchItems(), false));
-  assert.equal(copilotFullClient.getInstructions(), fullClient.getInstructions());
   const instructions = diagnosticClient.getInstructions();
   assert.equal(instructions, COPILOT_INSTRUCTIONS);
   assert.ok(instructions && instructions.length < 1000);
@@ -79,7 +71,6 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
   assert.deepEqual(Object.keys(fetchCustomer.inputSchema.properties ?? {}), ["customerId", "companyName"]);
   assert.deepEqual(fetchCustomer.inputSchema.required, ["customerId", "companyName"]);
   for (const tool of diagnosticResponse.tools) assert.equal(tool.inputSchema.additionalProperties, false);
-  assert.equal(copilotFullNames.length, 158);
   assert.ok(fullNames.includes(routeToolName));
   for (const name of [
     "brc_start_company_connection",
@@ -96,32 +87,13 @@ test("HTTP MCP paths expose isolated full, diagnostic, and router-free Copilot c
     assert.equal(tool.annotations?.openWorldHint, false, tool.name);
   }
   assert.equal(diagnosticNames.includes(routeToolName), false);
-  assert.equal(copilotFullNames.includes(routeToolName), false);
-  assert.ok(
-    fullNames
-      .filter(requiresRouteToken)
-      .every((name) => copilotFullNames.includes(name)),
-  );
-  assert.deepEqual(copilotFullNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
-  for (const tool of copilotFullResponse.tools) {
-    assert.equal(
-      Object.hasOwn(tool.inputSchema.properties ?? {}, "routeToken"),
-      false,
-      tool.name,
-    );
+  for (const tool of fullResponse.tools.filter(tool => requiresRouteToken(tool.name))) {
+    assert.ok(Object.hasOwn(tool.inputSchema.properties ?? {}, "routeToken"), tool.name);
   }
 
-  const excludedCall = await copilotFullClient.callTool({
-    name: "brc_route_request",
-    arguments: { message: "test" },
-  });
-  assert.equal(excludedCall.isError, true);
-  assert.match(JSON.stringify(excludedCall.content), /not found|unknown tool/i);
-
   for (const [transport, otherPath] of [
-    [fullTransport, "/mcp/copilot-full"],
-    [diagnosticTransport, "/mcp/copilot-full"],
-    [copilotFullTransport, "/mcp"],
+    [fullTransport, "/mcp/copilot"],
+    [diagnosticTransport, "/mcp"],
   ] as const) {
     assert.ok(transport.sessionId);
     const crossed = await fetch(`http://127.0.0.1:${port}${otherPath}`, {
@@ -162,4 +134,8 @@ test("unknown MCP profile paths fail closed", async (t) => {
     },
   );
   assert.equal(removedAliasResponse.status, 404);
+  for (const method of ["GET", "POST", "DELETE"]) {
+    const response = await fetch(`http://127.0.0.1:${port}/mcp/copilot-full`, { method });
+    assert.equal(response.status, 404, method);
+  }
 });

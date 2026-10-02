@@ -167,7 +167,7 @@ test("company management is owner-scoped, confirmed, and leaves normal MCP uncha
     assert.equal(otherAdd.status, 200);
     assert.match(connected(await otherAdd.text()), /Foreign Co/);
     assert.doesNotMatch(connected(await page()), /Foreign Co/);
-    const browser = await chromium.launch();
+    const browser = await chromium.launch({ channel: process.platform === "win32" ? "msedge" : undefined, headless: true });
     t.after(() => browser.close());
     const browserPage = await browser.newPage();
     await browserPage.route("**/*", async (route) => {

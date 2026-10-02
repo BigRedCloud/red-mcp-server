@@ -1,265 +1,56 @@
-# Copilot company connection and Entra SSO
+# Microsoft Copilot and Entra sign-in
 
-The current `/mcp/copilot` facade exposes 58 read-only tools. The main `/mcp`
-registry remains unchanged at 159 tools. See [the current catalogue](copilot-read-only-catalogue.md)
-for tool coverage. This document describes company connection and its original
-SSO implementation; historical customer-tool details below are retained as context.
-Nothing in this work deploys code or changes Microsoft configuration.
+This is an optional hosted path for Microsoft 365 Copilot, registered as a [federated connector](https://learn.microsoft.com/en-us/microsoft-365/copilot/connectors/set-up-custom-federated-connectors). ChatGPT, Claude, and Mistral keep using `/mcp` and the connection flow in the [README](../README.md).
 
-## Identity and storage
+`/mcp/copilot` serves a read-only accounting catalogue. Each customer call must present a Microsoft Entra v2 access token. Company API keys are entered on Red's connection page, checked against Big Red Cloud, stored encrypted, and bound to the signed-in Microsoft user. Tokens and API keys are not returned to Copilot and must not be pasted into chat.
 
-Every customer-tool HTTP call verifies its own bearer token with `jose`.
-Only RS256 is accepted. `tid` must be a canonical tenant GUID and must not be
-the Microsoft personal-account tenant. Discovery uses the tenant-independent
-`/organizations` v2 metadata. That document's issuer must be the
-`https://login.microsoftonline.com/{tenantid}/v2.0` template, and the token
-`iss` must equal `https://login.microsoftonline.com/<tid>/v2.0` exactly. The
-JWK selected by `kid` must publish an `issuer`. A `{tenantid}` placeholder in
-that issuer is resolved with the validated `tid`; a tenant-specific value is
-used as published. Either result must equal `iss`. A key with a missing or
-different issuer is rejected. Configured audiences, valid time claims, a GUID
-`oid`, and delegated `access_as_user` are required. App-only tokens are
-rejected. An optional authorized-client allowlist checks `azp`. Signing keys
-are obtained from Microsoft over HTTPS and cached.
-Identity headers, MCP session IDs, connection references and cookies cannot
-authorize accounting calls. No Microsoft tokens are persisted.
+The read-only limit is a current Microsoft federated connector limitation. Create, update and delete tools stay on `/mcp`. The supported facade does not advertise accounting write tools.
 
-The normalized verified `(tid, oid)` pair is hashed into an owner key. An
-`entra:<owner-key>` partition contains an `entraOwner` record with a random
-connection UUID, legacy `entraLink` records, new `entraPendingRequest` records,
-and encrypted `entraCompany` records.
-The existing Cosmos container's `/pk` partition key and `(pk,id)` uniqueness
-are sufficient: create, never upsert, arbitrates owner creation; link consumption
-uses an ETag `IfMatch` replacement. Memory uses the same ownership service with
-atomic synchronous map operations. Owner records contain no credentials or tokens.
-Existing anonymous `connection:*`, `pending:*`, session/ref/claim records remain
-unchanged. Their records are never searched or migrated into Entra ownership.
+## Operator/self-hosting setup
 
-New connection URLs use `/connect?request=req_<random-handle>`. The handle is
-public, contains 256 random bits and no identity, claims or credentials.
-Its SHA-256 digest identifies a distinct `request:` record, never a legacy
-secret-link record. Possession grants no access: only the verified Microsoft
-owner can resolve it within their partition. Initial GETs perform no lookup,
-reveal no existence information and never consume state; scanners are harmless.
-The query is copied into a hidden POST field and optionally removed from browser
-history. No fragment is required.
+These steps are for operators deploying the server, not customers connecting to Big Red Cloud’s hosted RED service. Use your own HTTPS origin. Values below are placeholders.
 
-The original ten-minute database deadline remains authoritative through sign-in
-and retries. The authenticated cookie is capped to that deadline. Completion
-uses atomic ETag consumption; wrong users, unknown handles, expired requests
-and replays receive the same generic failure. The browser preserves authorization
-code flow with PKCE, state and nonce. Old secret link records are not exposed in
-URLs or reinterpreted as public requests.
-The Microsoft-authenticated, owner-bound credential form uses the same RED-branded
-connection experience as other clients, without the normal `/mcp` connection code.
-Users can enter companies manually or upload a CSV, with a maximum of five
-companies per Copilot connection request. CSV uploads are limited to 1 MB and
-processed in memory; the original file is never persisted. The expected columns
-are `companyName,apiKey`; existing supported header aliases remain accepted.
-CSV takes precedence over manual entries and submits directly without a preview.
-Successful and failed companies are shown separately by HTML-escaped company
-name. All-success results direct users back to Microsoft Copilot; partial results
-also identify the failed companies. When every company fails, the heading is
-“Companies could not be connected”. API keys are never redisplayed, and validation
-internals are not included. Once a request is consumed, failed companies require
-a new connection link requested through Microsoft Copilot.
+1. In Entra, register an API application and expose the delegated scope `<delegated-scope-name>`. Set `RED_ENTRA_REQUIRED_SCOPE` to match that scope. Set the access token version to v2. Allow organisational accounts only.
+2. In the Teams Developer Portal, register that API for Microsoft Entra SSO and point the connector at `https://<your-host>/mcp/copilot`. Add the generated Application ID URI to the API app. Preauthorize Microsoft's documented token-store client for the delegated scope, and add the Web redirect `https://teams.microsoft.com/api/platform/v1.0/oAuthConsentRedirect`.
+3. Register a confidential web app for the connection page. Set its redirect to `https://<your-host>/connect/sso/callback` and allow the authorization code flow only. Store the client secret in your secret store, not in source. The app should allow organisational sign-in. Red requests `openid profile` only.
+4. If customers in other Microsoft tenants will connect, keep the apps multi-tenant. Red does not keep a tenant allowlist. Each customer's administrators must consent where that tenant requires it. Personal Microsoft accounts are rejected.
 
-Encrypted Secure/HttpOnly host-only cookies carry
-short-lived flow state; origin and CSRF checks protect submission. Consumption
-happens before BRC validation: failed validation requires a new link.
-Credentials use the existing AES-GCM encoder; SSO refuses its unencrypted memory
-fallback. Multiple links can add/update companies; existing companies are retained.
+Microsoft's current guides:
 
-## Returning-user company management
+- [Plugin authentication with Entra SSO](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-authentication-entra-sso)
+- [Custom federated connectors](https://learn.microsoft.com/en-us/microsoft-365/copilot/connectors/set-up-custom-federated-connectors)
 
-A user who already has a linked company can ask Copilot to connect another company, manage companies, change an API key, or disconnect a company. Copilot should call the read-only tool `get_company_management_link`. That tool does not accept an API key and does not connect, update, or disconnect anything. It returns a stable `https://<red-host>/manage-companies` URL plus the signed-in owner's company names. It does not return API keys, encrypted secrets, tenant IDs, object IDs, or storage identifiers.
+## Environment variables
 
-Opening the URL does not authorize access. The browser repeats the existing Entra authorization-code flow with PKCE, state, and nonce, using the same `/connect/sso/callback` redirect. After sign-in, RED resolves the verified Microsoft owner and loads only that owner's companies. The management session is a separate short-lived HttpOnly cookie. The URL has no identity claims.
+These are operator/self-hosting settings. Customers using Big Red Cloud's hosted RED connector do not supply its Azure or Entra secrets. The canonical [environment-variable reference](environment-variables.md#microsoft-365--entra-authentication) describes all deployment settings, formats, aliases and required conditions. The list below is a quick setup summary; its descriptions do not prescribe production values.
 
-From that page the user can:
-
-- see the companies currently linked, or a message that none are connected
-- add companies manually or by CSV, up to five companies and 1 MB per submission
-- replace a company by submitting the same name with a new valid API key; other linked companies stay, and the previous key remains if the new one fails validation
-- disconnect one company at a time after a confirmation POST
-- disconnect the final company
-
-Disconnect requires the verified owner, same-origin POST, and the session CSRF token. The first POST only asks for confirmation. GET never disconnects. A confirmed disconnect deletes only that company in the caller's partition. After the last company is removed, an accounting question uses the existing connection-required link again. A brand-new user can still reach that link by asking an accounting question; the management tool is an additional entry point, not a replacement.
-
-## Historical proof-of-concept customer-tool results and limits
-
-The tool accepts only optional `pageSize` (1–50) and `cursor`. It uses the existing
-customer endpoint/query builder and BRC client in a request-local credential map.
-Each call makes at most three page requests, each with a 15-second timeout.
-Each company-page payload is capped at 128 KB; an oversized page is reported
-as a company failure rather than truncated. An encrypted ten-minute continuation
-cursor binds owner, company snapshot, page and page size. A full page always
-requires another page check; no row is silently dropped. A changed company
-snapshot invalidates the cursor and requires restarting. The result has company
-groups and explicit per-company failure entries; later companies still proceed.
-The public result projects common customer identity/contact/balance fields from
-the existing response, strips secret fields and credential values, and rejects
-oversized/unrecognized pages with an explicit company failure. It does not return
-raw BRC errors, internal connection IDs, Entra IDs, or credential metadata.
-Results are bounded by pages, not a consistent BRC database snapshot: source
-changes during pagination can still affect results.
-
-## Manual staging configuration
-
-Decide the API app ID, browser app ID, public staging origin and authorized
-Microsoft caller IDs. Values below are placeholders.
-Configure only staging; this document is not authorization to modify production.
-
-1. In Entra register the API application and expose delegated `access_as_user`.
-   Set `api.requestedAccessTokenVersion` to `2`. Use organizational accounts
-   in any Microsoft Entra directory. Do not enable personal Microsoft accounts.
-2. In Teams Developer Portal, Tools → Microsoft Entra SSO client ID registration,
-   register the API client ID, existing MCP URL, organization/app restrictions,
-   and delegated scope. Copy its SSO registration ID and generated Application
-   ID URI. Add that URI to the API app's `identifierUris`; preauthorize the
-   Microsoft Enterprise token-store client for the delegated scope. Add the Web
-   redirect `https://teams.microsoft.com/api/platform/v1.0/oAuthConsentRedirect`.
-   Use the current Microsoft-documented token-store client ID when setting the
-   optional caller allowlist; do not invent a tenant-specific ID.
-   [Microsoft SSO setup](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-authentication-entra-sso)
-3. In the existing federated connector, select Microsoft Entra SSO and supply
-   the Teams SSO registration ID. Keep
-   `https://brc-live-mcp-app-staging.azurewebsites.net/mcp/copilot` as the endpoint.
-   Restrict rollout to pilot users. No new connector or MCP route is needed.
-   [Federated connector configuration](https://learn.microsoft.com/en-us/microsoft-365/copilot/connectors/set-up-custom-federated-connectors)
-4. Register a confidential Web app for the connection page (or deliberately use
-   the same registration). Set its exact redirect to
-   `https://<staging-host>/connect/sso/callback`; allow authorization code flow.
-   Do not enable implicit grants. Store its client secret through staging secret
-   configuration/Key Vault references, never in source. This implementation uses
-   the `organizations` authority: configure the browser app for organizational
-   multi-tenant sign-in. RED admits any organisational tenant GUID and rejects
-   the Microsoft personal-account tenant.
-   It requests only `openid profile`, with no Graph or offline-access permission.
-5. For cross-tenant distribution, keep the organizational multi-tenant app
-   registrations. RED does not keep a tenant allowlist. Customer administrators
-   must still consent where their tenant requires it. A single-tenant API
-   registration cannot serve general customer distribution.
-   Tenant administrators must approve scope consent where admin-only scope or
-   tenant user-consent policy requires it; connector setup also requires the
-   appropriate Microsoft 365/Entra administrative roles. Plan customer-tenant
-   consent before rollout. [Account types](https://learn.microsoft.com/en-us/entra/identity-platform/single-and-multi-tenant-apps)
-
-Set these Azure staging environment variables:
-
-| Variable | Value |
+| Variable | Purpose |
 | --- | --- |
-| `RED_ENTRA_AUDIENCES` | `<API-client-id>,<Teams-generated-application-ID-URI>`; explicit accepted audiences only |
-| `RED_ENTRA_REQUIRED_SCOPE` | `access_as_user` (scope claim value, not full URI) |
-| `RED_ENTRA_ALLOWED_CLIENTS` | `<authorized-Microsoft-client-id>[,...]`; optional additional restriction |
-| `RED_ENTRA_PUBLIC_BASE_URL` | `https://brc-live-mcp-app-staging.azurewebsites.net` |
-| `RED_ENTRA_WEB_CLIENT_ID` | `<browser-app-client-id>` |
-| `RED_ENTRA_WEB_CLIENT_SECRET` | `<Key-Vault-reference-or-secret-setting>` |
-| `RED_CONNECT_CONNECTION_STORE` | `cosmos` for durable staging; memory is ephemeral |
-| `RED_CONNECT_COSMOS_CONNECTION_STRING` | existing secure staging Cosmos setting |
-| `RED_CONNECT_COSMOS_DATABASE` / `RED_CONNECT_COSMOS_CONTAINER` | existing staging database/container |
-| `RED_CONNECT_ENCRYPTION_KEY` | secure existing encryption material; shared across instances |
+| `RED_ENTRA_AUDIENCES` | API client id and the Teams-generated Application ID URI, comma-separated |
+| `RED_ENTRA_REQUIRED_SCOPE` | `<delegated-scope-name>`; must match the API scope configured by the operator |
+| `RED_ENTRA_ALLOWED_CLIENTS` | Optional comma-separated client ids allowed to call the API |
+| `RED_ENTRA_PUBLIC_BASE_URL` | Public HTTPS origin, with no path |
+| `RED_ENTRA_WEB_CLIENT_ID` | Connection-page application client id |
+| `RED_ENTRA_WEB_CLIENT_SECRET` | Connection-page application client secret |
+| `RED_CONNECT_CONNECTION_STORE` | `cosmos` when more than one instance must share connections; `memory` is lost on restart |
+| `RED_CONNECT_COSMOS_CONNECTION_STRING` | Cosmos connection string when the store is `cosmos` |
+| `RED_CONNECT_COSMOS_DATABASE` | Cosmos database name |
+| `RED_CONNECT_COSMOS_CONTAINER` | Cosmos container name |
+| `RED_CONNECT_ENCRYPTION_KEY` | `<encryption-key>` for stored credentials, browser state and continuations; dedicated material is recommended (code also permits a Cosmos connection-string fallback) |
 
-Remove `RED_ENTRA_ALLOWED_TENANTS` if it is still set. RED no longer reads it.
-No BRC company credentials belong in these settings. Missing audience configuration
-fails closed for customers while the status tool remains public. Configure HTTPS
-at the public ingress; do not configure Easy Auth to redirect anonymous MCP
-status/initialize calls. The application does not trust Easy Auth identity headers.
-Use v2 tokens: v1 tokens are intentionally unsupported. Confirm actual connector
-token audiences during the pilot without logging or copying tokens into chat.
+Do not put Big Red Cloud company API keys in these settings. If `RED_ENTRA_AUDIENCES` is missing, customer calls fail closed. Serve the site over HTTPS, and do not log request bodies, `Authorization` headers, cookies, or connection-form fields. `RED_ENTRA_TEST_PRIVATE_JWK` is for local tests only and must not be set on a deployment.
 
-## Verification and security assumptions
+The connection-store variables are the same ones described in the [README](../README.md).
 
-Run `npm run build`, then `npm run demo:copilot-sso`. The demo generates ephemeral
-test JWT keys, uses explicit test-only discovery/token/BRC mocks, exercises the
-browser form, and shows `connection_required` followed by two-company results.
-It prints neither the token nor the connection link. Never set its
-`RED_ENTRA_TEST_PRIVATE_JWK` or preload in a deployment. The status-only
-`npm run demo:copilot-diagnostic` still works against the current profile.
+## How a user connects a company
 
-Focused commands: `node --test build/auth/entra_auth.test.js build/auth/entra_store.test.js`
-and `node --test build/tests/entra_sso.integration.test.js build/tests/mcp_profile_routing.integration.test.js build/tests/copilot_diagnostic.integration.test.js`.
-Run the existing connection-isolation tests and `npm test` as regressions.
+1. In Copilot they ask an accounting question, or ask to manage companies.
+2. Red returns a link on your host. The link does not contain their identity or an API key. Opening it is not enough; they sign in with Microsoft first.
+3. They enter a company name and API key, or upload a CSV with columns `companyName,apiKey`. One submission can include up to five companies, and the CSV is limited to 1 MB. Keys are validated before they are stored and are not shown again.
+4. From `/manage-companies` they can later add a company, replace a key, or disconnect one company. Disconnect asks for confirmation and does not run on a normal page load. After the last company is removed, the next accounting question asks them to connect again.
 
-This is a local proof of concept, not customer-ready certification. Cosmos
-concurrency is exercised through a mocked Cosmos adapter, not a live account.
-Browser tests exercise the HTTP protocol, not Microsoft's real sign-in UI.
-Trust requires HTTPS, protected encryption/application secrets, correct admin
-configuration, and trusted application/storage administrators. Do not enable
-request-body, Authorization/Cookie/header, response-body or credential-form
-logging at the proxy or APM layer. The code does not emit those secrets, but
-cannot control a separately configured external logger. One-time connection URLs are
-intentionally returned only when linking is required. The management tool may
-also return the stable, non-secret `/manage-companies` page. New request handles are
-public locators, not authorization credentials; avoid unnecessary diagnostic logging.
+A company stays with the Microsoft user who connected it. Another user's token cannot use it.
 
-## Restore the previous diagnostic profile
+## Local check
 
-In `src/remote.ts`, change only `registerCopilotDiagnosticTools(server, true)`
-to `registerCopilotDiagnosticTools(server)` in the `copilot-sso` branch. The
-existing default registrar restores status plus `brc_find_help_resources`;
-`/mcp` remains unchanged. In the routing and diagnostic integration tests restore
-the second tool name to `brc_find_help_resources`; restore its help invocation
-in the diagnostic test. Remove/disable the SSO integration test and demo command
-when deliberately rolling back that feature. Rebuild. Owner records may remain
-inert in Cosmos; do not reinterpret or migrate them into anonymous connections.
-If rolling back all SSO changes, also remove the browser-route registration and
-SSO-specific modules after reviewing unrelated working-tree edits. Any later
-deployment or connector authentication change is a separate manual action.
-
-## Implementation file inventory
-
-New files:
-
-- `src/auth/entra_auth.ts`
-- `src/auth/entra_store.ts`
-- `src/auth/entra_browser.ts`
-- `src/copilot_customers.ts`
-- `src/copilot_company_management.ts`
-- `src/auth/entra_auth.test.ts`
-- `src/auth/entra_store.test.ts`
-- `src/copilot_customers.test.ts`
-- `src/tests/entra_fixture.ts`
-- `src/tests/entra_mock_server.ts`
-- `src/tests/entra_sso.integration.test.ts`
-- `scripts/demo_copilot_sso.mjs`
-- `docs/copilot-entra-sso.md`
-
-Updated files:
-
-- `package.json` and `package-lock.json`: direct `jose` dependency; SSO demo command.
-- `src/remote.ts`: profile selection, per-request bearer verification, browser
-  routes and generic SSO body-parser errors.
-- `src/copilot_diagnostic.ts`: retain public diagnostic registrar and select the
-  authenticated customer tool for the current profile.
-- `src/auth/connection_store_types.ts`, `src/auth/memory_connection_store.ts`,
-  `src/auth/cosmos_connection_store.ts`: additive owner-store integration.
-- `src/auth/connection_page.ts`: RED-branded SSO manual/CSV entry and named connection results.
-- `src/auth/credential_validation.ts`, `src/shared.ts`: suppress credential
-  debugging/raw BRC errors in the SSO request context only.
-- `src/tools/general/list_tools.ts`: reuse customer endpoint, query builder and
-  existing BRC client with a bounded request timeout.
-- `src/tests/mcp_profile_routing.integration.test.ts` and
-  `src/tests/copilot_diagnostic.integration.test.ts`: exact minimal profile and
-  public status regression coverage.
-- `scripts/tests/lib/diagnostic_guards.mjs`: detect Entra-store access too.
-- `docs/copilot-diagnostic.md`: identify the diagnostic document as historical
-  and link to the current profile/rollback instructions.
-
-Corresponding `build/` outputs are generated only by `npm run build`. Existing
-unrelated working-tree changes are not reverted or included as SSO source edits.
-
-### SSO browser regression prerequisites
-
-The SSO integration test uses Playwright to exercise native browser form POSTs,
-including the public-query-to-hidden-field handoff and browser-generated Origin.
-Windows runs use installed Microsoft Edge in headless mode. On other platforms,
-install the test browser with `npx playwright install --with-deps chromium` before
-running `npm test`. No real Microsoft sign-in or BRC credentials are used.
-
-SSO pages use `Referrer-Policy: strict-origin` so native form POSTs retain Origin
-without sending URL paths, queries or fragments as referrers. The company-entry
-page must not override this with a `no-referrer` meta policy. Anonymous connection
-pages retain their existing privacy policy. The landing page enables sign-in
-only for a syntactically valid public request handle. Infrastructure URL logs
-may contain that non-secret locator; application diagnostics do not emit it.
+For local verification, run the full test suite with `npm test` in an isolated checkout with test configuration. It builds generated files and tests can create temporary fixtures. Before running it on platforms other than Windows, install the test browser with `npx playwright install --with-deps chromium`. Windows runs use installed Microsoft Edge. `npm run demo:copilot-sso` exercises the current search and CSRF-protected company form using local synthetic fixtures only.

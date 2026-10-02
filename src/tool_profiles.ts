@@ -1,12 +1,11 @@
-import { TOOL_ANNOTATIONS } from "./tool_annotations.js";
+
 
 export const RED_MCP_TOOL_PROFILE_ENV = "RED_MCP_TOOL_PROFILE";
 
 export type RedMcpToolProfile =
   | "full"
   | "copilot"
-  | "copilot-read-only"
-  | "copilot-full";
+  | "copilot-read-only";
 
 /**
  * Minimal customer-account workflow exposed to Microsoft Copilot Studio.
@@ -127,27 +126,6 @@ const COPILOT_READ_ONLY_TOOL_NAMES = new Set<string>(
   COPILOT_READ_ONLY_TOOL_ALLOWLIST,
 );
 
-const DEVELOPMENT_ONLY_TOOL_NAMES = new Set([
-  "brc_set_company_api_key",
-  "brc_get_dev_mode_details",
-  "brc_dev_diagnose_company_processing_settings",
-  "brc_get_connection_store_diagnostics",
-]);
-
-/**
- * All current production tools except the generic router. This profile is
- * intentionally kept in lockstep with the central fail-closed tool registry.
- */
-export const COPILOT_FULL_TOOL_ALLOWLIST = Object.freeze(
-  Object.keys(TOOL_ANNOTATIONS).filter(
-    (toolName) =>
-      toolName !== "brc_route_request" &&
-      !DEVELOPMENT_ONLY_TOOL_NAMES.has(toolName),
-  ),
-);
-
-const COPILOT_FULL_TOOL_NAMES = new Set<string>(COPILOT_FULL_TOOL_ALLOWLIST);
-
 export function resolveRedMcpToolProfile(
   env: NodeJS.ProcessEnv = process.env,
 ): RedMcpToolProfile {
@@ -161,12 +139,9 @@ export function resolveRedMcpToolProfile(
   if (configured === "copilot-read-only") {
     return "copilot-read-only";
   }
-  if (configured === "copilot-full") {
-    return "copilot-full";
-  }
 
   throw new Error(
-    `Invalid ${RED_MCP_TOOL_PROFILE_ENV} value ${JSON.stringify(configured)}. Expected "full", "copilot", "copilot-read-only", or "copilot-full".`,
+    `Invalid ${RED_MCP_TOOL_PROFILE_ENV} value ${JSON.stringify(configured)}. Expected "full", "copilot", "copilot-read-only".`,
   );
 }
 
@@ -180,7 +155,5 @@ export function isToolAllowedByProfile(
   if (profile === "copilot") {
     return COPILOT_TOOL_NAMES.has(toolName);
   }
-  return profile === "copilot-read-only"
-    ? COPILOT_READ_ONLY_TOOL_NAMES.has(toolName)
-    : COPILOT_FULL_TOOL_NAMES.has(toolName);
+  return profile === "copilot-read-only" && COPILOT_READ_ONLY_TOOL_NAMES.has(toolName);
 }

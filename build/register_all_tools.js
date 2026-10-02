@@ -1,4 +1,3 @@
-import { COPILOT_FEDERATED_READ_TOOLS, copilotReadSchema, wrapCopilotReadHandler } from "./copilot_read_tools.js";
 import { getToolMetadata } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
 import { registerCashPaymentTools } from "./tools/bank-payments/cash_payments_tools.js";
@@ -56,14 +55,7 @@ export function createFilteredServer(server, options = {}) {
     const profile = options.profile ?? "full";
     const originalRegisterTool = server.registerTool.bind(server);
     const filteredServer = Object.create(server);
-    if (options.federatedReadOnly) {
-        // Legacy help resources/prompts refer to write and connection tools.
-        filteredServer.registerResource = (() => undefined);
-        filteredServer.registerPrompt = (() => undefined);
-    }
     filteredServer.tool = (toolName, ...args) => {
-        if (options.federatedReadOnly && !COPILOT_FEDERATED_READ_TOOLS.includes(toolName))
-            return undefined;
         if (!isToolAllowedByProfile(toolName, profile)) {
             return undefined;
         }
@@ -77,18 +69,6 @@ export function createFilteredServer(server, options = {}) {
             return registration;
         };
         const { title, annotations } = getToolMetadata(toolName);
-        if (options.federatedReadOnly) {
-            if (!annotations.readOnlyHint || annotations.destructiveHint || args.length !== 3) {
-                throw new Error(`Unsafe federated registration: ${toolName}`);
-            }
-            const [description, schema, handler] = args;
-            return registerTool({
-                title,
-                description: getPublicToolDescription(toolName, description.split(/(?<=\.)\s/)[0]) + " Queries companies linked to the signed-in Microsoft user.",
-                inputSchema: copilotReadSchema(schema),
-                annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-            }, wrapCopilotReadHandler(handler));
-        }
         if (args.length < 3) {
             const [description, handler] = args;
             return registerTool({
@@ -101,7 +81,7 @@ export function createFilteredServer(server, options = {}) {
         const schemaWithConnectionRef = CONNECTION_REF_SCHEMA_EXEMPT_TOOLS.has(toolName)
             ? schema
             : withConnectionRefSchema(schema);
-        const needsRouteToken = profile !== "copilot-full" && requiresRouteToken(toolName);
+        const needsRouteToken = requiresRouteToken(toolName);
         const schemaWithRouteToken = needsRouteToken
             ? {
                 ...schemaWithConnectionRef,
@@ -155,7 +135,6 @@ export function registerAllTools(server, options = {}) {
     const advertisedToolNames = new Set();
     const filteredServer = createFilteredServer(server, {
         profile,
-        federatedReadOnly: options.federatedReadOnly,
         onRegistered: (toolName) => advertisedToolNames.add(toolName),
     });
     registerCompanyContextTools(filteredServer);
@@ -187,5 +166,5 @@ export function registerAllTools(server, options = {}) {
     registerNominalJournalBatchTools(filteredServer);
     registerAccrualTools(filteredServer);
     registerPrepaymentTools(filteredServer);
-    console.info(`Red MCP tool profile "${options.federatedReadOnly ? "copilot-federated" : profile}" selected; advertising ${advertisedToolNames.size} tools.`);
+    console.info(`Red MCP tool profile "${profile}" selected; advertising ${advertisedToolNames.size} tools.`);
 }

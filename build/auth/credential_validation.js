@@ -14,7 +14,7 @@ function validationDebugEnabled() {
     if (configured === "true") {
         return true;
     }
-    return process.env.RED_CONNECT_HTTP_MODE === "true";
+    return configured === "true";
 }
 export function logCompanyCredentialValidation(details) {
     if (entraRequestOwner.getStore() || !validationDebugEnabled()) {

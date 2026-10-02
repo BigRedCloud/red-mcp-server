@@ -1,7 +1,11 @@
+param(
+    [Parameter(Mandatory = $true)][string]$InputPath,
+    [Parameter(Mandatory = $true)][uri]$Endpoint
+)
 $ErrorActionPreference = "Stop"
+if ($Endpoint.Scheme -ne "https" -or $Endpoint.UserInfo) { throw "Use an HTTPS endpoint without credentials." }
 
-$xlsxPath = "C:\Users\Lauren.Dwyer\OneDrive - Big Red Book\Red Edu\webinar_video_routing_index.xlsx"
-$endpoint = "https://brc-live-mcp-app-staging.azurewebsites.net/internal/brc-edu/resources/sync"
+$xlsxPath = (Resolve-Path -LiteralPath $InputPath).Path
 $secret = [Environment]::GetEnvironmentVariable("BRC_EDU_STAGING_SYNC_SECRET", "User")
 
 if ([string]::IsNullOrWhiteSpace($secret)) {

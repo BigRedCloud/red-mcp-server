@@ -6,6 +6,30 @@ Tool names and endpoint paths below reflect what is implemented in the source un
 
 Public documentation note: this guide lists MCP tool names for developers. Customer-facing assistants should still prefer plain business language and the `brc_get_deployment_policy` capability summary rather than dumping tool catalogues to end users.
 
+## Deployment configuration index
+
+Operators and self-hosters should use the canonical [environment-variable reference](environment-variables.md) for purposes, formats, required conditions, aliases and the validation checklist. Hosted RED customers normally do not configure these settings. This compact index lists names only; it contains no deployment values.
+
+- **Core RED configuration:** `BRC_PUBLIC_BASE_URL`, `BRC_CONNECT_PUBLIC_BASE_URL`, `BRC_DEPLOYMENT_ENV`, `BRC_DISPLAY_TIMEZONE`, `BRC_MCP_SESSION_TTL_MINUTES`, `BRC_RATE_LIMIT_REQUESTS_PER_MINUTE`, `BRC_MAX_BATCH_ITEMS`, `BRC_MAX_AUDIT_ENTRIES`.
+- **Feature controls:** `BRC_ALLOW_READ_SKILLS`, `BRC_ALLOW_UPDATE_SKILLS`, `BRC_ALLOW_DELETE_SKILLS`, `BRC_ALLOW_EMAIL_SKILLS`, `BRC_ALLOW_BATCH_SKILLS`, `BRC_ALLOW_DEV_MODE`.
+- **Big Red Cloud API:** `BRC_API_BASE_URL`, `BRC_API_KEY_BLACKLIST_SHA256`, `BRC_API_KEY_TTL_MINUTES`.
+- **Connection management:** `RED_CONNECT_CONNECTION_STORE`, `RED_CONNECT_HTTP_MODE`, `RED_CONNECT_CREDENTIAL_DEBUG`, `RED_CONNECT_ENCRYPTION_KEY`, `RED_ALLOW_RECENT_CONNECTION_FALLBACK`, `RED_RECENT_CONNECTION_FALLBACK_TTL_MS`.
+- **Microsoft 365 / Entra authentication:** `RED_ENTRA_ALLOWED_CLIENTS`, `RED_ENTRA_AUDIENCES`, `RED_ENTRA_PUBLIC_BASE_URL`, `RED_ENTRA_REQUIRED_SCOPE`, `RED_ENTRA_WEB_CLIENT_ID`, `RED_ENTRA_WEB_CLIENT_SECRET`, `MICROSOFT_PROVIDER_AUTHENTICATION_SECRET`, `WEBSITE_AUTH_AAD_ALLOWED_TENANTS`.
+- **Cosmos connection store:** `RED_CONNECT_COSMOS_CONNECTION_STRING`, `RED_CONNECT_COSMOS_DATABASE`, `RED_CONNECT_COSMOS_CONTAINER`.
+- **RED help / education resources:** `BRC_EDU_SOURCE`, `BRC_EDU_CACHE_TTL_MINUTES`, `BRC_EDU_ADMIN_UPLOAD_SECRET`, `BRC_EDU_PUBLIC_IMAGE_SIGNING_SECRET`, `BRC_EDU_STORAGE_CONNECTION`, `BRC_EDU_SYNC_SECRET`, `BRC_EDU_SYNCED_RESOURCES_PATH`, `BRC_EDU_UPLOAD_CONTAINER`, `BRC_EDU_UPLOAD_STORAGE_CONNECTION_STRING`.
+- **YouTube integration:** `BRC_YOUTUBE_API_KEY`, `BRC_YOUTUBE_CHANNEL_ID`, `BRC_YOUTUBE_UPLOADS_PLAYLIST_ID`, `BRC_YOUTUBE_WEBINAR_PLAYLIST_ID`, `BRC_YOUTUBE_CATALOG_BLOB`, `BRC_YOUTUBE_OVERRIDES_BLOB`, `BRC_YOUTUBE_EFFECTIVE_CATALOG_BLOB`, `BRC_YOUTUBE_SYNC_SCHEDULE`, `BRC_YOUTUBE_WEBHOOK_CALLBACK_URL`, `BRC_YOUTUBE_WEBHOOK_SECRET`.
+- **Telemetry:** `APPLICATIONINSIGHTS_CONNECTION_STRING`.
+- **Security and signing:** `BRC_ROUTE_TOKEN_SIGNING_SECRET`, `OPENAI_APPS_CHALLENGE_TOKEN`.
+- **Azure/runtime settings:** `WEBSITE_NODE_DEFAULT_VERSION`.
+
+## Microsoft 365 Copilot
+
+`/mcp` is the full tool catalogue for ChatGPT, Claude and Mistral, including create, update and delete where those skill groups are enabled.
+
+`/mcp/copilot` is the Microsoft 365 Copilot endpoint. It is registered as a Microsoft federated connector and uses Entra sign-in. Company credentials are stored for the signed-in Microsoft user. Setup is in [copilot-entra-sso.md](copilot-entra-sso.md).
+
+The Copilot catalogue is read-only. Current Microsoft federated connector limitations mean create, update and delete tools are not exposed there. Red expects to add those tools on `/mcp/copilot` when Microsoft supports them. They remain available on `/mcp`.
+
 ---
 
 ## 1. Source layout overview
@@ -13,7 +37,7 @@ Public documentation note: this guide lists MCP tool names for developers. Custo
 ```text
 src/
 ├── index.ts                       Local stdio entry point
-├── remote.ts                      Hosted HTTP entry point (Streamable HTTP on /mcp)
+├── remote.ts                      Hosted HTTP entry (/mcp, and /mcp/copilot for the Copilot connector)
 ├── server.ts                      MCP server factory and stdio singleton
 ├── register_all_tools.ts          Central tool registration + routing + write-confirmation wrapping
 ├── shared.ts                      BRC HTTP client, session-scoped connections, audit log, helpers
@@ -50,7 +74,7 @@ src/
     ├── purchases/                 Purchases and suppliers
     ├── bank-payments/             Bank accounts, payments, cash payments, cash receipts
     ├── journals/                  Nominal reports and nominal journal batches
-    ├── edu/                       Read-only help-resource tools (and staff admin URL helper)
+    ├── edu/                       Read-only help-resource tools
     ├── customer_tools.ts          Customers
     ├── product_tools.ts           Products
     ├── vat_sales_tools.ts         VAT processing + combined sales listing
@@ -543,7 +567,7 @@ These tools are available only when `BRC_ALLOW_DEV_MODE` is enabled (except `brc
 | `brc_get_dev_mode_details` | Operator diagnostics; assistants must not quote or summarise this output in end-user chat |
 | `brc_dev_diagnose_company_processing_settings` | Dev-only processing-settings diagnostic |
 | `brc_get_connection_store_diagnostics` | Operator diagnostic for connection persistence; never exposes credentials |
-| `brc_open_edu_admin` | Staff helper that returns the protected content-admin page URL (sign-in still required). Never returns upload secrets or bypass links |
+| `brc_open_edu_admin` | Internal content-admin helper. Sign-in is still required. Do not present it as a customer workflow |
 
 Do not document or present these as customer-facing company workflows in product copy.
 

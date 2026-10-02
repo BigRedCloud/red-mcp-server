@@ -17,13 +17,13 @@ const BASE_DIR = join(tmpdir(), "brc-edu-path-test");
 test("isWindowsAbsolutePath recognises drive-letter and UNC paths", () => {
   assert.equal(
     isWindowsAbsolutePath(
-      "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv",
+      "C:\\Users\\Example.User\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv",
     ),
     true,
   );
   assert.equal(
     isWindowsAbsolutePath(
-      "C:/Users/Lauren.Dwyer/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv",
+      "C:/Users/Example.User/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv",
     ),
     true,
   );
@@ -41,9 +41,9 @@ test("resolveBrcEduCsvPath keeps POSIX absolute paths unchanged", () => {
 
 test("resolveBrcEduCsvPath keeps Windows drive-letter paths unchanged", () => {
   const backslashPath =
-    "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
+    "C:\\Users\\Example.User\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
   const forwardSlashPath =
-    "C:/Users/Lauren.Dwyer/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv";
+    "C:/Users/Example.User/OneDrive - Big Red Book/Red Edu/webinar_video_routing_index.csv";
 
   assert.equal(
     resolveBrcEduCsvPath(backslashPath, DEFAULT_BRC_EDU_SUPPORT_CSV_PATH, BASE_DIR),
@@ -76,9 +76,9 @@ test("getBrcEduSupportCsvPath and getBrcEduEnrichedCsvPath return absolute Windo
 
   try {
     process.env.BRC_EDU_SUPPORT_CSV_PATH =
-      "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
+      "C:\\Users\\Example.User\\OneDrive - Big Red Book\\Red Edu\\webinar_video_routing_index.csv";
     process.env.BRC_EDU_ENRICHED_CSV_PATH =
-      "C:\\Users\\Lauren.Dwyer\\OneDrive - Big Red Book\\Red Edu\\dev_only_video_routing_index_updated.csv";
+      "C:\\Users\\Example.User\\OneDrive - Big Red Book\\Red Edu\\dev_only_video_routing_index_updated.csv";
 
     assert.equal(
       getBrcEduSupportCsvPath(BASE_DIR),

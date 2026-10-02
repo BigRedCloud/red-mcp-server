@@ -49,7 +49,7 @@ function validationDebugEnabled(): boolean {
     return true;
   }
 
-  return process.env.RED_CONNECT_HTTP_MODE === "true";
+  return configured === "true";
 }
 
 export function logCompanyCredentialValidation(details: {

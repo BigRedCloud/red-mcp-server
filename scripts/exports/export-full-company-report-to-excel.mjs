@@ -3,7 +3,7 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as XLSX from "xlsx";
-import { getApiKeyExpirationMs } from "../../build/server_config.js";
+import { getApiKeyExpirationMs } from "../../build/config/server_config.js";
 import {
   brcFetch,
   companyApiContexts,

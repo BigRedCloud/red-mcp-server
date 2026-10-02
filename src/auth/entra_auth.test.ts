@@ -118,3 +118,30 @@ test("organizations metadata must use the issuer template and a Microsoft JWKS h
     : { keys: [jwk] }), { headers: { "content-type": "application/json" } });
   await assert.rejects(createEntraVerifier({ audiences: ["test-api"], scope: "access_as_user", clients: ["test-client"] }, evil)(token));
 });
+
+test("unknown signing key refreshes once and remains fail closed under repeated misses", async () => {
+  const tenant = "11111111-1111-4111-8111-111111111111", oid = "22222222-2222-4222-8222-222222222222";
+  const old = await publishedKey(TEMPLATE), rotated = await publishedKey(TEMPLATE);
+  rotated.jwk.kid = "rotated";
+  let calls = 0, jwks = [old.jwk];
+  const fetcher: typeof fetch = async input => { calls++; return new Response(JSON.stringify(String(input).includes("openid-configuration") ? { issuer: TEMPLATE, jwks_uri: "https://login.microsoftonline.com/organizations/discovery/v2.0/keys" } : { keys: jwks })); };
+  const verify = createEntraVerifier({ audiences: ["test-api"], scope: "access_as_user", clients: [] }, fetcher);
+  const now = Math.floor(Date.now()/1000);
+  const sign = (kid: string, key: CryptoKey) => new SignJWT({ tid: tenant, oid, sub: oid, scp: "access_as_user" }).setIssuer(issuerFor(tenant)).setAudience("test-api").setIssuedAt(now).setNotBefore(now-5).setExpirationTime(now+600).setProtectedHeader({ alg: "RS256", kid }).sign(key);
+  await verify(await sign("test", old.keys.privateKey));
+  assert.equal(calls, 2);
+  jwks = [old.jwk, rotated.jwk];
+  const rotatedToken = await sign("rotated", rotated.keys.privateKey);
+  await Promise.all([verify(rotatedToken), verify(rotatedToken), verify(rotatedToken)]);
+  assert.equal(calls, 4);
+  await verify(await sign("test", old.keys.privateKey));
+  for (const kid of ["unknown-a", "unknown-b"]) await assert.rejects(verify(await sign(kid, rotated.keys.privateKey)));
+  assert.equal(calls, 4, "unknown-kid bursts cannot repeatedly fetch JWKS");
+  const missing = createEntraVerifier({ audiences: ["test-api"], scope: "access_as_user", clients: [] }, fetcher);
+  await missing(await sign("test", old.keys.privateKey));
+  assert.equal(calls, 6);
+  await assert.rejects(missing(await sign("never-published", rotated.keys.privateKey)));
+  assert.equal(calls, 8, "an unknown key gets one refresh and still fails closed");
+  await assert.rejects(missing(await sign("another-miss", rotated.keys.privateKey)));
+  assert.equal(calls, 8);
+});

@@ -1,5 +1,7 @@
 # Red telemetry identity (non-OAuth)
 
+Telemetry configuration is for deployment operators, not hosted RED customers. See the canonical [environment-variable reference](environment-variables.md#telemetry) for `APPLICATIONINSIGHTS_CONNECTION_STRING`, deployment labels and safe placeholder formats. Configure identifiers privately; do not publish a live telemetry connection string.
+
 Red attaches **anonymous** Application Insights dimensions so operators can
 approximate repeat browsers/devices separately from confirmed connection flows.
 

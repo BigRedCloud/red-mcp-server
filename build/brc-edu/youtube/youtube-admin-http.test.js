@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { authorizeYouTubeServiceSyncSecret, handleYouTubeWebhookRequest, } from "./youtube-admin-http.js";
@@ -51,14 +52,25 @@ test("YouTube webhook hub challenge echoes the challenge token", () => {
 test("YouTube webhook POST with Atom payload requests sync", () => {
     const previous = process.env.BRC_YOUTUBE_CHANNEL_ID;
     process.env.BRC_YOUTUBE_CHANNEL_ID = "UCtest";
+    process.env.BRC_YOUTUBE_WEBHOOK_SECRET = "test-only-websub-secret";
+    const body = Buffer.from(`<feed><entry><yt:videoId>abc123</yt:videoId><yt:channelId>UCtest</yt:channelId></entry></feed>`);
     const result = handleYouTubeWebhookRequest({
         method: "POST",
         query: {},
-        body: `<feed><entry><yt:videoId>abc123</yt:videoId><yt:channelId>UCtest</yt:channelId></entry></feed>`,
-        headers: {},
+        body,
+        headers: { "x-hub-signature": "sha1=" + createHmac("sha1", "test-only-websub-secret").update(body).digest("hex") },
     });
     assert.equal(result.status, 204);
     assert.equal(result.shouldSync, true);
+    for (const headers of [{}, { "x-hub-signature": "sha1=" + "0".repeat(40) }]) {
+        const rejected = handleYouTubeWebhookRequest({ method: "POST", query: {}, body, headers });
+        assert.equal(rejected.status, 401);
+        assert.equal(rejected.shouldSync, false);
+    }
+    delete process.env.BRC_YOUTUBE_WEBHOOK_SECRET;
+    const unconfigured = handleYouTubeWebhookRequest({ method: "POST", query: {}, body, headers: {} });
+    assert.equal(unconfigured.status, 503);
+    assert.equal(unconfigured.shouldSync, false);
     if (previous === undefined) {
         delete process.env.BRC_YOUTUBE_CHANNEL_ID;
     }

@@ -1,4 +1,3 @@
-import { COPILOT_FEDERATED_READ_TOOLS, copilotReadSchema, wrapCopilotReadHandler } from "./copilot_read_tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getToolMetadata } from "./tool_annotations.js";
 import { registerAuditTools } from "./tools/audit_session_tools.js";
@@ -76,7 +75,6 @@ export const CONNECTION_REF_SCHEMA_EXEMPT_TOOLS = new Set([
 ]);
 
 type FilteredServerOptions = {
-  federatedReadOnly?: boolean;
   profile?: RedMcpToolProfile;
   onRegistered?: (toolName: string) => void;
 };
@@ -96,14 +94,8 @@ export function createFilteredServer(
     tool: (...args: any[]) => any;
   };
 
-  if (options.federatedReadOnly) {
-    // Legacy help resources/prompts refer to write and connection tools.
-    filteredServer.registerResource = (() => undefined) as any;
-    filteredServer.registerPrompt = (() => undefined) as any;
-  }
 
   filteredServer.tool = (toolName: string, ...args: any[]) => {
-    if (options.federatedReadOnly && !(COPILOT_FEDERATED_READ_TOOLS as readonly string[]).includes(toolName)) return undefined;
     if (!isToolAllowedByProfile(toolName, profile)) {
       return undefined as unknown;
     }
@@ -127,18 +119,6 @@ export function createFilteredServer(
 
     const { title, annotations } = getToolMetadata(toolName);
 
-    if (options.federatedReadOnly) {
-      if (!annotations.readOnlyHint || annotations.destructiveHint || args.length !== 3) {
-        throw new Error(`Unsafe federated registration: ${toolName}`);
-      }
-      const [description, schema, handler] = args;
-      return registerTool({
-        title,
-        description: getPublicToolDescription(toolName, description.split(/(?<=\.)\s/)[0]) + " Queries companies linked to the signed-in Microsoft user.",
-        inputSchema: copilotReadSchema(schema),
-        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      }, wrapCopilotReadHandler(handler));
-    }
 
     if (args.length < 3) {
       const [description, handler] = args as [
@@ -172,7 +152,7 @@ export function createFilteredServer(
       : withConnectionRefSchema(schema);
 
     const needsRouteToken =
-      profile !== "copilot-full" && requiresRouteToken(toolName);
+      requiresRouteToken(toolName);
     const schemaWithRouteToken = needsRouteToken
       ? {
           ...schemaWithConnectionRef,
@@ -243,7 +223,6 @@ export function createFilteredServer(
 }
 
 export type RegisterAllToolsOptions = {
-  federatedReadOnly?: boolean;
   /** Explicit profile for production routing; environment remains a local/test fallback. */
   profile?: RedMcpToolProfile;
 };
@@ -256,7 +235,6 @@ export function registerAllTools(
   const advertisedToolNames = new Set<string>();
   const filteredServer = createFilteredServer(server, {
     profile,
-    federatedReadOnly: options.federatedReadOnly,
     onRegistered: (toolName) => advertisedToolNames.add(toolName),
   });
   registerCompanyContextTools(filteredServer);
@@ -289,6 +267,6 @@ export function registerAllTools(
   registerAccrualTools(filteredServer);
   registerPrepaymentTools(filteredServer);
   console.info(
-    `Red MCP tool profile "${options.federatedReadOnly ? "copilot-federated" : profile}" selected; advertising ${advertisedToolNames.size} tools.`,
+    `Red MCP tool profile "${profile}" selected; advertising ${advertisedToolNames.size} tools.`,
   );
 }

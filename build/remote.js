@@ -11,7 +11,6 @@ import "./telemetry.js";
 import express from "express";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
@@ -43,31 +42,6 @@ import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-se
 function createMcpServer(profile) {
     const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
     if (profile === "copilot-sso") {
-        // Temporary diagnostics around the SDK's actual tools/list response.
-        const setRequestHandler = server.server.setRequestHandler.bind(server.server);
-        server.server.setRequestHandler = (schema, handler) => {
-            setRequestHandler(schema, async (request, extra) => {
-                const result = await handler(request, extra);
-                if (request.method === "tools/list") {
-                    try {
-                        const parsed = ListToolsResultSchema.safeParse(result);
-                        if (parsed.success) {
-                            console.log("COPILOT TOOLS LIST RESPONSE", JSON.stringify(parsed.data.tools.map((tool) => ({
-                                name: tool.name,
-                                title: tool.title ?? null,
-                                description: tool.description ?? null,
-                                inputSchemaPresent: tool.inputSchema !== undefined,
-                                readOnlyHint: tool.annotations?.readOnlyHint ?? null,
-                            }))));
-                        }
-                    }
-                    catch {
-                        // Diagnostics must not affect the MCP response.
-                    }
-                }
-                return result;
-            });
-        };
         registerCopilotDiagnosticTools(server, true);
     }
     else {
@@ -327,7 +301,7 @@ app.get(OPENAI_APPS_CHALLENGE_PATH, (_req, res) => {
     sendOpenAiAppsChallenge(res);
 });
 app.use(express.urlencoded({ extended: false }));
-app.use("/internal/brc-edu/youtube/webhook", express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }));
+app.use("/internal/brc-edu/youtube/webhook", express.raw({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }));
 app.use(express.json());
 // Body-parser errors can include submitted text. Never surface that text on
 // the SSO credential or MCP boundary; preserve existing routes' error handling.
@@ -580,25 +554,7 @@ async function handleMcpPost(profile, req, res) {
     }
 }
 app.post("/mcp", (req, res) => handleMcpPost("full", req, res));
-app.post("/mcp/copilot", (req, res) => {
-    try {
-        const body = req.body;
-        console.info("COPILOT MCP REQUEST", JSON.stringify({
-            path: req.path,
-            method: body?.method ?? null,
-            id: body?.id ?? null,
-            clientInfoName: body?.params?.clientInfo?.name ?? null,
-            mcpSessionIdPresent: Boolean(req.headers["mcp-session-id"]),
-            authorizationPresent: Boolean(req.headers.authorization),
-            userAgent: req.headers["user-agent"] ?? null,
-        }));
-    }
-    catch {
-        // Temporary Copilot diagnostics must never affect MCP handling.
-    }
-    handleMcpPost("copilot-sso", req, res);
-});
-app.post("/mcp/copilot-full", (req, res) => handleMcpPost("copilot-full", req, res));
+app.post("/mcp/copilot", (req, res) => handleMcpPost("copilot-sso", req, res));
 app.get("/connect", async (req, res) => {
     await ensureConnectionStoreInitialized();
     const code = String(req.query.code ?? "");
@@ -685,7 +641,6 @@ async function handleMcpGet(profile, req, res) {
 }
 app.get("/mcp", (req, res) => handleMcpGet("full", req, res));
 app.get("/mcp/copilot", (req, res) => handleMcpGet("copilot-sso", req, res));
-app.get("/mcp/copilot-full", (req, res) => handleMcpGet("copilot-full", req, res));
 app.post("/internal/brc-edu/resources/sync", (req, res) => {
     const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
     const normalizedSecret = Array.isArray(requestSecret) ? requestSecret[0] : requestSecret;
@@ -831,20 +786,6 @@ app.post("/internal/brc-edu/youtube/videos/:videoId/visibility", async (req, res
     res.status(result.status).json(result.body);
 });
 app.all("/internal/brc-edu/youtube/webhook", async (req, res) => {
-    const configuredSecret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim();
-    if (configuredSecret) {
-        const headerSecret = req.headers["x-red-youtube-webhook-secret"];
-        const provided = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
-        const querySecret = typeof req.query.token === "string" ? req.query.token : undefined;
-        const candidate = (provided || querySecret || "").trim();
-        if (candidate !== configuredSecret) {
-            // For hub verification GET, allow hub.verify_token path inside handler.
-            if (req.method.toUpperCase() !== "GET") {
-                res.status(401).send("Unauthorized.");
-                return;
-            }
-        }
-    }
     const handled = handleYouTubeWebhookRequest(req);
     if (handled.contentType) {
         res.setHeader("Content-Type", handled.contentType);
@@ -887,7 +828,6 @@ async function handleMcpDelete(profile, req, res) {
 }
 app.delete("/mcp", (req, res) => handleMcpDelete("full", req, res));
 app.delete("/mcp/copilot", (req, res) => handleMcpDelete("copilot-sso", req, res));
-app.delete("/mcp/copilot-full", (req, res) => handleMcpDelete("copilot-full", req, res));
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const httpServer = app.listen(PORT);
 httpServer.on("listening", () => {

@@ -276,12 +276,12 @@ export function logBrcEduAdminAccess(entry: {
   status?: number;
 }): void {
   const at = new Date().toISOString();
-  const identity = entry.identity?.trim() || "anonymous";
+  const identityPresent = Boolean(entry.identity?.trim());
   const method = entry.method ?? "none";
   const statusPart = entry.status !== undefined ? ` status=${entry.status}` : "";
 
   console.info(
-    `BRC Edu admin access: identity=${identity} method=${method} result=${entry.result} at=${at}${statusPart}`,
+    `BRC Edu admin access: identityPresent=${identityPresent} method=${method} result=${entry.result} at=${at}${statusPart}`,
   );
 }
 

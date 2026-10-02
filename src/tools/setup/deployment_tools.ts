@@ -186,7 +186,7 @@ function customerDeploymentPolicyText(
 - Post and allocate operations: ${availability(capabilities.canCreateOrUpdateRecords)}
 - Batch-write operations: ${availability(capabilities.canBatchProcessRecords)}
 - Email operations: ${availability(capabilities.canSendEmails)}
-- Route-request orchestration: ${profile === "copilot-full" ? "unavailable on this endpoint" : "available"}`;
+- Route-request orchestration: ${profile === "full" ? "available" : "unavailable on this endpoint"}`;
 
   if (profile === "copilot-read-only") {
     return `Current endpoint profile: copilot-read-only

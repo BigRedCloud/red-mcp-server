@@ -3,6 +3,7 @@
  * Split Node test execution so HTTP-spawning integration files run serially
  * while ordinary unit tests remain parallel. Each test file is executed once.
  */
+import "./test_environment.mjs";
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +14,12 @@ const buildDir = path.join(root, "build");
 
 const EXPECTED_HTTP_INTEGRATION_FILES = [
   "mcp_http.integration.test.js",
+  "mcp_profile_routing.integration.test.js",
+  "entra_sso.integration.test.js",
+  "copilot_diagnostic.integration.test.js",
+  "normal_company_management.integration.test.js",
+  "company_management.integration.test.js",
+  "route_request_client_claim.integration.test.js",
   "brc_edu_sync.integration.test.js",
   "brc_edu_upload.integration.test.js",
   "freshdesk_public_image.integration.test.js",
@@ -100,9 +107,6 @@ const allTestFiles = (await collectTestFiles(buildDir)).sort((left, right) =>
   toPosix(left).localeCompare(toPosix(right)),
 );
 const integrationFiles = allTestFiles.filter(isIntegrationTest);
-const httpIntegrationFiles = integrationFiles.filter((filePath) =>
-  EXPECTED_HTTP_INTEGRATION_FILES.includes(path.basename(filePath)),
-);
 const unitFiles = allTestFiles.filter((filePath) => !isIntegrationTest(filePath));
 
 assertExpectedHttpFilesPresent(integrationFiles);
@@ -111,8 +115,7 @@ if (allTestFiles.length !== unitFiles.length + integrationFiles.length) {
   throw new Error("Test file split overlap or drop detected.");
 }
 
-const serialFiles =
-  mode === "http" ? httpIntegrationFiles : integrationFiles;
+const serialFiles = integrationFiles;
 
 if (mode !== "unit") {
   console.log(

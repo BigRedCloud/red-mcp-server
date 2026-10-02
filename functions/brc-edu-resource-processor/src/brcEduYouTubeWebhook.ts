@@ -1,3 +1,4 @@
+import { verifyWebSubSignature } from "./websub_signature.js";
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from "@azure/functions";
 
 import {
@@ -33,7 +34,13 @@ export async function brcEduYouTubeWebhook(
     return { status: 405, body: "Method not allowed." };
   }
 
-  const body = await request.text();
+  const secret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim() ?? "";
+  if (!secret) return { status: 503, body: "Webhook authentication is not configured." };
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (!verifyWebSubSignature(bytes, request.headers.get("x-hub-signature"), secret)) {
+    return { status: 401, body: "Unauthorized." };
+  }
+  const body = Buffer.from(bytes).toString("utf8");
   const looksValid =
     body.includes("<entry") ||
     body.includes("yt:videoId") ||
@@ -49,9 +56,9 @@ export async function brcEduYouTubeWebhook(
 
   if (forward) {
     const endpoint = process.env[RED_BRC_YOUTUBE_SYNC_ENDPOINT_ENV]?.trim();
-    const secret = process.env[RED_BRC_YOUTUBE_SYNC_SECRET_ENV]?.trim();
+    const syncSecret = process.env[RED_BRC_YOUTUBE_SYNC_SECRET_ENV]?.trim();
 
-    if (!endpoint || !secret) {
+    if (!endpoint || !syncSecret) {
       context.error(
         "YouTube webhook received but Red sync endpoint/secret is not configured.",
       );
@@ -61,7 +68,7 @@ export async function brcEduYouTubeWebhook(
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            [RED_BRC_EDU_SYNC_SECRET_HEADER]: secret,
+            [RED_BRC_EDU_SYNC_SECRET_HEADER]: syncSecret,
             "x-red-youtube-sync-source": "webhook",
           },
           body: "{}",
@@ -74,9 +81,7 @@ export async function brcEduYouTubeWebhook(
         }
       } catch (error) {
         context.error(
-          `YouTube webhook forward error: ${
-            error instanceof Error ? error.message : "unknown"
-          }`,
+          "YouTube webhook forward failed.",
         );
       }
     }

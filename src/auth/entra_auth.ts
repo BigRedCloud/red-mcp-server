@@ -22,17 +22,11 @@ export function entraConfig(): EntraConfig {
 }
 export function createEntraVerifier(config: EntraConfig, fetcher: typeof fetch = fetch) {
   let discovery: { until: number; keys: PublishedJwk[] } | undefined;
-  return async (token: string, idToken?: { audience: string; nonce: string }): Promise<EntraOwner> => {
-    try {
-      if (!token || token.length > 16_384 || !config.audiences.length) throw new EntraAuthError();
-      const unverified = decodeJwt(token);
-      const tid = unverified.tid;
-      if (typeof tid !== "string" || !TENANT_GUID.test(tid)) throw new EntraAuthError();
-      const tenantId = tid.toLowerCase();
-      if (tenantId === CONSUMER_TENANT) throw new EntraAuthError();
-      const header = decodeProtectedHeader(token);
-      if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid) throw new EntraAuthError();
-      if (!discovery || discovery.until < Date.now()) {
+  let refreshing: Promise<void> | undefined;
+  let nextUnknownRefresh = 0;
+  const refresh = (): Promise<void> => {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
         const response = await fetcher(ORGANIZATIONS_METADATA, { signal: AbortSignal.timeout(10_000), redirect: "error" });
         if (!response.ok) throw new EntraAuthError();
         const metadata = await response.json() as { issuer?: string; jwks_uri?: string };
@@ -44,8 +38,30 @@ export function createEntraVerifier(config: EntraConfig, fetcher: typeof fetch =
         const jwks = await jwksResponse.json() as { keys?: PublishedJwk[] };
         if (!Array.isArray(jwks.keys)) throw new EntraAuthError();
         discovery = { until: Date.now() + 3600_000, keys: jwks.keys };
+
+    })().finally(() => { refreshing = undefined; });
+    return refreshing;
+  };
+  return async (token: string, idToken?: { audience: string; nonce: string }): Promise<EntraOwner> => {
+    try {
+      if (!token || token.length > 16_384 || !config.audiences.length) throw new EntraAuthError();
+      const unverified = decodeJwt(token);
+      const tid = unverified.tid;
+      if (typeof tid !== "string" || !TENANT_GUID.test(tid)) throw new EntraAuthError();
+      const tenantId = tid.toLowerCase();
+      if (tenantId === CONSUMER_TENANT) throw new EntraAuthError();
+      const header = decodeProtectedHeader(token);
+      if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid) throw new EntraAuthError();
+      const wasCached = Boolean(discovery && discovery.until >= Date.now());
+      if (!wasCached) await refresh();
+      if (wasCached && !discovery!.keys.some(key => key.kid === header.kid)) {
+        if (refreshing) await refreshing;
+        else if (Date.now() >= nextUnknownRefresh) {
+          nextUnknownRefresh = Date.now() + 30_000;
+          await refresh();
+        }
       }
-      const matches = discovery.keys.filter(key => key.kid === header.kid && (key.alg === undefined || key.alg === "RS256") && (key.use === undefined || key.use === "sig"));
+      const matches = discovery!.keys.filter(key => key.kid === header.kid && (key.alg === undefined || key.alg === "RS256") && (key.use === undefined || key.use === "sig"));
       if (matches.length !== 1) throw new EntraAuthError();
       const published = matches[0];
       if (typeof published.issuer !== "string" || !published.issuer) throw new EntraAuthError();

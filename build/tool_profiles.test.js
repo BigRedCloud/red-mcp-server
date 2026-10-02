@@ -1,3 +1,4 @@
+import { resolveRedMcpToolProfile, isToolAllowedByProfile } from "./tool_profiles.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -6,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createFilteredServer, registerAllTools } from "./register_all_tools.js";
 import { requiresRouteToken } from "./routing/route-token.js";
 import { createBrcMcpServer } from "./server.js";
-import { COPILOT_TOOL_ALLOWLIST, COPILOT_FULL_TOOL_ALLOWLIST, COPILOT_READ_ONLY_TOOL_ALLOWLIST, RED_MCP_TOOL_PROFILE_ENV, } from "./tool_profiles.js";
+import { COPILOT_TOOL_ALLOWLIST, COPILOT_READ_ONLY_TOOL_ALLOWLIST, RED_MCP_TOOL_PROFILE_ENV, } from "./tool_profiles.js";
 const ACCOUNTING_PLUS_ADDITIONS = [
     "brc_list_suppliers",
     "brc_get_supplier",
@@ -109,7 +110,7 @@ test("Copilot Read Only exposes the audited 80-tool catalogue without changing d
     const auditedCatalogueHash = createHash("sha256")
         .update(fullNames.join("\n"))
         .digest("hex");
-    assert.equal(auditedCatalogueHash, "11820efba083f309fce8029d8310e178c5f84fd7d7d903b5379590f4a0dd9fdb", "the 159-tool production catalogue changed; revisit the Copilot Full audit");
+    assert.equal(auditedCatalogueHash, "11820efba083f309fce8029d8310e178c5f84fd7d7d903b5379590f4a0dd9fdb", "the 159-tool production catalogue changed; revisit the tool catalogue audit");
     const expectedNames = [...COPILOT_READ_ONLY_TOOL_ALLOWLIST].sort();
     const actualNames = copilotReadOnlyTools.map((tool) => tool.name).sort();
     const actualNameSet = new Set(actualNames);
@@ -176,39 +177,9 @@ test("Copilot Read Only exposes the audited 80-tool catalogue without changing d
         assert.deepEqual(tool, fullByName.get(tool.name), `${tool.name}: descriptor`);
     }
 });
-test("Copilot Full exposes all 158 non-router production tools without route-token dependencies", async () => {
-    const fullTools = await listRegisteredTools("full");
-    const copilotFullTools = await listRegisteredTools("copilot-full");
-    assert.equal(fullTools.length, 159);
-    assert.equal(COPILOT_FULL_TOOL_ALLOWLIST.length, 158);
-    assert.equal(copilotFullTools.length, 158);
-    const expectedNames = fullTools
-        .map((tool) => tool.name)
-        .filter((name) => name !== "brc_route_request")
-        .sort();
-    const actualNames = copilotFullTools.map((tool) => tool.name).sort();
-    assert.deepEqual(actualNames, expectedNames);
-    assert.deepEqual(actualNames, [...COPILOT_FULL_TOOL_ALLOWLIST].sort());
-    assert.equal(new Set(actualNames).size, 158);
-    assert.equal(actualNames.includes("brc_route_request"), false);
-    const fullByName = new Map(fullTools.map((tool) => [tool.name, tool]));
-    for (const tool of copilotFullTools) {
-        const fullTool = fullByName.get(tool.name);
-        assert.ok(fullTool, tool.name);
-        assert.equal(tool.title, fullTool.title, `${tool.name}: title`);
-        assert.deepEqual(tool.annotations, fullTool.annotations, `${tool.name}: annotations`);
-        const properties = tool.inputSchema.properties ?? {};
-        assert.equal(Object.hasOwn(properties, "routeToken"), false, `${tool.name}: routeToken`);
-        if (requiresRouteToken(tool.name)) {
-            assert.doesNotMatch(tool.description ?? "", /Requires a valid routeToken/);
-            if (Object.hasOwn(fullTool.inputSchema.properties ?? {}, "confirmWrite")) {
-                assert.ok(Object.hasOwn(properties, "confirmWrite"), `${tool.name}: confirmWrite`);
-            }
-        }
-        else {
-            assert.deepEqual(tool, fullTool, `${tool.name}: unchanged descriptor`);
-        }
-    }
+test("obsolete write-capable Copilot profile is rejected", () => {
+    assert.throws(() => resolveRedMcpToolProfile({ RED_MCP_TOOL_PROFILE: "copilot-full" }), /Invalid RED_MCP_TOOL_PROFILE/);
+    assert.equal(isToolAllowedByProfile("brc_list_customers", "copilot-full"), false);
 });
 test("Copilot Read Only filtering prevents excluded tools from reaching SDK registration", () => {
     let registrations = 0;
@@ -253,7 +224,7 @@ test("unknown profile fails closed before any tool is registered", () => {
             registerTool() {
                 registrations += 1;
             },
-        }), /Invalid RED_MCP_TOOL_PROFILE value "unexpected".*"copilot-full"/);
+        }), /Invalid RED_MCP_TOOL_PROFILE value "unexpected".*"copilot-read-only"/);
         assert.equal(registrations, 0);
     }
     finally {

@@ -164,10 +164,10 @@ export function evaluateEntraStaffAccess(principal, config) {
 }
 export function logBrcEduAdminAccess(entry) {
     const at = new Date().toISOString();
-    const identity = entry.identity?.trim() || "anonymous";
+    const identityPresent = Boolean(entry.identity?.trim());
     const method = entry.method ?? "none";
     const statusPart = entry.status !== undefined ? ` status=${entry.status}` : "";
-    console.info(`BRC Edu admin access: identity=${identity} method=${method} result=${entry.result} at=${at}${statusPart}`);
+    console.info(`BRC Edu admin access: identityPresent=${identityPresent} method=${method} result=${entry.result} at=${at}${statusPart}`);
 }
 /**
  * Authorise BRC Edu admin routes using Azure App Service Easy Auth (Entra)

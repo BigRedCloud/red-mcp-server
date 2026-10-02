@@ -1,3 +1,4 @@
+import { verifyWebSubSignature } from "./websub_signature.js";
 import type { Request } from "express";
 
 import {
@@ -165,9 +166,8 @@ export async function handleYouTubeVisibilityUpdate(params: {
 }
 
 /**
- * Minimal YouTube PubSubHubbub / Atom notification validation.
- * Accepts hub challenge verification and POST notifications that mention a video id
- * or the configured channel id.
+ * YouTube WebSub challenge handling and authenticated Atom notifications.
+ * POST authenticity uses the subscription hub.secret and exact request bytes.
  */
 export function handleYouTubeWebhookRequest(req: Request): {
   status: number;
@@ -213,6 +213,11 @@ export function handleYouTubeWebhookRequest(req: Request): {
   }
 
   if (method === "POST") {
+    const secret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim() ?? "";
+    if (!secret) return { status: 503, body: "Webhook authentication is not configured.", shouldSync: false };
+    if (!Buffer.isBuffer(req.body) || !verifyWebSubSignature(req.body, req.headers["x-hub-signature"], secret)) {
+      return { status: 401, body: "Unauthorized.", shouldSync: false };
+    }
     const rawBody =
       typeof req.body === "string"
         ? req.body

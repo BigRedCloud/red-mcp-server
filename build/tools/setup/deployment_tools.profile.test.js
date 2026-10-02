@@ -33,21 +33,18 @@ function policyText(result) {
         .map((entry) => entry.text)
         .join("\n");
 }
-test("deployment policy is captured independently by full and both Copilot registrations", async () => {
-    const [full, readOnly, copilotFull] = await Promise.all([
+test("deployment policy is captured independently by full and read-only registrations", async () => {
+    const [full, readOnly] = await Promise.all([
         createProfileClient("full"),
         createProfileClient("copilot-read-only"),
-        createProfileClient("copilot-full"),
     ]);
     try {
-        const [fullResult, readOnlyResult, copilotFullResult] = await Promise.all([
+        const [fullResult, readOnlyResult] = await Promise.all([
             full.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
             readOnly.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
-            copilotFull.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
         ]);
         const fullText = policyText(fullResult);
         const readOnlyText = policyText(readOnlyResult);
-        const copilotFullText = policyText(copilotFullResult);
         const capabilities = getCustomerDeploymentCapabilities();
         const availability = (enabled) => enabled ? "available" : "not available";
         assert.match(fullText, /Current endpoint profile: full/);
@@ -76,24 +73,14 @@ test("deployment policy is captured independently by full and both Copilot regis
         }
         assert.doesNotMatch(readOnlyText, /Creating or changing records: available/);
         assert.doesNotMatch(readOnlyText, /Supported email actions are/);
-        assert.match(copilotFullText, /Current endpoint profile: copilot-full/);
-        assert.match(copilotFullText, /Registered tools: 158/);
-        assert.ok(copilotFullText.includes(`Create operations: ${availability(capabilities.canCreateOrUpdateRecords)}`));
-        assert.ok(copilotFullText.includes(`Update operations: ${availability(capabilities.canCreateOrUpdateRecords)}`));
-        assert.ok(copilotFullText.includes(`Delete operations: ${availability(capabilities.canDeleteRecords)}`));
-        assert.ok(copilotFullText.includes(`Batch-write operations: ${availability(capabilities.canBatchProcessRecords)}`));
-        assert.ok(copilotFullText.includes(`Email operations: ${availability(capabilities.canSendEmails)}`));
-        assert.match(copilotFullText, /Route-request orchestration: unavailable on this endpoint/);
-        const [fullAgain, readOnlyAgain, copilotFullAgain] = await Promise.all([
+        const [fullAgain, readOnlyAgain] = await Promise.all([
             full.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
             readOnly.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
-            copilotFull.client.callTool({ name: "brc_get_deployment_policy", arguments: {} }),
         ]);
         assert.match(policyText(fullAgain), /profile: full[\s\S]*Registered tools: 159/);
         assert.match(policyText(readOnlyAgain), /profile: copilot-read-only[\s\S]*Registered tools: 80/);
-        assert.match(policyText(copilotFullAgain), /profile: copilot-full[\s\S]*Registered tools: 158/);
     }
     finally {
-        await Promise.all([full.close(), readOnly.close(), copilotFull.close()]);
+        await Promise.all([full.close(), readOnly.close()]);
     }
 });
