@@ -1,0 +1,203 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { randomUUID, randomBytes } from "node:crypto";
+import { fetchCopilotCustomer, listCopilotCustomers } from "./copilot_customers.js";
+import { entraRequestOwner } from "./auth/entra_auth.js";
+import { getConnectionStore } from "./auth/connection_store.js";
+import { encryptCredentialSecret, decryptCredentialSecret } from "./auth/credential_encryption.js";
+test("customer cursors reject another connected owner, tampering and expiry; output redacts echoed secrets", async (t) => {
+    const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    t.after(() => { if (old === undefined)
+        delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+    else
+        process.env.RED_CONNECT_ENCRYPTION_KEY = old; });
+    const a = { tenantId: randomUUID(), objectId: randomUUID() }, b = { ...a, objectId: randomUUID() };
+    const store = getConnectionStore().entra;
+    for (const owner of [a, b]) {
+        await store.createLink(owner);
+        await store.saveCompanies(owner, [{ companyName: "A", apiKey: "synthetic-only-secret", expiresAt: Date.now() + 60_000 }]);
+    }
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => { calls++; return new Response(JSON.stringify({ Items: [{ Id: calls, Name: `synthetic-only-secret ${a.objectId}`, apiKey: "synthetic-only-secret" }], Count: 99 })); });
+    const invoke = (owner, args) => entraRequestOwner.run(owner, () => listCopilotCustomers(args));
+    assert.equal((await listCopilotCustomers({})).structuredContent.status, "authentication_required");
+    assert.equal(calls, 0);
+    const first = await invoke(a, { pageSize: 1 });
+    assert.equal(calls, 3);
+    assert.doesNotMatch(JSON.stringify(first), /synthetic-only-secret|apiKey/);
+    assert.equal(JSON.stringify(first).includes(a.objectId), false);
+    const cursor = String(first.structuredContent.nextCursor);
+    assert.equal((await invoke(b, { cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(a, { cursor: cursor + "garbage" })).structuredContent.status, "invalid_cursor");
+    const expired = JSON.parse(decryptCredentialSecret(cursor));
+    expired.exp = Date.now() - 1;
+    assert.equal((await invoke(a, { cursor: encryptCredentialSecret(JSON.stringify(expired)) })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(a, { cursor, pageSize: 2 })).structuredContent.status, "invalid_cursor");
+    assert.equal(calls, 3, "invalid continuations perform no BRC calls");
+});
+test("customer search bounds scans, lists with empty query and binds continuation to query", async (t) => {
+    const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    t.after(() => { if (old === undefined)
+        delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+    else
+        process.env.RED_CONNECT_ENCRYPTION_KEY = old; });
+    const owner = { tenantId: randomUUID(), objectId: randomUUID() };
+    const oldHttpMode = process.env.RED_CONNECT_HTTP_MODE;
+    process.env.RED_CONNECT_HTTP_MODE = "true";
+    t.after(() => { if (oldHttpMode === undefined)
+        delete process.env.RED_CONNECT_HTTP_MODE;
+    else
+        process.env.RED_CONNECT_HTTP_MODE = oldHttpMode; });
+    await getConnectionStore().entra.createLink(owner);
+    await getConnectionStore().entra.saveCompanies(owner, [{ companyName: "Search Co", apiKey: "search-test-secret", expiresAt: Date.now() + 60_000 }]);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (input) => {
+        calls++;
+        const page = Number(new URL(String(input)).searchParams.get("$skip")) / 20 + 1;
+        return new Response(JSON.stringify({ Items: page <= 3 ? Array.from({ length: 20 }, (_, i) => ({ Id: (page - 1) * 20 + i + 1, Name: "Other" })) : [{ Id: 61, Name: "Needle" }] }));
+    });
+    const invoke = (args) => entraRequestOwner.run(owner, () => listCopilotCustomers(args));
+    const empty = await invoke({ query: "" });
+    assert.equal(calls, 3);
+    assert.equal(empty.structuredContent.companies.flatMap(g => g.customers).length, 60);
+    const first = await invoke({ query: "needle" });
+    assert.equal(calls, 6);
+    assert.equal(first.structuredContent.companies.flatMap(g => g.customers).length, 0);
+    assert.equal(first.structuredContent.complete, false);
+    const cursor = String(first.structuredContent.nextCursor);
+    assert.equal((await invoke({ query: "different", cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal(calls, 6);
+    const next = await invoke({ query: "needle", cursor });
+    assert.equal(calls, 7);
+    assert.equal(next.structuredContent.companies[0].customers[0].Id, 61);
+    assert.equal(next.structuredContent.complete, true);
+});
+test("search_customers queries only the named company and binds the cursor to it", async (t) => {
+    const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    t.after(() => { if (old === undefined)
+        delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+    else
+        process.env.RED_CONNECT_ENCRYPTION_KEY = old; });
+    const owner = { tenantId: randomUUID(), objectId: randomUUID() }, other = { ...owner, objectId: randomUUID() };
+    const oldHttpMode = process.env.RED_CONNECT_HTTP_MODE;
+    process.env.RED_CONNECT_HTTP_MODE = "true";
+    t.after(() => { if (oldHttpMode === undefined)
+        delete process.env.RED_CONNECT_HTTP_MODE;
+    else
+        process.env.RED_CONNECT_HTTP_MODE = oldHttpMode; });
+    const store = getConnectionStore().entra;
+    await store.createLink(owner);
+    await store.createLink(other);
+    const expiresAt = Date.now() + 60_000;
+    await store.saveCompanies(owner, [
+        { companyName: "Company A", apiKey: "key-a", expiresAt },
+        { companyName: "Company B", apiKey: "key-b", expiresAt },
+        { companyName: "Company C", apiKey: "key-c", expiresAt },
+    ]);
+    await store.saveCompanies(other, [{ companyName: "Secret Co", apiKey: "secret-owner-b", expiresAt }]);
+    const calls = [];
+    let wide = false;
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        const key = Buffer.from(String(new Headers(init?.headers).get("authorization") ?? "").replace(/^Basic /, ""), "base64").toString().replace(/:$/, "");
+        calls.push(key);
+        const skip = Number(new URL(String(input)).searchParams.get("$skip") ?? 0);
+        const size = Number(new URL(String(input)).searchParams.get("$top") ?? 20);
+        const names = key === "key-a" && wide ? Array.from({ length: 65 }, (_, i) => `Customer ${i + 1}`) : key === "key-a" ? ["Ann", "Zoe"] : key === "key-c" ? ["Paul", "Ann"] : key === "secret-owner-b" ? ["Secret customer"] : ["Other"];
+        return new Response(JSON.stringify({ Items: names.slice(skip, skip + size).map((Name, i) => ({ Id: skip + i + 1, Name })) }));
+    });
+    const invoke = (who, args) => entraRequestOwner.run(who, () => listCopilotCustomers(args));
+    calls.length = 0;
+    const companyA = await invoke(owner, { query: "", companyName: "Company A" });
+    assert.equal(companyA.structuredContent.status, "ok");
+    assert.deepEqual(companyA.structuredContent.unavailableCompanies, []);
+    assert.ok(companyA.structuredContent.companies.every(group => group.companyName === "Company A" && group.status === "ok"));
+    assert.deepEqual(companyA.structuredContent.companies.flatMap(group => group.customers).map(row => row.Name), ["Ann", "Zoe"]);
+    assert.deepEqual(calls, ["key-a"]);
+    calls.length = 0;
+    const folded = await invoke(owner, { query: "", companyName: "company a" });
+    assert.equal(folded.structuredContent.status, "ok");
+    assert.deepEqual(calls, ["key-a"]);
+    calls.length = 0;
+    const paul = await invoke(owner, { query: "Paul", companyName: "Company C" });
+    assert.equal(paul.structuredContent.status, "ok");
+    assert.deepEqual(calls, ["key-c"]);
+    assert.deepEqual(paul.structuredContent.companies.flatMap(group => group.customers).map(row => row.Name), ["Paul"]);
+    calls.length = 0;
+    const textOnly = await invoke(owner, { query: "Company A" });
+    assert.ok(calls.includes("key-a") && calls.includes("key-b") && calls.includes("key-c"));
+    assert.equal(textOnly.structuredContent.companies.flatMap(group => group.customers).length, 0);
+    calls.length = 0;
+    const missing = await invoke(owner, { query: "", companyName: "Company D" });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.structuredContent.status, "company_unavailable");
+    assert.deepEqual(missing.structuredContent.companies, []);
+    assert.deepEqual(missing.structuredContent.unavailableCompanies, ["Company D"]);
+    assert.equal(calls.length, 0);
+    calls.length = 0;
+    const none = await invoke(owner, { query: "XYZ", companyName: "Company A" });
+    assert.equal(none.structuredContent.status, "ok");
+    assert.equal(none.isError, undefined);
+    assert.deepEqual(none.structuredContent.unavailableCompanies, []);
+    assert.ok(none.structuredContent.companies.every(group => group.companyName === "Company A" && group.status === "ok" && group.customers.length === 0));
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    wide = true;
+    calls.length = 0;
+    const paged = await invoke(owner, { query: "", companyName: "Company A" });
+    assert.equal(paged.structuredContent.complete, false);
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    const cursor = String(paged.structuredContent.nextCursor);
+    calls.length = 0;
+    const continued = await invoke(owner, { query: "", companyName: "Company A", cursor });
+    assert.equal(continued.structuredContent.status, "ok");
+    assert.deepEqual([...new Set(calls)], ["key-a"]);
+    calls.length = 0;
+    assert.equal((await invoke(owner, { query: "", companyName: "Company B", cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(owner, { query: "Smith", companyName: "Company A", cursor })).structuredContent.status, "invalid_cursor");
+    assert.equal((await invoke(other, { query: "", companyName: "Company A", cursor })).structuredContent.status, "company_unavailable");
+    assert.equal(calls.length, 0);
+    calls.length = 0;
+    const isolated = await invoke(owner, { query: "", companyName: "Secret Co" });
+    assert.equal(isolated.structuredContent.status, "company_unavailable");
+    const own = await invoke(other, { query: "", companyName: "Secret Co" });
+    assert.equal(own.structuredContent.status, "ok");
+    assert.deepEqual([...new Set(calls)], ["secret-owner-b"]);
+    assert.equal(JSON.stringify(own).includes("secret-owner-b"), false);
+});
+test("customer fetch uses a linked company, exact ID and safe projection", async (t) => {
+    const old = process.env.RED_CONNECT_ENCRYPTION_KEY;
+    process.env.RED_CONNECT_ENCRYPTION_KEY = randomBytes(32).toString("base64");
+    t.after(() => { if (old === undefined)
+        delete process.env.RED_CONNECT_ENCRYPTION_KEY;
+    else
+        process.env.RED_CONNECT_ENCRYPTION_KEY = old; });
+    const owner = { tenantId: randomUUID(), objectId: randomUUID() }, other = { ...owner, objectId: randomUUID() };
+    const oldHttpMode = process.env.RED_CONNECT_HTTP_MODE;
+    process.env.RED_CONNECT_HTTP_MODE = "true";
+    t.after(() => { if (oldHttpMode === undefined)
+        delete process.env.RED_CONNECT_HTTP_MODE;
+    else
+        process.env.RED_CONNECT_HTTP_MODE = oldHttpMode; });
+    await getConnectionStore().entra.createLink(owner);
+    await getConnectionStore().entra.saveCompanies(owner, [{ companyName: "Fetch Co", apiKey: "fetch-test-secret", expiresAt: Date.now() + 60_000 }]);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+        calls++;
+        assert.equal(new URL(String(input)).pathname, "/api/v1/customers/1");
+        assert.ok(!init?.method || init.method === "GET");
+        return new Response(JSON.stringify({ Id: 1, Name: `Customer fetch-test-secret ${owner.objectId}`, apiKey: "fetch-test-secret" }));
+    });
+    const args = { customerId: "1", companyName: "Fetch Co" };
+    assert.equal((await fetchCopilotCustomer(args)).structuredContent.status, "authentication_required");
+    assert.equal((await entraRequestOwner.run(other, () => fetchCopilotCustomer(args))).structuredContent.status, "customer_unavailable");
+    assert.equal((await entraRequestOwner.run(owner, () => fetchCopilotCustomer({ ...args, customerId: ".." }))).structuredContent.status, "invalid_request");
+    assert.equal(calls, 0);
+    const result = await entraRequestOwner.run(owner, () => fetchCopilotCustomer(args));
+    assert.equal(result.structuredContent.status, "ok");
+    assert.equal(result.structuredContent.customer.Id, 1);
+    assert.doesNotMatch(JSON.stringify(result), /fetch-test-secret|apiKey/);
+    assert.equal(JSON.stringify(result).includes(owner.objectId), false);
+    assert.equal(calls, 1);
+});

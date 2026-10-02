@@ -6,19 +6,8 @@ import XLSX from "xlsx";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
-const reportJsonPath =
-  process.argv[2] ??
-  path.resolve(
-    projectRoot,
-    "..",
-    "..",
-    "..",
-    ".cursor",
-    "projects",
-    "c-Users-Lauren-Dwyer-source-repos-brc-company-mcp-server-brc-company-mcp-server",
-    "agent-tools",
-    "b56b1dac-866c-47cd-b7a9-7915f05fdf96.txt"
-  );
+const reportJsonPath = process.argv[2];
+if (!reportJsonPath) throw new Error("Usage: node scripts/exports/export-combined-report.mjs <report-json-path> [output-xlsx-path]");
 
 const outputPath =
   process.argv[3] ??

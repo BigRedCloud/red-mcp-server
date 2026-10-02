@@ -16,6 +16,7 @@ import {
   redServerConfig,
 } from "../../config/server_config.js";
 import { formatCredentialTtlForUser } from "../../auth/connection_presentation.js";
+import type { RedMcpToolProfile } from "../../tool_profiles.js";
 import {
   dateWithinRange,
   deriveFinancialYear,
@@ -154,13 +155,56 @@ function deploymentPolicy() {
   };
 }
 
-function customerDeploymentPolicyText() {
+type DeploymentPolicyRegistrationContext = {
+  profile: RedMcpToolProfile;
+  getRegisteredToolCount: () => number;
+};
+
+function customerDeploymentPolicyText(
+  profile: RedMcpToolProfile = "full",
+  registeredToolCount = 159,
+) {
   const capabilities = getCustomerDeploymentCapabilities();
 
   const availability = (enabled: boolean) =>
     enabled ? "available" : "not available";
 
-  return `Current capabilities in this Red session:
+  const endpointCapabilities = profile === "copilot-read-only"
+    ? `- Read-only accounting operations: available
+- Company connection operations: available
+- Create operations: unavailable on this endpoint
+- Update operations: unavailable on this endpoint
+- Delete operations: unavailable on this endpoint
+- Post and allocate operations: unavailable on this endpoint
+- Batch-write operations: unavailable on this endpoint
+- Email operations: unavailable on this endpoint
+- Route-request orchestration: unavailable on this endpoint`
+    : `- Read and connection operations: available
+- Create operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Update operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Delete operations: ${availability(capabilities.canDeleteRecords)}
+- Post and allocate operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Batch-write operations: ${availability(capabilities.canBatchProcessRecords)}
+- Email operations: ${availability(capabilities.canSendEmails)}
+- Route-request orchestration: ${profile === "full" ? "available" : "unavailable on this endpoint"}`;
+
+  if (profile === "copilot-read-only") {
+    return `Current endpoint profile: copilot-read-only
+Registered tools: ${registeredToolCount}
+
+Effective endpoint capabilities:
+${endpointCapabilities}
+
+Authentication and company-connection safeguards remain applicable. Connection credentials remain session-scoped and are not returned in responses. Audit requirements continue to apply. Confirmation, route-token, and batch-limit controls remain enforced wherever those operations exist, but mutation, email, batch-write, and route-request tools are not registered on this endpoint.`;
+  }
+
+  return `Current endpoint profile: ${profile}
+Registered tools: ${registeredToolCount}
+
+Effective endpoint capabilities:
+${endpointCapabilities}
+
+Current deployment capabilities:
 
 - Reading connected company data: ${availability(capabilities.canReadCompanyData)}
 - Creating or changing records: ${availability(capabilities.canCreateOrUpdateRecords)}
@@ -544,7 +588,13 @@ export async function resolveBookTransactionType(
   };
 }
 
-export function registerDeploymentTools(server: ServerType) {
+export function registerDeploymentTools(
+  server: ServerType,
+  context: DeploymentPolicyRegistrationContext = {
+    profile: "full",
+    getRegisteredToolCount: () => 159,
+  },
+) {
   server.tool(
     "brc_get_deployment_policy",
     [
@@ -557,7 +607,13 @@ export function registerDeploymentTools(server: ServerType) {
       "Assistant-only connection diagnostics (never include in customer answers): a missing result or empty list does not by itself mean the connection has expired; only a confirmed authentication failure should be treated as an invalid company credential.",
     ].join(" "),
     {},
-    async () => textResponse(customerDeploymentPolicyText())
+    async () =>
+      textResponse(
+        customerDeploymentPolicyText(
+          context.profile,
+          context.getRegisteredToolCount(),
+        ),
+      )
   );
 
   server.tool(

@@ -1,0 +1,150 @@
+import { advancePage, freshPaging, pagingArgs, pagingSchema, type Paging } from "./copilot_paging.js";
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { entraRequestOwner } from "./auth/entra_auth.js";
+import { ownerKey } from "./auth/entra_store.js";
+import { getConnectionStore, ensureConnectionStoreInitialized } from "./auth/connection_store.js";
+import { encryptCredentialSecret } from "./auth/credential_encryption.js";
+import { decodeStoredApiKey } from "./auth/credential_secret.js";
+import { openSsoEnvelope, ssoPublicBase } from "./auth/entra_browser.js";
+import { brcFetch, normaliseCompanyName, runWithSessionKeyStore, type CompanyApiContext } from "./shared.js";
+import { buildListQuery } from "./tools/general/list_tools.js";
+
+const annotations = {readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false} as const;
+const response = (data: Record<string,unknown>, isError = false) => ({ content:[{type:"text" as const,text:JSON.stringify(data)}],structuredContent:data,...(isError?{isError:true}:{}) });
+type Cursor = {version:2;paging:Paging;incomplete:boolean;owner:string;snapshot:string;index:number;page:number;pageSize:number;exp:number;query?:string;company?:string};
+const fields = new Set(["id","customerid","code","customercode","accode","name","customername","email","emailaddress","telephone","phone","address1","address2","address3","address4","postcode","country","contact","contactname","balance","dormant","isdormant"]);
+function safeCustomer(item: unknown, clean: (value: string) => string) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Unsupported customer response.");
+  const row: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(item)) if (fields.has(key.toLowerCase())) {
+    if (typeof value === "string") {
+      if (value.length > 4000) throw new Error("Customer field is too large.");
+      row[key] = clean(value);
+    } else if (value === null || typeof value === "boolean" || typeof value === "number") row[key] = value;
+  }
+  return row;
+}
+
+function redactCustomerText(secrets: string[]) {
+  return (value: string) => {
+    let text = value;
+    for (const secret of secrets) if (secret) text = text.split(secret).join("[redacted]");
+    return text.replace(/Bearer\s+\S+/gi,"[redacted]").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,"[redacted]");
+  };
+}
+
+export async function listCopilotCustomers(args: {cursor?:string;pageSize?:number;query?:string;companyName?:string}) {
+  const owner = entraRequestOwner.getStore();
+  if (!owner) return response({status:"authentication_required",message:"Sign in with Microsoft to list your customers."},true);
+  try {
+    await ensureConnectionStoreInitialized();
+    const store = getConnectionStore().entra;
+    const linked = await store.listCompanies(owner);
+    if (!linked.length) {
+      const base = ssoPublicBase();
+      const request = await store.createPendingRequest(owner);
+      return response({status:"connection_required",message:"Connect your Big Red Cloud companies securely using your Microsoft sign-in. Enter credentials only on the connection page.",connectionUrl:`${base}/connect?request=${request}`});
+    }
+    const requested = args.companyName?.trim() ?? "";
+    const companyKey = requested ? normaliseCompanyName(requested) : "";
+    const companies = companyKey ? linked.filter(company => normaliseCompanyName(company.companyName) === companyKey) : linked;
+    if (companyKey && companies.length !== 1) {
+      return response({
+        status: companies.length ? "company_ambiguous" : "company_unavailable",
+        message: companies.length ? "More than one connected company matches that name." : `${requested} is not connected.`,
+        companies: [],
+        unavailableCompanies: companies.length ? companies.map(company => company.companyName) : [requested],
+      }, true);
+    }
+    const snapshot = createHash("sha256").update(JSON.stringify(companies.map(c=>[c.companyName,c.updatedAt]))).digest("hex");
+    const query = (args.query ?? "").trim().toLowerCase();
+    let cursor: Cursor = {version:2,paging:freshPaging(),incomplete:false,owner:ownerKey(owner),snapshot,index:0,page:1,pageSize:args.pageSize??20,exp:Date.now()+600_000,query,company:companyKey};
+    if (args.cursor) {
+      try { cursor = JSON.parse(openSsoEnvelope(args.cursor)); } catch { return response({status:"invalid_cursor",message:"Restart the customer list."},true); }
+      if ((cursor.query ?? "") !== query || (cursor.company ?? "") !== companyKey) return response({status:"invalid_cursor",message:"Restart the customer search when changing the query or company."},true);
+      if (cursor.version!==2 || !pagingSchema.safeParse(cursor.paging).success || typeof cursor.incomplete!=="boolean" || cursor.owner!==ownerKey(owner) || cursor.snapshot!==snapshot || cursor.exp<=Date.now() || !Number.isInteger(cursor.index) || cursor.index<0 || cursor.index>=companies.length || !Number.isInteger(cursor.page) || cursor.page<1 || !Number.isInteger(cursor.pageSize) || cursor.pageSize<1 || cursor.pageSize>50 || (args.pageSize!==undefined && args.pageSize!==cursor.pageSize)) return response({status:"invalid_cursor",message:"Restart the customer list."},true);
+    }
+    if (cursor.pageSize<1 || cursor.pageSize>50) return response({status:"invalid_request"},true);
+    const secrets = [owner.tenantId,owner.objectId,...linked.flatMap(c=>{const key=decodeStoredApiKey(c.encryptedSecret);return [key,Buffer.from(`${key}:`).toString("base64")];})];
+    const clean = redactCustomerText(secrets);
+    const groups: Record<string,unknown>[] = [];
+    // At most three BRC pages per invocation; cursor retains the next company/page.
+    for(let requests=0;requests<3 && cursor.index<companies.length;requests++) {
+      const company=companies[cursor.index];
+      const group: Record<string,unknown>={companyName:clean(company.companyName),page:cursor.page,pageSize:cursor.pageSize};
+      try {
+        const contexts = new Map<string,CompanyApiContext>([[company.companyName.toLowerCase(), {companyName:company.companyName,apiKey:decodeStoredApiKey(company.encryptedSecret),expiresAt:company.expiresAt}]]);
+        const data = await runWithSessionKeyStore(contexts,()=>brcFetch(company.companyName, `/v1/customers${buildListQuery(pagingArgs(cursor.paging,cursor.pageSize))}`, {signal:AbortSignal.timeout(15_000)}));
+        const obj=data as Record<string,unknown>;
+        const items = Array.isArray(data) ? data : obj?.Items ?? obj?.items;
+        if (!Array.isArray(items) || items.length>cursor.pageSize) throw new Error("Unsupported customer response.");
+        const progress=advancePage(cursor.paging,items,cursor.pageSize,row=> { const id=Object.entries(row).find(([key])=>["id","customerid"].includes(key.toLowerCase()))?.[1]; return id===undefined ? undefined : String(id); });
+        const safeItems=progress.rows.map(item=>safeCustomer(item,clean)).filter(row=>!query || Object.values(row).some(value=>
+          (typeof value === "string" || typeof value === "number") && String(value).toLowerCase().includes(query)));
+        if (Buffer.byteLength(JSON.stringify(safeItems)) > 128_000) throw new Error("Customer page is too large.");
+        Object.assign(group,{status:"ok",customers:safeItems});
+        // A full page always warrants a next-page check, independent of Count semantics.
+        cursor.paging=progress.state;
+        if(progress.warning) {group.status=progress.warning;cursor.incomplete=true;}
+        if(!progress.done) cursor.page++; else {cursor.index++;cursor.page=1;cursor.paging=freshPaging();}
+      } catch {
+        Object.assign(group,{status:"company_unavailable",message:"Could not list this company's customers. Retry this company by restarting the list.",customers:[]});
+        cursor.index++;cursor.page=1;cursor.paging=freshPaging();
+      }
+      groups.push(group);
+    }
+    const nextCursor = cursor.index<companies.length ? encryptCredentialSecret(JSON.stringify(cursor)) : undefined;
+    return response({status:cursor.incomplete||groups.some(g=>g.status!=="ok")?"partial_failure":"ok",companies:groups,unavailableCompanies:[],...(nextCursor?{nextCursor}:{}),complete:!nextCursor && !cursor.incomplete});
+  } catch { return response({status:"service_unavailable",message:"Customer listing is unavailable. Please try again."},true); }
+}
+export function registerCopilotCustomers(server: McpServer) {
+  server.registerTool("search_customers", {
+    title: "Search Big Red Cloud customers",
+    description: "Search customers linked to the signed-in Microsoft user. Named companies belong in companyName, not query. \"customers in Company A\" → companyName=\"Company A\", query=\"\". \"find Paul in Company C\" → companyName=\"Company C\", query=\"Paul\". \"find customer Paul\" → query=\"Paul\" and omit companyName.",
+    annotations,
+    inputSchema: z.object({
+      query: z.string().max(1000).describe("Optional customer search text such as customer name, code, email or other customer identifier. Do not put the Big Red Cloud company name here."),
+      companyName: z.string().min(1).max(4000).optional().describe("The connected Big Red Cloud company to search. When the user names a company, put that company name here. Do not put company names in `query`."),
+      nextCursor: z.string().max(4096).optional().describe("Continuation returned by the previous search; keep the same query and companyName."),
+    }).strict(),
+  }, ({query,companyName,nextCursor}) => listCopilotCustomers({query,companyName,cursor:nextCursor}));
+  server.registerTool("fetch_customer", {
+    title: "Fetch Big Red Cloud customer",
+    description: "Fetch one Big Red Cloud customer by its exact customer identifier from companies linked to the signed-in Microsoft user.",
+    annotations,
+    inputSchema: z.object({
+      customerId: z.string().min(1).max(256).describe("Exact customer Id or CustomerId returned by search_customers, as a string."),
+      companyName: z.string().min(1).max(4000).describe("Company name returned with the customer by search_customers; customer IDs are company-scoped."),
+    }).strict(),
+  }, fetchCopilotCustomer);
+}
+
+export async function fetchCopilotCustomer(args: {customerId:string;companyName:string}) {
+  const owner = entraRequestOwner.getStore();
+  if (!owner) return response({status:"authentication_required",message:"Sign in with Microsoft to fetch a customer."},true);
+  if (!args.customerId || args.customerId === "." || args.customerId === "..") return response({status:"invalid_request"},true);
+  try {
+    await ensureConnectionStoreInitialized();
+    const companies = await getConnectionStore().entra.listCompanies(owner);
+    const company = companies.find(item=>item.companyName === args.companyName);
+    if (!company) return response({status:"customer_unavailable",message:"Search your linked companies for this customer first."},true);
+    const secrets = [owner.tenantId,owner.objectId,...companies.flatMap(item=>{
+      const key=decodeStoredApiKey(item.encryptedSecret);
+      return [key,Buffer.from(`${key}:`).toString("base64")];
+    })];
+    const clean = redactCustomerText(secrets);
+    const contexts = new Map<string,CompanyApiContext>([[company.companyName.toLowerCase(), {
+      companyName:company.companyName,apiKey:decodeStoredApiKey(company.encryptedSecret),expiresAt:company.expiresAt,
+    }]]);
+    const data = await runWithSessionKeyStore(contexts,()=>brcFetch(company.companyName,
+      `/v1/customers/${encodeURIComponent(args.customerId)}`,{signal:AbortSignal.timeout(15_000)}));
+    const customer = safeCustomer(data,clean);
+    const id = Object.entries(customer).find(([key])=>["id","customerid"].includes(key.toLowerCase()))?.[1];
+    if (String(id) !== args.customerId || Buffer.byteLength(JSON.stringify(customer)) > 128_000) throw new Error("Unexpected customer response.");
+    return response({status:"ok",companyName:clean(company.companyName),customer});
+  } catch {
+    return response({status:"customer_unavailable",message:"Could not fetch this customer. Search again and retry."},true);
+  }
+}

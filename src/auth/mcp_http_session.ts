@@ -381,7 +381,7 @@ function sessionDebugEnabled(): boolean {
   if (configured === "false") {
     return false;
   }
-  return process.env.RED_CONNECT_HTTP_MODE === "true";
+  return configured === "true";
 }
 
 export function normalizeHeaderValue(

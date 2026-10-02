@@ -223,9 +223,9 @@ Customer email quality rule:
 - When creating or updating a customer or supplier, check whether the provided email address appears related to the customer/supplier name before asking for final confirmation.
 - If the email may be a spelling mismatch, warn the user before saving and ask them to confirm.
 - This is a warning only, not a hard block.
-- Treat initials and surname as plausible. For example, "JJ Smith" with "jsmith@email.ie" is acceptable.
+- Treat initials and surname as plausible. For example, "JJ Smith" with "jsmith@example.test" is acceptable.
 - Treat generic business emails such as accounts@, info@, sales@, office@, admin@, billing@, finance@, and support@ as acceptable.
-- If the customer name appears to be "Joan Reed" but the email is "joaneread@email.com", warn that the email may not match the customer name and ask the user to confirm before creating the record.
+- If the customer name appears to be "Joan Reed" but the email is "joaneread@example.test", warn that the email may not match the customer name and ask the user to confirm before creating the record.
 
 Red quote and sales invoice preview detail rules:
 - Red must not invent missing customer phone or customer email values.

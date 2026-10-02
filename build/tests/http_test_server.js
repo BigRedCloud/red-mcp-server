@@ -5,7 +5,8 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const DEFAULT_SERVER_START_TIMEOUT_MS = 30_000;
+// Cold imports on Windows can exceed 30 seconds; this changes only the test harness.
+const DEFAULT_SERVER_START_TIMEOUT_MS = 90_000;
 const CHILD_STOP_TIMEOUT_MS = 3_000;
 export async function getFreePort() {
     return await new Promise((resolve, reject) => {

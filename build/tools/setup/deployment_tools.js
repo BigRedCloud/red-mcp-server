@@ -103,10 +103,43 @@ function deploymentPolicy() {
         },
     };
 }
-function customerDeploymentPolicyText() {
+function customerDeploymentPolicyText(profile = "full", registeredToolCount = 159) {
     const capabilities = getCustomerDeploymentCapabilities();
     const availability = (enabled) => enabled ? "available" : "not available";
-    return `Current capabilities in this Red session:
+    const endpointCapabilities = profile === "copilot-read-only"
+        ? `- Read-only accounting operations: available
+- Company connection operations: available
+- Create operations: unavailable on this endpoint
+- Update operations: unavailable on this endpoint
+- Delete operations: unavailable on this endpoint
+- Post and allocate operations: unavailable on this endpoint
+- Batch-write operations: unavailable on this endpoint
+- Email operations: unavailable on this endpoint
+- Route-request orchestration: unavailable on this endpoint`
+        : `- Read and connection operations: available
+- Create operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Update operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Delete operations: ${availability(capabilities.canDeleteRecords)}
+- Post and allocate operations: ${availability(capabilities.canCreateOrUpdateRecords)}
+- Batch-write operations: ${availability(capabilities.canBatchProcessRecords)}
+- Email operations: ${availability(capabilities.canSendEmails)}
+- Route-request orchestration: ${profile === "full" ? "available" : "unavailable on this endpoint"}`;
+    if (profile === "copilot-read-only") {
+        return `Current endpoint profile: copilot-read-only
+Registered tools: ${registeredToolCount}
+
+Effective endpoint capabilities:
+${endpointCapabilities}
+
+Authentication and company-connection safeguards remain applicable. Connection credentials remain session-scoped and are not returned in responses. Audit requirements continue to apply. Confirmation, route-token, and batch-limit controls remain enforced wherever those operations exist, but mutation, email, batch-write, and route-request tools are not registered on this endpoint.`;
+    }
+    return `Current endpoint profile: ${profile}
+Registered tools: ${registeredToolCount}
+
+Effective endpoint capabilities:
+${endpointCapabilities}
+
+Current deployment capabilities:
 
 - Reading connected company data: ${availability(capabilities.canReadCompanyData)}
 - Creating or changing records: ${availability(capabilities.canCreateOrUpdateRecords)}
@@ -441,7 +474,10 @@ export async function resolveBookTransactionType(companyName, bookTranTypeId, de
         documentKind: kind,
     };
 }
-export function registerDeploymentTools(server) {
+export function registerDeploymentTools(server, context = {
+    profile: "full",
+    getRegisteredToolCount: () => 159,
+}) {
     server.tool("brc_get_deployment_policy", [
         "Authoritative customer-facing permission and output policy summary for this Red session.",
         "Use when the user asks what they can do, what tools they have, what permissions are enabled, or whether technical details/code should be shown.",
@@ -450,7 +486,7 @@ export function registerDeploymentTools(server) {
         "Customer-facing answers must be plain-English business responses with evidence, assumptions, uncertainty, and limitations.",
         "Internal analysis is allowed, but code/scripts/commands/intermediate files must not be exposed to customer users unless dev mode is enabled.",
         "Assistant-only connection diagnostics (never include in customer answers): a missing result or empty list does not by itself mean the connection has expired; only a confirmed authentication failure should be treated as an invalid company credential.",
-    ].join(" "), {}, async () => textResponse(customerDeploymentPolicyText()));
+    ].join(" "), {}, async () => textResponse(customerDeploymentPolicyText(context.profile, context.getRegisteredToolCount())));
     server.tool("brc_get_dev_mode_details", "Internal operator diagnostics when dev mode is enabled on the server. Returns deployment flags and configuration detail. Assistants must not quote or summarize this output in end-user chat.", {}, async () => jsonResponse({
         devModeActive: redServerConfig.allowDevMode,
         deploymentPolicy: deploymentPolicy(),

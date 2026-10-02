@@ -1,3 +1,4 @@
+import { entraRequestOwner } from "./auth/entra_auth.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
@@ -89,6 +90,7 @@ function credentialDebugEnabled(): boolean {
 }
 
 function logCredentialDebug(details: Record<string, unknown>): void {
+  if (entraRequestOwner.getStore()) return;
   if (!credentialDebugEnabled()) {
     return;
   }
@@ -1745,6 +1747,7 @@ export async function brcFetch(
       );
     }
 
+    if (entraRequestOwner.getStore()) throw new Error("BRC customer request failed.");
     throw new Error(
       `BRC API ${method} ${safePath} failed for "${companyName}": ${response.status} ${response.statusText}. ${text}`
     );
@@ -1810,24 +1813,117 @@ export function extractListItems(data: unknown): JsonRecord[] {
   return [];
 }
 
-export async function fetchAllNominalAccounts(companyName: string): Promise<JsonRecord[]> {
+type NominalAccountsPage = {
+  items: JsonRecord[];
+  isListEnvelope: boolean;
+  nextPageLink?: string;
+  totalCount?: number;
+};
+
+function parseNominalAccountsPage(data: unknown): NominalAccountsPage {
+  if (Array.isArray(data)) {
+    return { items: validateNominalAccountItems(data), isListEnvelope: false };
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("Unexpected nominal-accounts response: expected an array or list envelope.");
+  }
+
+  const record = data as JsonRecord;
+  const nestedResult = record.result;
+  if (Array.isArray(nestedResult)) {
+    return { items: validateNominalAccountItems(nestedResult), isListEnvelope: false };
+  }
+  if (nestedResult && typeof nestedResult === "object") {
+    return parseNominalAccountsPage(nestedResult);
+  }
+
+  const collection = record.Items ?? record.items ?? record.value ?? record.Value;
+  if (!Array.isArray(collection)) {
+    throw new Error(
+      "Unexpected nominal-accounts response: no Items, items, value, Value, or result array was present.",
+    );
+  }
+
+  const nextPageLink =
+    record.NextPageLink ??
+    record.nextPageLink ??
+    record["@odata.nextLink"] ??
+    record["odata.nextLink"];
+  const rawCount = record.Count ?? record.count ?? record["@odata.count"];
+  const totalCount =
+    typeof rawCount === "number" && Number.isInteger(rawCount) && rawCount >= 0
+      ? rawCount
+      : undefined;
+
+  return {
+    items: validateNominalAccountItems(collection),
+    isListEnvelope: true,
+    ...(typeof nextPageLink === "string" && nextPageLink.trim()
+      ? { nextPageLink: nextPageLink.trim() }
+      : {}),
+    ...(totalCount !== undefined ? { totalCount } : {}),
+  };
+}
+
+function validateNominalAccountItems(items: unknown[]): JsonRecord[] {
+  if (items.some((item) => !item || typeof item !== "object" || Array.isArray(item))) {
+    throw new Error("Unexpected nominal-accounts response: every list item must be an object.");
+  }
+  return items as JsonRecord[];
+}
+
+function stableNominalPageIdentity(items: JsonRecord[]): string | undefined {
+  const ids = items.map((item) => item.id ?? item.Id);
+  if (ids.some((id) => id === undefined || id === null || String(id) === "")) {
+    return undefined;
+  }
+  return JSON.stringify(ids.map((id) => String(id)));
+}
+
+export async function fetchAllNominalAccounts(
+  companyName: string,
+  dependencies: { brcFetch: typeof brcFetch } = { brcFetch },
+): Promise<JsonRecord[]> {
   const all: JsonRecord[] = [];
+  const pageSize = 500;
+  let previousPageIdentity: string | undefined;
 
   for (let page = 1; page <= 100; page++) {
-    const data = (await brcFetch(
+    const data = await dependencies.brcFetch(
       companyName,
-      `/v1/nominalAccounts?page=${page}&pageSize=500`
-    )) as JsonRecord;
-    const items = extractListItems(data);
+      `/v1/nominalAccounts?page=${page}&pageSize=${pageSize}`,
+    );
+    const { items, isListEnvelope, nextPageLink, totalCount } =
+      parseNominalAccountsPage(data);
+    const pageIdentity = stableNominalPageIdentity(items);
+    if (
+      page > 1 &&
+      pageIdentity !== undefined &&
+      pageIdentity === previousPageIdentity
+    ) {
+      throw new Error(
+        "Nominal-accounts pagination did not advance; the same page was returned twice.",
+      );
+    }
+    previousPageIdentity = pageIdentity;
     all.push(...items);
 
-    const nextPageLink = data.NextPageLink ?? data.nextPageLink;
-    if (!nextPageLink || items.length < 500) {
-      break;
+    const moreExpected =
+      Boolean(nextPageLink) ||
+      (isListEnvelope && items.length === pageSize) ||
+      (totalCount !== undefined && all.length < totalCount);
+    if (!moreExpected) {
+      return all;
+    }
+    if (items.length === 0) {
+      throw new Error(
+        "Nominal-accounts pagination indicated more records but returned an empty page.",
+      );
     }
   }
 
-  return all;
+  throw new Error("Nominal-accounts pagination exceeded the 100-page safety limit.");
 }
 
 const SENSITIVE_FIELD_NAMES = [

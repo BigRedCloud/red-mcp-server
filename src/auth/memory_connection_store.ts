@@ -1,3 +1,5 @@
+import { EntraConnectionStore, createMemorySsoBackend } from "./entra_store.js";
+const ssoBackend = createMemorySsoBackend();
 import { encodeStoredApiKey } from "./credential_secret.js";
 import { isPendingConnectionExpired } from "./connection_pending.js";
 import { mergeConnectionTelemetryRecord } from "./connection_telemetry_merge.js";
@@ -109,6 +111,7 @@ function cleanupExpiredSuccessPages(now = Date.now()): void {
 }
 
 export class MemoryConnectionStore implements ConnectionStore {
+  readonly entra = new EntraConnectionStore(ssoBackend);
   getStoreType(): string {
     return "memory";
   }

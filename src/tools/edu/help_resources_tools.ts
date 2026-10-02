@@ -153,42 +153,7 @@ export function registerHelpResourcesTools(server: ServerType): void {
     },
   );
 
-  server.tool(
-    "brc_find_help_resources",
-    FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
-    {
-      question: z
-        .string()
-        .min(1)
-        .describe(
-          "Plain-English help question, for example how do bank feeds work or how do I reconcile my bank account.",
-        ),
-      category: z
-        .string()
-        .optional()
-        .describe("Optional help category filter, for example bank_feeds or sales."),
-      maxResults: z
-        .number()
-        .int()
-        .min(1)
-        .max(10)
-        .optional()
-        .describe("Maximum number of matching resources to return. Defaults to 5."),
-      source: z
-        .enum([...HELP_RESOURCE_SOURCES, "all"])
-        .optional()
-        .describe(
-          "Optional source filter: freshdesk, customer_docs, recorded_webinar, youtube_video, upcoming_webinar, or all.",
-        ),
-    },
-    async ({ question, category, maxResults, source }) => {
-      return runUnifiedHelpSearchPipeline(question, {
-        category,
-        maxResults,
-        source,
-      });
-    },
-  );
+  registerFindHelpResourcesTool(server);
 
   server.tool(
     "brc_get_help_resource_details",
@@ -249,4 +214,45 @@ export function registerHelpResourcesTools(server: ServerType): void {
       return helpResourceDetailResponse(result.payload, result.images);
     },
   );
+}
+
+/** Register only public help search; no company session is needed. */
+export function registerFindHelpResourcesTool(server: ServerType): void {
+  server.tool(
+    "brc_find_help_resources",
+    FIND_HELP_RESOURCES_TOOL_DESCRIPTION,
+    {
+      question: z
+        .string()
+        .min(1)
+        .describe(
+          "Plain-English help question, for example how do bank feeds work or how do I reconcile my bank account.",
+        ),
+      category: z
+        .string()
+        .optional()
+        .describe("Optional help category filter, for example bank_feeds or sales."),
+      maxResults: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .optional()
+        .describe("Maximum number of matching resources to return. Defaults to 5."),
+      source: z
+        .enum([...HELP_RESOURCE_SOURCES, "all"])
+        .optional()
+        .describe(
+          "Optional source filter: freshdesk, customer_docs, recorded_webinar, youtube_video, upcoming_webinar, or all.",
+        ),
+    },
+    async ({ question, category, maxResults, source }) => {
+      return runUnifiedHelpSearchPipeline(question, {
+        category,
+        maxResults,
+        source,
+      });
+    },
+  );
+
 }

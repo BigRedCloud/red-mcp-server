@@ -35,8 +35,10 @@ export async function persistCompanyCredentialToConnectionStore(args) {
 export async function validateAndPersistConnectedCompanies(args) {
     await ensureConnectionStoreInitialized();
     const store = getConnectionStore();
-    for (const company of args.companies) {
-        await store.clearConnectedCompany(args.connectionId, company.companyName);
+    if (!args.preserveExistingOnFailure) {
+        for (const company of args.companies) {
+            await store.clearConnectedCompany(args.connectionId, company.companyName);
+        }
     }
     const { validated, failed } = await partitionCompanyCredentials(args.companies);
     if (validated.length > 0) {

@@ -492,79 +492,25 @@ function brandBar() {
       </header>`;
 }
 export function renderConnectPage(code, options = {}) {
+    if (options.sso) {
+        return renderSsoConnectPage(code);
+    }
     const clientId = options.telemetryClientId &&
         options.telemetryClientId.trim().length > 0
         ? escapeHtml(options.telemetryClientId.trim().toLowerCase())
         : "";
-    const sessionDuration = formatCredentialTtlForUser();
     const content = `
       <div class="card">
         <p class="lead">
           Securely connect your Big Red Cloud companies to Red. Your API key is never sent through chat — it is only submitted here for this connection session.
         </p>
 
-        <form method="POST" action="/connect" enctype="multipart/form-data">
-          <input type="hidden" name="code" value="${escapeHtml(code)}" />
-          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${clientId}" />
-          <div class="trust-notes">
-            <div class="trust-note">
-              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
-            </div>
-            <div class="trust-note">
-              <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
-            </div>
-          </div>
-
-          <div class="connect-layout">
-          <div class="section">
-            <p class="section-title">Connect one company</p>
-            <p class="section-hint">Enter a company name and its Big Red Cloud API key.</p>
-
-            <label for="companyName">Company name</label>
-            <input
-              id="companyName"
-              name="companyName"
-              type="text"
-              autocomplete="organization"
-              placeholder="e.g. Company A"
-            />
-
-            <label for="apiKey">Big Red Cloud API key</label>
-            <input
-              id="apiKey"
-              name="apiKey"
-              type="password"
-              autocomplete="off"
-              placeholder="Enter your API key"
-            />
-          </div>
-
-          <div class="divider connect-divider">or</div>
-
-          <div class="section">
-            <p class="section-title">Connect multiple companies</p>
-            <p class="section-hint">Upload a CSV file with one company per row.</p>
-
-            <div class="csv-example">companyName,apiKey
-Company A,xxxxxxxx
-Company B,xxxxxxxx</div>
-
-            <label for="companyFile">CSV file</label>
-            <input
-              id="companyFile"
-              name="companyFile"
-              type="file"
-              accept=".csv,text/csv"
-            />
-          </div>
-          </div>
-
-          <button type="submit" class="btn-primary">Connect companies</button>
-        </form>
+        ${options.management ? normalCompanyList(options.management) : ""}
+        ${options.management?.companies.length ? `<details class="normal-add"><summary>+ Add another company</summary>${normalCompanyForm(code, clientId, options.management)}</details>` : normalCompanyForm(code, clientId, options.management)}
 
 
       </div>`;
-    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript(options.telemetryClientId));
+    return pageShell("Connect — Red", brandBar(), content, buildTelemetryClientIdPageScript(options.telemetryClientId) + (options.management ? normalManagementStyles : ""));
 }
 export function renderExpiredLinkPage() {
     const content = `
@@ -585,7 +531,7 @@ export function applyConnectionSuccessPageHeaders(res) {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Referrer-Policy", "no-referrer");
 }
-export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
+export function renderSuccessPage(connectedNames, code, failedCompanies = [], management) {
     const count = connectedNames.length;
     const summary = count === 1
         ? "1 company was connected to Red for this session."
@@ -611,7 +557,8 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
         <div class="status-icon success" aria-hidden="true">✓</div>
         <h2>Companies connected</h2>
         <p class="centered">${escapeHtml(summary)}</p>
-        <ul class="company-list">${listItems}</ul>
+        ${management ? normalCompanyList(management) : `<ul class="company-list">${listItems}</ul>`}
+        ${management ? `<details class="normal-add"><summary>+ Add another company</summary>${normalCompanyForm("", "", management)}</details>` : ""}
         ${failedSection}
         <div class="next-step">
           <p style="margin:0 0 12px;">
@@ -679,7 +626,7 @@ export function renderSuccessPage(connectedNames, code, failedCompanies = []) {
   }
 })();
 </script>`;
-    return pageShell("Companies connected", brandBar(), content, copyScript, { noReferrer: true });
+    return pageShell("Companies connected", brandBar(), content, copyScript + (management ? normalManagementStyles : ""), { noReferrer: true });
 }
 export function renderConnectionFailedPage(message) {
     const content = `
@@ -695,4 +642,320 @@ export function renderConnectionFailedPage(message) {
         </div>
       </div>`;
     return pageShell("Connection failed", brandBar(), content);
+}
+export function renderSsoSignInPage(request) {
+    return pageShell("Connect — Red", brandBar(), `<div class="card">
+    <h2>Connect your Big Red Cloud companies</h2>
+    <p class="lead">Continue with Microsoft to connect your companies to RED in Microsoft Copilot.</p>
+    <p id="link-error" class="error-message" ${request ? "hidden" : ""}>This connection link is invalid. Return to Microsoft Copilot and request a new connection link.</p>
+    <form method="post" action="/connect/sso/start">
+      <input type="hidden" name="request" id="request" value="${escapeHtml(request)}">
+      <button class="btn-primary" id="sign-in" ${request ? "" : "disabled"}>Sign in with Microsoft</button>
+    </form>
+    <div class="next-step">Use the same Microsoft account you use in Copilot. Connection links expire after 10 minutes.</div>
+  </div>`, "<script>history.replaceState(null,'','/connect');</script>");
+}
+function renderSsoConnectPage(csrfToken) {
+    const rows = Array.from({ length: 5 }, (_, i) => `<div class="company-entry">
+    <p class="section-title">Company ${i + 1}</p>
+    <label for="companyName-${i}">Company name</label>
+    <input id="companyName-${i}" type="text" name="companyName" maxlength="200" autocomplete="organization" placeholder="e.g. Company A">
+    <label for="apiKey-${i}">Big Red Cloud API key</label>
+    <input id="apiKey-${i}" name="apiKey" type="password" maxlength="4096" autocomplete="off" placeholder="Enter your API key">
+  </div>`).join('<div class="divider company-gap" aria-hidden="true"></div>');
+    return pageShell("Connect — Red", brandBar(), `<div class="card">
+    <h2>Connect your Big Red Cloud companies</h2>
+    <p class="lead">Connect the Big Red Cloud companies you want to use with RED in Microsoft Copilot.</p>
+    <div class="trust-notes">
+      <div class="trust-note"><strong>Your credentials stay private.</strong> API keys are submitted directly to RED and stored encrypted. Never paste API keys into chat.</div>
+      <div class="trust-note"><strong>Connect up to five companies.</strong> Existing linked companies are kept. If you upload a CSV, it is used instead of the manual entries.</div>
+    </div>
+    <form method="post" action="/connect/sso/complete" enctype="multipart/form-data">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}">
+      <div class="connect-layout">
+        <div class="section">
+          <p class="section-title">Manual connection</p>
+          <p class="section-hint">Enter each company name and its Big Red Cloud API key.</p>
+          ${rows}
+          <button class="btn-secondary" type="button" id="add-company" hidden>+ Add another company</button>
+        </div>
+        <div class="divider connect-divider">or</div>
+        <div class="section">
+          <p class="section-title">Upload companies from CSV</p>
+          <p class="section-hint">Use the format below, with up to five companies. Maximum file size: 1 MB. The file is processed when you select Connect companies.</p>
+          <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+          <label for="companyFile">CSV file</label>
+          <input id="companyFile" name="companyFile" type="file" accept=".csv,text/csv">
+        </div>
+      </div>
+      <button class="btn-primary" type="submit">Connect companies</button>
+    </form>
+    <div class="next-step">When you finish, return to Microsoft Copilot and retry your question.</div>
+  </div>`, `<style>#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; }</style><script>
+(function () {
+  var rows = document.querySelectorAll('.company-entry');
+  var gaps = document.querySelectorAll('.company-gap');
+  var button = document.getElementById('add-company');
+  var count = 1;
+  rows.forEach(function (row, i) { row.hidden = i > 0; });
+  gaps.forEach(function (gap) { gap.hidden = true; });
+  button.hidden = false;
+  button.addEventListener('click', function () {
+    if (count >= rows.length) return;
+    gaps[count - 1].hidden = false;
+    rows[count].hidden = false;
+    rows[count].querySelector('input').focus();
+    count++;
+    button.hidden = count === rows.length;
+  });
+})();
+</script>`);
+}
+export function renderSsoErrorPage(message = "Sign-in or connection link is invalid, expired, or already used. Use the same Microsoft account as Copilot and request a new connection link.") {
+    return pageShell("Connection not completed — Red", brandBar(), `<div class="card">
+    <div class="status-icon error" aria-hidden="true">✕</div>
+    <h2>Connection not completed</h2>
+    <p class="error-message" role="alert">${escapeHtml(message)}</p>
+    <div class="next-step">Return to Microsoft Copilot and ask RED to start a new company connection.</div>
+  </div>`);
+}
+export function renderSsoResultPage(names, failedNames) {
+    const connected = names.length > 0;
+    const title = connected ? "Companies connected" : "Companies could not be connected";
+    const companyList = (companyNames, icon) => `<ul class="company-list sso-result-list">${companyNames.map(name => `<li><span aria-hidden="true">${icon}</span> ${escapeHtml(name)}</li>`).join("")}</ul>`;
+    const failedSection = failedNames.length ? `
+    <section aria-labelledby="failed-companies">
+      <h3 id="failed-companies">${connected ? "Could not connect:" : "RED could not connect to:"}</h3>
+      ${companyList(failedNames, "✕")}
+      <p class="error-message">Check the ${failedNames.length === 1 ? "company name and API key for the company above" : "company names and API keys for the companies above"}, then return to Microsoft Copilot and request a new connection link to try again.</p>
+    </section>` : "";
+    return pageShell(`${title} — Red`, brandBar(), `<div class="card">
+    <div class="status-icon ${connected ? "success" : "error"}" aria-hidden="true">${connected ? "✓" : "✕"}</div>
+    <h2>${title}</h2>
+    ${connected ? `<p class="centered">RED is now connected to the following Big Red Cloud companies:</p>${companyList(names, "✓")}` : ""}
+    ${failedSection}
+    ${connected ? '<div class="next-step">Return to Microsoft Copilot and retry your question.</div>' : ""}
+  </div>`, '<style>.sso-result-list li::before { content: none; } .sso-result-list li { overflow-wrap: anywhere; }</style>');
+}
+const manageCompanyRows = Array.from({ length: 5 }, (_, i) => `<div class="company-entry">
+    <p class="section-title">Company ${i + 1}</p>
+    <label for="manage-companyName-${i}">Company name</label>
+    <input id="manage-companyName-${i}" type="text" name="companyName" maxlength="200" autocomplete="organization" placeholder="e.g. Company A">
+    <label for="manage-apiKey-${i}">Big Red Cloud API key</label>
+    <input id="manage-apiKey-${i}" name="apiKey" type="password" maxlength="4096" autocomplete="off" placeholder="Enter your API key">
+  </div>`).join('<div class="divider company-gap" aria-hidden="true"></div>');
+const manageCompanyScript = `<style>
+#add-company[hidden], .company-entry[hidden], .company-gap[hidden] { display: none; }
+#connected-companies li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+#connected-companies li::before { margin-right: -6px; }
+#connected-companies li strong { min-width: 0; overflow-wrap: anywhere; }
+#connected-companies .disconnect-form { margin: 0 0 0 auto; flex: 0 0 auto; }
+#connected-companies .disconnect-form .btn-secondary { display: inline-block; width: auto; max-width: 100%; margin: 0; }
+</style><script>
+(function () {
+  var rows = document.querySelectorAll('.company-entry');
+  var gaps = document.querySelectorAll('.company-gap');
+  var button = document.getElementById('add-company');
+  var count = 1;
+  rows.forEach(function (row, i) { row.hidden = i > 0; });
+  gaps.forEach(function (gap) { gap.hidden = true; });
+  if (!button) return;
+  button.hidden = false;
+  button.addEventListener('click', function () {
+    if (count >= rows.length) return;
+    gaps[count - 1].hidden = false;
+    rows[count].hidden = false;
+    rows[count].querySelector('input').focus();
+    count++;
+    button.hidden = count === rows.length;
+  });
+})();
+</script>`;
+export function renderManageSignInPage() {
+    return pageShell("Manage companies — Red", brandBar(), `<div class="card">
+    <h2>Manage your Big Red Cloud companies</h2>
+    <p class="lead">Sign in with Microsoft to see and manage the companies connected to RED in Microsoft Copilot.</p>
+    <form method="post" action="/manage-companies/start">
+      <button class="btn-primary" id="sign-in" type="submit">Sign in with Microsoft</button>
+    </form>
+    <div class="next-step">Use the same Microsoft account you use in Copilot. This page does not accept an API key until after that sign-in.</div>
+  </div>`);
+}
+export function renderManagePage(options) {
+    const connected = options.companies.length
+        ? `<ul class="company-list" id="connected-companies">${options.companies.map(name => `<li>
+        <strong>${escapeHtml(name)}</strong>
+        <form class="disconnect-form" method="post" action="/manage-companies/disconnect">
+          <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+          <input type="hidden" name="companyName" value="${escapeHtml(name)}">
+          <button class="btn-secondary" type="submit">Disconnect</button>
+        </form>
+      </li>`).join("")}</ul>`
+        : `<p id="connected-companies">No Big Red Cloud companies are currently connected.</p>`;
+    return pageShell("Manage companies — Red", brandBar(), `<div class="card">
+    <h2>Manage your Big Red Cloud companies</h2>
+    <p class="lead">These companies are available to RED in Microsoft Copilot.</p>
+    ${options.notice ? `<p class="centered" role="status">${escapeHtml(options.notice)}</p>` : ""}
+    <section>
+      <p class="section-title">Connected companies</p>
+      ${connected}
+    </section>
+    <form method="post" action="/manage-companies/companies" enctype="multipart/form-data">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+      <p class="section-title">Connect more companies</p>
+      <div class="trust-notes">
+        <div class="trust-note"><strong>Your credentials stay private.</strong> API keys are submitted directly to RED and stored encrypted. Never paste API keys into chat.</div>
+        <div class="trust-note"><strong>Connect up to five companies at a time.</strong> Companies already linked stay linked. If you upload a CSV, it is used instead of the manual entries.</div>
+      </div>
+      <div class="connect-layout">
+        <div class="section">
+          <p class="section-title">Manual connection</p>
+          <p class="section-hint">Enter each company name and its Big Red Cloud API key.</p>
+          ${manageCompanyRows}
+          <button class="btn-secondary" type="button" id="add-company" hidden>+ Add another company</button>
+        </div>
+        <div class="divider connect-divider">or</div>
+        <div class="section">
+          <p class="section-title">Upload companies from CSV</p>
+          <p class="section-hint">Use the format below, with up to five companies. Maximum file size: 1 MB. The file is processed when you select Connect companies.</p>
+          <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+          <label for="companyFile">CSV file</label>
+          <input id="companyFile" name="companyFile" type="file" accept=".csv,text/csv">
+        </div>
+      </div>
+      <button class="btn-primary" type="submit">Connect companies</button>
+    </form>
+    <div class="next-step">When you finish, return to Microsoft Copilot and retry your question.</div>
+  </div>`, manageCompanyScript);
+}
+export function renderManageConfirmPage(options) {
+    const name = escapeHtml(options.companyName);
+    return pageShell("Disconnect company — Red", brandBar(), `<div class="card">
+    <h2>Disconnect ${name}?</h2>
+    <p class="lead">RED will no longer be able to access ${name} in Microsoft Copilot.</p>
+    <form method="post" action="/manage-companies/disconnect">
+      <input type="hidden" name="csrfToken" value="${escapeHtml(options.csrfToken)}">
+      <input type="hidden" name="companyName" value="${name}">
+      <input type="hidden" name="confirm" value="yes">
+      <p><a href="/manage-companies">Cancel</a></p>
+      <button class="btn-primary" type="submit">Disconnect ${name}</button>
+    </form>
+  </div>`);
+}
+export function renderManageErrorPage(message = "Sign in with the Microsoft account you use in Copilot. Open the company management page again if this session has expired.") {
+    return pageShell("Company management — Red", brandBar(), `<div class="card">
+    <div class="status-icon error" aria-hidden="true">✕</div>
+    <h2>Company management was not completed</h2>
+    <p class="error-message" role="alert">${escapeHtml(message)}</p>
+    <div class="next-step">Return to Microsoft Copilot and open the RED company management page again.</div>
+  </div>`);
+}
+function normalManagementFields(view) {
+    return `<input type="hidden" name="normalContextKind" value="${view.kind}">
+    <input type="hidden" name="normalContext" value="${escapeHtml(view.token)}">
+    <input type="hidden" name="normalCsrf" value="${escapeHtml(view.csrf)}">`;
+}
+const normalManagementStyles = `<style>
+.normal-companies li::before { content: none; }
+.normal-companies li { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.normal-companies .normal-company-name { flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+.normal-companies form { margin-left: auto; }
+.normal-companies .btn-secondary { margin: 0; width: auto; padding: 6px 12px; }
+.normal-add { margin: 20px 0; }
+.normal-add summary { cursor: pointer; color: #991b1b; font-weight: 600; padding: 12px; border: 1px solid #fecaca; border-radius: 10px; }
+.normal-add[open] summary { margin-bottom: 20px; }
+.normal-add summary:focus-visible { outline: 3px solid #b5121b; outline-offset: 3px; }
+</style>`;
+function normalCompanyList(view) {
+    return `<section aria-labelledby="normal-connected-heading">
+    <h2 id="normal-connected-heading">Connected companies</h2>
+    ${view.notice ? `<p class="error-message" role="status">${escapeHtml(view.notice)}</p>` : ""}
+    ${view.companies.length ? `<ul class="company-list normal-companies">${view.companies.map(name => `<li>
+      <span class="normal-company-name"><span aria-hidden="true">✓</span> ${escapeHtml(name)}</span>
+      <form method="post" action="/connect/companies/disconnect">
+        ${normalManagementFields(view)}
+        <input type="hidden" name="companyName" value="${escapeHtml(name)}">
+        <button class="btn-secondary" type="submit" aria-label="Disconnect ${escapeHtml(name)}">Disconnect</button>
+      </form></li>`).join("")}</ul>` : '<p>No companies are connected. Add a company before confirming the code in chat.</p>'}
+  </section>`;
+}
+function normalCompanyForm(code, clientId, management) {
+    const sessionDuration = formatCredentialTtlForUser();
+    return `        <form method="POST" action="${management?.kind === "success" ? "/connect/companies" : "/connect"}" enctype="multipart/form-data">
+          ${management ? normalManagementFields(management) : ""}
+          <input type="hidden" name="code" value="${escapeHtml(code)}" />
+          <input type="hidden" name="${TELEMETRY_CLIENT_ID_FORM_FIELD}" value="${clientId}" />
+          <div class="trust-notes">
+            <div class="trust-note">
+              <strong>Your credentials stay private.</strong> API keys are submitted directly to the Red server, stored only for this session (${sessionDuration}), and are never shown in chat.
+            </div>
+            <div class="trust-note">
+              <strong>File upload preferred:</strong> Connect a single company via the form or upload a CSV for several at once. If you upload a file, the form is ignored.
+            </div>
+          </div>
+
+          <div class="connect-layout">
+          <div class="section">
+            <p class="section-title">Connect one company</p>
+            <p class="section-hint">Enter a company name and its Big Red Cloud API key.</p>
+
+            <label for="companyName">Company name</label>
+            <input
+              id="companyName"
+              name="companyName"
+              type="text"
+              autocomplete="organization"
+              placeholder="e.g. Company A"
+            />
+
+            <label for="apiKey">Big Red Cloud API key</label>
+            <input
+              id="apiKey"
+              name="apiKey"
+              type="password"
+              autocomplete="off"
+              placeholder="Enter your API key"
+            />
+          </div>
+
+          <div class="divider connect-divider">or</div>
+
+          <div class="section">
+            <p class="section-title">Connect multiple companies</p>
+            <p class="section-hint">Upload a CSV file with one company per row.</p>
+
+            <div class="csv-example">companyName,apiKey
+Company A,xxxxxxxx
+Company B,xxxxxxxx</div>
+
+            <label for="companyFile">CSV file</label>
+            <input
+              id="companyFile"
+              name="companyFile"
+              type="file"
+              accept=".csv,text/csv"
+            />
+          </div>
+          </div>
+
+          <button type="submit" class="btn-primary">Connect companies</button>
+        </form>`;
+}
+export function renderNormalDisconnectConfirmation(view, companyName) {
+    const back = view.kind === "success" ? `/connect/success/${encodeURIComponent(view.token)}` : `/connect?code=${encodeURIComponent(view.token)}`;
+    return pageShell("Disconnect company — Red", brandBar(), `<div class="card">
+    <h2>Disconnect ${escapeHtml(companyName)}?</h2>
+    <p>RED will no longer be able to access this company through this connection. Other companies will stay connected.</p>
+    <form method="post" action="/connect/companies/disconnect">
+      ${normalManagementFields(view)}
+      <input type="hidden" name="companyName" value="${escapeHtml(companyName)}">
+      <input type="hidden" name="confirm" value="yes">
+      <a href="${escapeHtml(back)}">Cancel</a>
+      <button type="submit" class="btn-primary">Disconnect ${escapeHtml(companyName)}</button>
+    </form>
+  </div>`, "", { noReferrer: true });
 }

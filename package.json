@@ -1,18 +1,19 @@
 {
   "name": "brc-company-mcp-server",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Customer-ready Big Red Cloud MCP server for Cursor, Claude and other MCP clients.",
   "type": "module",
   "files": [
     "build",
-    "assets"
+    "assets",
+    "data/webinar_video_routing_index.csv",
+    "data/dev_only_video_routing_index_updated.csv"
   ],
   "bin": {
     "brc-company-mcp-server": "build/index.js"
   },
   "scripts": {
     "build": "tsc && npm run build --prefix functions/brc-edu-resource-processor",
-    "postinstall": "npm install --prefix functions/brc-edu-resource-processor && npm run build",
     "start": "node build/remote.js",
     "start:local": "node build/index.js",
     "dev": "tsx src/remote.ts",
@@ -21,14 +22,17 @@
     "test:dev:legacy": "node scripts/tests/dev-only/dev_test.mjs",
     "test:email:legacy": "node scripts/tests/dev-only/dev_test_email_tools.mjs",
     "test:unit": "npm run build && node scripts/run_node_tests.mjs --unit",
-    "test:security": "npm run build && node --test build/tests/security/**/*.test.js",
-    "test:config": "npm run build && node --test build/tests/config/**/*.test.js",
-    "test:integration": "node scripts/run_node_tests.mjs --http",
+    "test:security": "npm run build && node --import ./scripts/test_environment.mjs --test build/auth/*.test.js build/routing/*.test.js build/copilot*.test.js build/tests/credential_redaction_security.test.js",
+    "test:config": "npm run build && node --import ./scripts/test_environment.mjs --test build/config/*.test.js build/tool_profiles.test.js build/auth/connection_store_target.test.js",
+    "test:integration": "node scripts/run_node_tests.mjs --integration",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "leftovers:scan": "node scripts/tests/dev-only/dev_test_cleanup.mjs scan",
     "leftovers:delete": "node scripts/tests/dev-only/dev_test_cleanup.mjs delete",
     "test": "npm run build && node scripts/run_node_tests.mjs && npm test --prefix functions/brc-edu-resource-processor",
-    "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs"
+    "sync:brc-edu": "node scripts/sync_brc_edu_from_support_csv.mjs",
+    "demo:copilot-diagnostic": "node scripts/demo_copilot_diagnostic.mjs",
+    "demo:copilot-sso": "node scripts/demo_copilot_sso.mjs",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@azure/cosmos": "^4.9.3",
@@ -40,6 +44,7 @@
     "csv-parse": "^7.0.1",
     "dotenv": "latest",
     "express": "^5.2.1",
+    "jose": "^6.2.3",
     "multer": "^2.2.0",
     "readline-sync": "^1.4.10",
     "typescript": "latest",
@@ -51,6 +56,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "latest",
     "@types/readline-sync": "^1.4.8",
+    "playwright": "^1.63.0",
     "tsx": "latest"
   },
   "allowScripts": {
@@ -59,5 +65,8 @@
   },
   "overrides": {
     "uuid": ">=11.1.1"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

@@ -34,7 +34,7 @@ secrets.json
 
 # Generated BRC Edu sync / export artefacts
 data/brc_edu_synced_resources.json
-data/dev_only_video_routing_index_updated.csv
+# The enriched public CSV is a required checked-in runtime fallback.
 scripts/exports/*.xlsx
 scripts/exports/*.xls
 scripts/exports/*.csv

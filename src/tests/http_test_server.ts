@@ -8,7 +8,8 @@ import type { TestContext } from "node:test";
 import type { Readable } from "node:stream";
 
 const SERVER_READY_LOG_MARKER = "BRC MCP server";
-const DEFAULT_SERVER_START_TIMEOUT_MS = 30_000;
+// Cold imports on Windows can exceed 30 seconds; this changes only the test harness.
+const DEFAULT_SERVER_START_TIMEOUT_MS = 90_000;
 const CHILD_STOP_TIMEOUT_MS = 3_000;
 
 export type HttpTestServerChild = ChildProcessByStdio<null, Readable, Readable>;

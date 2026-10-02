@@ -1,6 +1,10 @@
 #!/usr/bin/env node
+import { registerNormalCompanyManagementRoutes, resolveNormalManagementContext, normalManagementView } from "./auth/normal_company_management.js";
+import { COPILOT_FEDERATED_TOOL_NAMES } from "./copilot_facade.js";
 
 import "dotenv/config";
+import { registerEntraBrowserRoutes } from "./auth/entra_browser.js";
+import { entraRequestOwner, verifyEntraAuthorization } from "./auth/entra_auth.js";
 process.env.RED_CONNECT_HTTP_MODE = "true";
 
 import { randomUUID } from "node:crypto";
@@ -14,6 +18,8 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+
+import { COPILOT_INSTRUCTIONS, registerCopilotDiagnosticTools } from "./copilot_diagnostic.js";
 import { registerAllTools } from "./register_all_tools.js";
 import { createBrcMcpServer } from "./server.js";
 import {
@@ -92,7 +98,7 @@ import {
 import { redServerConfig, getApiKeyExpirationMs } from "./config/server_config.js";
 
 import multer from "multer";
-import { parse } from "csv-parse/sync";
+import { parseCompanyCsv } from "./auth/company_csv.js";
 import { redAssetsDirectory, RED_FAVICON_PATH } from "./auth/red_assets.js";
 import {
   BRC_EDU_SYNC_SECRET_HEADER,
@@ -134,13 +140,20 @@ import {
 import { handleContentOverview } from "./brc-edu/content/content-overview-http.js";
 import { CONTENT_OVERVIEW_API_PATH } from "./brc-edu/content/content-overview-service.js";
 
-function createMcpServer(): McpServer {
-  const server = createBrcMcpServer();
-  registerAllTools(server);
+type HttpMcpProfile = "copilot-sso" | "full" | "copilot-read-only";
+
+function createMcpServer(profile: HttpMcpProfile): McpServer {
+  const server = createBrcMcpServer(profile === "copilot-sso" ? COPILOT_INSTRUCTIONS : undefined);
+  if (profile === "copilot-sso") {
+    registerCopilotDiagnosticTools(server, true);
+  } else {
+    registerAllTools(server, { profile });
+  }
   return server;
 }
 
 interface Session {
+  profile: HttpMcpProfile;
   server: McpServer;
   transport: StreamableHTTPServerTransport;
   keyStore: Map<string, CompanyApiContext>;
@@ -202,9 +215,12 @@ function trackHttpSession(sessionId: string, keyStore: Map<string, CompanyApiCon
   registerHttpSessionKeyStore(sessionId, keyStore);
 }
 
-async function createResumedMcpSession(sessionId: string): Promise<Session> {
+async function createResumedMcpSession(
+  sessionId: string,
+  profile: HttpMcpProfile,
+): Promise<Session> {
   const keyStore = new Map<string, CompanyApiContext>();
-  const server = createMcpServer();
+  const server = createMcpServer(profile);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => sessionId,
   });
@@ -221,6 +237,7 @@ async function createResumedMcpSession(sessionId: string): Promise<Session> {
   const clientPlatform = getStoredSessionPlatform(sessionId);
 
   return {
+    profile,
     server,
     transport,
     keyStore,
@@ -252,6 +269,23 @@ async function handleMcpRequest(
   res: Response,
   body?: unknown
 ): Promise<void> {
+  if (session.profile === "copilot-sso") {
+    const requestBody = body as { method?: string; params?: { name?: string } } | undefined;
+    if (requestBody?.method === "tools/call" && COPILOT_FEDERATED_TOOL_NAMES.has(requestBody.params?.name ?? "")) {
+      let owner;
+      try {
+        owner = await verifyEntraAuthorization(req.headers.authorization);
+      } catch {
+        res.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
+        res.status(401).json({jsonrpc:"2.0", id:(body as {id?: unknown})?.id ?? null, error:{code:-32001,message:"Microsoft sign-in is required or the token is not valid."}});
+        return;
+      }
+      await entraRequestOwner.run(owner, () => session.transport.handleRequest(req, res, body));
+    } else {
+      await session.transport.handleRequest(req, res, body);
+    }
+    return;
+  }
   const normalizedSessionId = sessionId.trim();
   const clientKeyResolution = resolveHttpClientKeyFromRequest(req);
   const clientKey = clientKeyResolution.clientKey;
@@ -481,11 +515,21 @@ app.get(OPENAI_APPS_CHALLENGE_PATH, (_req, res) => {
 app.use(express.urlencoded({ extended: false }));
 app.use(
   "/internal/brc-edu/youtube/webhook",
-  express.text({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }),
+  express.raw({ type: ["application/atom+xml", "application/xml", "text/xml", "text/plain", "*/*"], limit: "1mb" }),
 );
 app.use(express.json());
+// Body-parser errors can include submitted text. Never surface that text on
+// the SSO credential or MCP boundary; preserve existing routes' error handling.
+app.use((error: unknown, req: Request, res: Response, next: (error?: unknown) => void) => {
+  if (req.path === "/connect/companies" || req.path === "/connect/companies/disconnect" || req.path === "/mcp/copilot" || req.path.startsWith("/connect/sso/") || req.path.startsWith("/manage-companies")) {
+    res.status(400).json({ error: "Invalid request body." });
+    return;
+  }
+  next(error);
+});
 
 registerFreshdeskPublicImageRoute(app);
+registerEntraBrowserRoutes(app);
 
 function isInitializeRequest(body: unknown): boolean {
   if (Array.isArray(body)) {
@@ -511,34 +555,7 @@ function toStringArray(value: unknown): string[] {
   return [String(value).trim()];
 }
 
-function parseCompanyCsv(buffer: Buffer): UploadedCompanyCredential[] {
-  const rows = parse(buffer, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-  }) as Array<Record<string, string>>;
-
-  return rows
-    .map((row) => ({
-      companyName: String(
-        row.companyName ??
-          row.CompanyName ??
-          row.company ??
-          row.Company ??
-          row["Company Name"] ??
-          ""
-      ).trim(),
-      apiKey: String(
-        row.apiKey ??
-          row.ApiKey ??
-          row.api_key ??
-          row.APIKey ??
-          row["API Key"] ??
-          ""
-      ).trim(),
-    }))
-    .filter((row) => row.companyName && row.apiKey);
-}
+registerNormalCompanyManagementRoutes(app, upload.single("companyFile"), toStringArray);
 
 app.post("/connect", upload.single("companyFile"), async (req, res) => {
   await ensureConnectionStoreInitialized();
@@ -723,12 +740,24 @@ app.post("/connect", upload.single("companyFile"), async (req, res) => {
   });
 });
 
-app.post("/mcp", async (req: Request, res: Response) => {
-  await ensureConnectionStoreInitialized();
+async function handleMcpPost(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (profile !== "copilot-sso") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+        id: null,
+      });
+      return;
+    }
     touchSession(session);
 
     await handleMcpRequest(session, sessionId, req, res, req.body);
@@ -736,7 +765,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   }
 
   if (sessionId && !isInitializeRequest(req.body)) {
-    const resumed = await createResumedMcpSession(sessionId);
+    const resumed = await createResumedMcpSession(sessionId, profile);
     sessions.set(sessionId, resumed);
     trackHttpSession(sessionId, resumed.keyStore);
     touchSession(resumed);
@@ -763,7 +792,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   );
 
   const keyStore = new Map<string, CompanyApiContext>();
-  const server = createMcpServer();
+  const server = createMcpServer(profile);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
   });
@@ -780,6 +809,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   await server.connect(transport);
 
   const provisionalSession: Session = {
+    profile,
     server,
     transport,
     keyStore,
@@ -817,9 +847,16 @@ app.post("/mcp", async (req: Request, res: Response) => {
       sid,
       initializePlatform.platform
     );
-    await ensureMcpSessionReady(sid, keyStore);
+    if (profile !== "copilot-sso") await ensureMcpSessionReady(sid, keyStore);
   }
-});
+}
+
+app.post("/mcp", (req: Request, res: Response) =>
+  handleMcpPost("full", req, res),
+);
+app.post("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpPost("copilot-sso", req, res),
+);
 
 
 app.get("/connect", async (req, res) => {
@@ -863,8 +900,11 @@ app.get("/connect", async (req, res) => {
     telemetryClientId: clientId,
   });
 
+  const managementContext = await resolveNormalManagementContext("pending", code);
+  const management = managementContext ? await normalManagementView(req, res, managementContext) : undefined;
+  applyConnectionSuccessPageHeaders(res);
   return runWithRedTelemetryContext(telemetryContext, () => {
-    res.send(renderConnectPage(code, { telemetryClientId: clientId }));
+    res.send(renderConnectPage(code, { telemetryClientId: clientId, management }));
   });
 });
 
@@ -880,32 +920,47 @@ app.get("/connect/success/:successId", async (req, res) => {
     return;
   }
 
+  const managementContext = await resolveNormalManagementContext("success", successId);
+  const management = managementContext ? await normalManagementView(req, res, managementContext) : undefined;
   // Do not log confirmationCode — it must not appear in access/App Insights URLs.
   res
     .type("html")
     .send(
       renderSuccessPage(
-        successPage.connectedNames,
+        management?.companies ?? successPage.connectedNames,
         successPage.confirmationCode,
-        successPage.failedCompanies
+        successPage.failedCompanies,
+        management
       )
     );
 });
 
 
-app.get("/mcp", async (req: Request, res: Response) => {
-  await ensureConnectionStoreInitialized();
+async function handleMcpGet(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (profile !== "copilot-sso") await ensureConnectionStoreInitialized();
 
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Bad Request: MCP session profile mismatch." },
+        id: null,
+      });
+      return;
+    }
     touchSession(session);
     await handleMcpRequest(session, sessionId, req, res);
     return;
   }
 
   if (sessionId) {
-    const resumed = await createResumedMcpSession(sessionId);
+    const resumed = await createResumedMcpSession(sessionId, profile);
     sessions.set(sessionId, resumed);
     trackHttpSession(sessionId, resumed.keyStore);
     touchSession(resumed);
@@ -918,7 +973,14 @@ app.get("/mcp", async (req: Request, res: Response) => {
     error: { code: -32000, message: "Bad Request: No valid session for GET." },
     id: null,
   });
-});
+}
+
+app.get("/mcp", (req: Request, res: Response) =>
+  handleMcpGet("full", req, res),
+);
+app.get("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpGet("copilot-sso", req, res),
+);
 
 app.post("/internal/brc-edu/resources/sync", (req: Request, res: Response) => {
   const requestSecret = req.headers[BRC_EDU_SYNC_SECRET_HEADER];
@@ -1109,22 +1171,6 @@ app.post(
 );
 
 app.all("/internal/brc-edu/youtube/webhook", async (req: Request, res: Response) => {
-  const configuredSecret = process.env.BRC_YOUTUBE_WEBHOOK_SECRET?.trim();
-  if (configuredSecret) {
-    const headerSecret = req.headers["x-red-youtube-webhook-secret"];
-    const provided = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
-    const querySecret =
-      typeof req.query.token === "string" ? req.query.token : undefined;
-    const candidate = (provided || querySecret || "").trim();
-    if (candidate !== configuredSecret) {
-      // For hub verification GET, allow hub.verify_token path inside handler.
-      if (req.method.toUpperCase() !== "GET") {
-        res.status(401).send("Unauthorized.");
-        return;
-      }
-    }
-  }
-
   const handled = handleYouTubeWebhookRequest(req);
   if (handled.contentType) {
     res.setHeader("Content-Type", handled.contentType);
@@ -1144,10 +1190,23 @@ app.all("/internal/brc-edu/youtube/webhook", async (req: Request, res: Response)
   res.status(handled.status).send(handled.body ?? "");
 });
 
-app.delete("/mcp", async (req: Request, res: Response) => {
+async function handleMcpDelete(
+  profile: HttpMcpProfile,
+  req: Request,
+  res: Response,
+): Promise<void> {
   const sessionId = resolveMcpSessionIdFromRequest(req);
   if (sessionId && sessions.has(sessionId)) {
-    const { server, transport } = sessions.get(sessionId)!;
+    const session = sessions.get(sessionId)!;
+    if (session.profile !== profile) {
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session not found." },
+        id: null,
+      });
+      return;
+    }
+    const { server, transport } = session;
     await transport.close();
     await server.close();
     sessions.delete(sessionId);
@@ -1159,7 +1218,14 @@ app.delete("/mcp", async (req: Request, res: Response) => {
     error: { code: -32000, message: "Session not found." },
     id: null,
   });
-});
+}
+
+app.delete("/mcp", (req: Request, res: Response) =>
+  handleMcpDelete("full", req, res),
+);
+app.delete("/mcp/copilot", (req: Request, res: Response) =>
+  handleMcpDelete("copilot-sso", req, res),
+);
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 

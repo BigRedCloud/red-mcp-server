@@ -2,7 +2,7 @@
 
 Red is an open-source [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants and MCP clients to [Big Red Cloud](https://www.bigredcloud.com) accounting data through a set of controlled MCP tools.
 
-Supported customer platforms today are **ChatGPT**, **Claude**, and **Mistral** (including [Vibe](https://chat.mistral.ai/chat)). Other MCP clients may work technically, but they are not treated as officially supported platforms. Red uses platform detection only for anonymous operational telemetry (see [Privacy-safe telemetry](#privacy-safe-telemetry)).
+Supported customer platforms today are **ChatGPT**, **Claude**, **Mistral (**[Vibe](https://chat.mistral.ai/chat)), and **Microsoft 365 Copilot**. Copilot uses a Microsoft federated connector at `/mcp/copilot`. Because of current Microsoft federated connector limitations, that connector is read-only for now. Create, update and delete tools on Copilot are expected to follow when Microsoft supports them. ChatGPT, Claude and Mistral use `/mcp`, which already includes those write tools where the deployment enables them. Other MCP clients may work technically, but they are not treated as officially supported platforms. Red uses platform detection only for anonymous operational telemetry (see [Privacy-safe telemetry](#privacy-safe-telemetry)).
 
 Instead of calling the Big Red Cloud REST API directly, users work in plain language. The server translates requests into structured API calls and applies safety checks around anything that changes data.
 
@@ -15,6 +15,8 @@ With Red, a connected user can:
 
 ---
 
+
+
 ## Why open source?
 
 We believe AI infrastructure should be transparent. Customers should be able to inspect the software that connects their accounting data to AI assistants.
@@ -24,6 +26,8 @@ Our competitive advantage is not the connector itself; it is our accounting plat
 By open-sourcing Red, we hope to encourage trust, community contributions, and wider adoption of open standards.
 
 ---
+
+
 
 ## Features
 
@@ -46,13 +50,15 @@ By open-sourcing Red, we hope to encourage trust, community contributions, and w
 
 ---
 
+
+
 ## Security and safety model
 
 Red is designed so that AI-driven access to accounting data stays controlled and auditable.
 
 - **No credentials in the repository.** Company connection credentials and secrets are never committed. Configuration is supplied at runtime through environment variables.
 - **No credentials in chat.** Company connection credentials must not be pasted into chat. Companies are connected through the secure Red connection page, where credentials are entered directly — not in the chat window.
-- **Session-scoped connections.** A connected company stays available for about the configured session duration and is held in session memory (or an optional shared connection store in hosted deployments). Where supported, connection handling is resilient across MCP session rotation so clients can reuse `connectionRef` / `activeConnectionRef` without asking the user to reconnect.
+- **Two connection models.** On `https://red.bigredcloud.com/mcp`, a connected company stays available for about the configured session duration and is held in session memory (or an optional shared connection store in hosted deployments). Where supported, that flow can reuse `connectionRef` / `activeConnectionRef` across MCP session changes. On `https://red.bigredcloud.com/mcp/copilot`, companies are linked to the verified Microsoft user who connected them. Those Microsoft-owned connections are separate from anonymous or session connections.
 - **Pre-confirm validation.** Company connection credentials submitted on the connection page are validated against Big Red Cloud before they are stored. Invalid or expired credentials are not saved; they appear in `failedCompanies` at confirmation time.
 - **Credential invalidation.** Only confirmed authentication failures clear a stored company credential. Endpoint, validation, permission, timeout, and server failures are not treated as an expired API key.
 - **User-facing presentation.** `connectionRef`, session IDs, and other MCP diagnostics are for tool arguments only. Assistants must not show `redconn_…` values or internal connection metadata to normal users unless the user explicitly asks for technical details.
@@ -64,6 +70,8 @@ Red is designed so that AI-driven access to accounting data stays controlled and
 - **Audit log.** Writes made through the MCP session are recorded in a session audit log; read-only lookups are not treated as completed changes. Activity is scoped to currently connected companies. A downloadable support diagnostic can be generated for one connected company at a time; generating it is read-only and does not write to Big Red Cloud.
 - **Deployment flags.** Update, delete, email, batch, and operator/dev tools can each be disabled per deployment. Disabled skill groups are **not registered** with the MCP client for that process, so those tools are hidden rather than callable.
 
+
+
 ### Sales invoice safety checks
 
 Sales invoice handling includes:
@@ -72,20 +80,27 @@ Sales invoice handling includes:
 - **Sales VAT rates only.** Sales invoices must use a Sales VAT category; purchase VAT rates are blocked, even when the percentage matches.
 - **Placeholder product IDs** (`productId` `0` and `1`) are treated as placeholders and blocked before preview-before-posting and post.
 - **Multi-line generated-reference invoices** (`brc_create_sales_invoice_gen_ref`) require each `productTrans` line to include its own `acEntries` analysis allocation. Line net/VAT/gross reconciliation, analysis allocation totals, header totals, and required product/VAT/analysis fields are validated before posting; failures return structured field-level errors.
-- **`note`** defaults to the customer name unless a note is explicitly provided, and is never set to a product name.
-- **`deliveryTo`** is included only when a delivery address is explicitly provided.
+- `note` defaults to the customer name unless a note is explicitly provided, and is never set to a product name.
+- `deliveryTo` is included only when a delivery address is explicitly provided.
 - **Plain-language results.** Technical HTTP status codes are translated into plain-language messages for users.
 
 ---
 
+
+
 ## Architecture
 
-Two entry points share one tool registry:
+Red has two hosted MCP interfaces, each with its own tool registry.
 
-| Entry | File | Transport | Use case |
-| ----- | ---- | --------- | -------- |
-| Local stdio | `src/index.ts` | `StdioServerTransport` | An MCP client spawns `node build/index.js` |
-| Hosted HTTP | `src/remote.ts` | Streamable HTTP on `/mcp` | `npm run start` — one MCP server per session |
+
+| Interface | Address | Registry |
+| --- | --- | --- |
+| Normal Red | `https://red.bigredcloud.com/mcp` | Full tool registry, including create, update, delete, batch and email where the deployment enables them |
+| Microsoft 365 Copilot | `https://red.bigredcloud.com/mcp/copilot` | Separate read-only accounting facade, plus help and company-management navigation |
+
+
+Local stdio (`src/index.ts`, `node build/index.js`) uses the same full registry as `/mcp`. Hosted HTTP is `src/remote.ts`. `/mcp` registers that full registry and keeps request routing, `routeToken` checks, and preview-before-posting confirmation on protected writes. `/mcp/copilot` registers only its own read-only facade. It does not register accounting create, update or delete tools.
+
 
 Key shared modules:
 
@@ -94,7 +109,7 @@ Key shared modules:
 - `src/config/server_config.ts` — deployment skill gating driven by the `BRC_ALLOW_*` flags
 - `src/config/mcp_config.ts` — MCP server instructions, connection-safety rules, help-answer rules, and connectionRef presentation rules
 - `src/routing/` — request classification and short-lived `routeToken` issuance/validation for transactional tools
-- `src/shared.ts` — Big Red Cloud HTTP client, session-scoped connections, audit log, and helpers
+- `src/shared.ts` — Big Red Cloud HTTP client, connection handling, audit log, and helpers
 - `src/read_connection_metadata.ts` — connection status metadata echoed on tool responses (including `activeConnectionRef` for hosted clients)
 - `src/auth/connection_presentation.ts` — user-facing TTL wording and assistant presentation hints
 - `src/auth/credential_validation.ts` — BRC read validation before storing company connection credentials
@@ -117,12 +132,16 @@ Domain logic lives under `src/tools/`, with generic create/update/delete/list/ba
 
 ---
 
+
+
 ## Requirements
 
-- Use a current LTS version of Node.js.
+- Node.js 24 or newer (`engines` in `package.json`; the hosted Linux app uses Node 24).
 - npm (bundled with Node.js).
 
 ---
+
+
 
 ## Installation
 
@@ -141,6 +160,8 @@ Never commit your `.env` file or any real credentials.
 
 ---
 
+
+
 ## Running
 
 Hosted HTTP server:
@@ -157,6 +178,14 @@ npm run start:local
 ```
 
 Opening the HTTP endpoint in a browser without an MCP session returns an error — that is expected.
+
+### Microsoft Copilot (optional)
+
+A hosted deployment can expose `/mcp/copilot` for Microsoft 365 Copilot as a [federated connector](https://learn.microsoft.com/en-us/microsoft-365/copilot/connectors/set-up-custom-federated-connectors). That path uses Microsoft Entra sign-in. Company API keys are still entered on the Red connection page and stored for the signed-in Microsoft user. Setup is in [docs/copilot-entra-sso.md](docs/copilot-entra-sso.md).
+
+The production Copilot address is `https://red.bigredcloud.com/mcp/copilot`.
+
+The Copilot connector is read-only. It can search and retrieve supported Big Red Cloud data, but it does not create, update or delete records. That limit comes from the current Microsoft federated connector, not from the absence of write tools in Red. Create, update and delete on Copilot are expected to follow when Microsoft supports them. Until then, those actions stay on `/mcp` for ChatGPT, Claude and Mistral.
 
 ### MCP client configuration
 
@@ -206,78 +235,41 @@ Hosted HTTP (local development):
 
 ---
 
+
+
 ## Development and regression testing
 
-| Script | Command | Purpose |
-| ------ | ------- | ------- |
-| Build | `npm run build` | Compile TypeScript to `build/` |
-| Dev HTTP | `npm run dev` | Run the HTTP server from source with `tsx` |
-| Dev stdio | `npm run dev:local` | Run the stdio server from source with `tsx` |
-| All tests | `npm test` | Build, then run the full test suite |
-| Unit tests | `npm run test:unit` | Unit tests only |
-| Security tests | `npm run test:security` | Security-focused tests |
-| Config tests | `npm run test:config` | Deployment/config tests |
-| Integration tests | `npm run test:integration` | Integration tests |
-| Production audit | `npm run audit:prod` | `npm audit` for production dependencies |
+
+| Script            | Command                    | Purpose                                     |
+| ----------------- | -------------------------- | ------------------------------------------- |
+| Build             | `npm run build`            | Compile TypeScript to `build/`              |
+| Dev HTTP          | `npm run dev`              | Run the HTTP server from source with `tsx`  |
+| Dev stdio         | `npm run dev:local`        | Run the stdio server from source with `tsx` |
+| All tests         | `npm test`                 | Build, then run the full test suite         |
+| Unit tests        | `npm run test:unit`        | Unit tests only                             |
+| Security tests    | `npm run test:security`    | Security-focused tests                      |
+| Config tests      | `npm run test:config`      | Deployment/config tests                     |
+| Integration tests | `npm run test:integration` | Integration tests                           |
+| Production audit  | `npm run audit:prod`       | `npm audit` for production dependencies     |
+
 
 Tests cover the safety guards described above, including sales invoice checks, transaction date validation, the secure connection flow (CSV validation, partial confirm, credential invalidation), connectionRef presentation rules, request routing, TTL wording, and response wording.
 
 ---
 
+
+
 ## Environment variables
 
-Configure the server with environment variables (for example via a `.env` file). The values below are **examples only** and must never contain real secrets or be committed.
+Customers of the hosted Red service do not configure its environment. ChatGPT, Claude and Mistral use `https://red.bigredcloud.com/mcp`. Microsoft 365 Copilot uses `https://red.bigredcloud.com/mcp/copilot`.
 
-```env
-# Big Red Cloud API base URL
-BRC_API_BASE_URL=https://app.bigredcloud.com/api
+Operators who self-host Red set environment variables for that process. The canonical list, including which settings are optional, platform-managed, or secret, is [docs/environment-variables.md](docs/environment-variables.md). `.env.example` is a placeholder template only. Never commit real secrets.
 
-# HTTP port for hosted mode
-PORT=3000
-
-# Public URL for the secure /connect page (required for hosted deployments)
-BRC_PUBLIC_BASE_URL=https://your-mcp-host.example.com
-
-# MCP session binding lifetime (minutes)
-BRC_MCP_SESSION_TTL_MINUTES=120
-
-# How long stored company credentials stay valid (minutes).
-# Drives credential expiry and user-facing duration wording (e.g. 240 → "about 4 hours").
-BRC_API_KEY_TTL_MINUTES=120
-
-# Rate limiting (requests per minute per IP)
-BRC_RATE_LIMIT_REQUESTS_PER_MINUTE=300
-
-# SHA-256 hashes of blocked API keys, comma separated (hashes only, never raw keys)
-BRC_API_KEY_BLACKLIST_SHA256=
-
-# Hosted connection persistence (optional)
-# memory = in-process; cosmos = shared store for multi-instance HTTP
-RED_CONNECT_CONNECTION_STORE=memory
-RED_CONNECT_COSMOS_CONNECTION_STRING=
-RED_CONNECT_COSMOS_DATABASE=red-connect
-RED_CONNECT_COSMOS_CONTAINER=connections
-RED_CONNECT_ENCRYPTION_KEY=
-
-# Set automatically when running the HTTP server (remote.ts)
-RED_CONNECT_HTTP_MODE=true
-```
-
-Deployment skill flags control which categories of tools are registered. When a flag is off, tools in that skill group are skipped at registration and do not appear to MCP clients:
-
-```env
-BRC_ALLOW_READ_SKILLS=true
-BRC_ALLOW_UPDATE_SKILLS=true
-BRC_ALLOW_DELETE_SKILLS=true
-BRC_ALLOW_EMAIL_SKILLS=true
-BRC_ALLOW_BATCH_SKILLS=true
-# Operator-only diagnostics; keep off for normal deployments
-BRC_ALLOW_DEV_MODE=false
-```
-
-You can review the active customer-facing capability summary at runtime with the `brc_get_deployment_policy` tool (plain-language availability of read, create/change, delete, email, and batch — not a full tool catalogue).
+On `/mcp`, deployment skill flags (`BRC_ALLOW_*`) choose which tool groups are registered. The Copilot facade keeps its own read-only catalogue and does not follow those write flags. `brc_get_deployment_policy` summarises customer-facing availability for the normal registry.
 
 ---
+
+
 
 ## Connecting a company
 
@@ -288,7 +280,7 @@ Customers can get or regenerate their company API keys in Big Red Cloud under **
 The flow is:
 
 1. Ask the assistant to start a company connection. It returns a secure connection page link.
-2. On that page, enter a single company **or upload a CSV** for several companies at once. Company connection credentials are entered on the secure page, not in chat.
+2. On that page, enter a single company, manually enter multiple companies, **or upload a CSV** for several companies at once. Company connection credentials are entered on the secure page, not in chat.
 3. The server validates each credential against Big Red Cloud **before storing it**. Credentials that fail validation are not saved.
 4. Return to the chat and provide the **confirmation code** shown on the success page.
 5. After confirm, the assistant reports which companies connected and which failed (if any). Invalid credentials appear in `failedCompanies` immediately — you do not need to run a lookup first to discover a bad key.
@@ -297,7 +289,7 @@ Connection links are **one-time use**. Connected companies stay available for ab
 
 ### Hosted HTTP and `connectionRef`
 
-In hosted HTTP mode (for example Mistral/Vibe), `brc_confirm_company_connection` returns an opaque `connectionRef` in the tool JSON. MCP clients should preserve and silently reuse `connectionRef` / `activeConnectionRef` on later tool calls when the platform rotates session IDs. Connection persistence survives MCP session rotation where supported. This is an implementation detail for the client — **assistants should not show `connectionRef` or `redconn_…` values to end users**. Tool responses include `assistantInstruction` / `presentationHint` fields to reinforce that rule.
+In hosted HTTP mode (for example Mistral/Vibe), `brc_confirm_company_connection` returns an opaque `connectionRef` in the tool JSON. MCP clients should preserve and silently reuse `connectionRef` / `activeConnectionRef` on later tool calls when the platform rotates session IDs. Connection persistence survives MCP session rotation where supported. This is an implementation detail for the client — **assistants should not show** `connectionRef` **or** `redconn_…` **values to end users**. Tool responses include `assistantInstruction` / `presentationHint` fields to reinforce that rule.
 
 Helper tools:
 
@@ -307,15 +299,19 @@ Helper tools:
 
 ---
 
+
+
 ## Privacy-safe telemetry
 
 On hosted deployments, Red may record anonymous operational telemetry so operators can understand approximate usage. Typical dimensions include anonymous client and connection-session identifiers, detected platform, deployment environment, tool name, and connected-company count.
 
-Telemetry does **not** include API keys, credentials, raw `connectionRef` values, authorisation headers, request bodies, or invoice/customer/supplier payloads. Failed Big Red Cloud calls may include safe identifiers such as `company_id` or `record_id`. These metrics are not verified Big Red Cloud user identities (OAuth user identity is not implemented).
+Telemetry does **not** include API keys, credentials, raw `connectionRef` values, authorisation headers, request bodies, or invoice/customer/supplier payloads. Failed Big Red Cloud calls may include safe identifiers such as `company_id` or `record_id`. Anonymous telemetry is not a verified Big Red Cloud user identity. Microsoft 365 Copilot uses verified Microsoft sign-in to decide which companies that user may access. That sign-in is separate from the anonymous telemetry described here.
 
 Details for operators and developers: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 ---
+
+
 
 ## Tool coverage
 
@@ -368,6 +364,8 @@ A transaction date outside the current financial year is a **warning**, not an a
 
 ---
 
+
+
 ## Help and training resources
 
 Red includes read-only MCP tools for Big Red Cloud help and training questions. They do not require a connected company.
@@ -386,9 +384,11 @@ Help answers may include:
 - recorded YouTube training videos;
 - upcoming webinar links.
 
-Help-resource indexes are supplied by the deployment operator. The public repository does not include Big Red Cloud’s internal content-management or resource-upload workflow.
+Help-resource indexes are supplied by the deployment operator. The repository includes the operator upload, catalogue and sync implementation used to maintain those indexes. Customers do not configure that workflow.
 
 ---
+
+
 
 ## Known limitations
 
@@ -398,15 +398,19 @@ Help-resource indexes are supplied by the deployment operator. The public reposi
 - Tool availability may vary by deployment policy (disabled skill groups are not registered).
 - Anonymous telemetry counts approximate clients (for example browser/device cookies), not verified individual people.
 - Platform detection may be `unknown` when a client does not provide enough identifying information.
-- Officially supported customer platforms are ChatGPT, Claude, and Mistral/Vibe; other MCP clients are not claimed as supported platforms.
+- Officially supported customer platforms are ChatGPT, Claude, Mistral/Vibe, and Microsoft 365 Copilot. Copilot is a federated connector and is read-only until Microsoft supports write actions on that connector. Other MCP clients are not claimed as supported platforms.
 
 ---
+
+
 
 ## Maintainers
 
 This project is maintained by the Big Red Cloud software development team.
 
 ---
+
+
 
 ## Status
 
@@ -415,11 +419,15 @@ Red is an open-source MCP integration for Big Red Cloud and is under active deve
 
 ---
 
+
+
 ## License
 
 This project is licensed under the Apache License 2.0. See LICENSE for details.
 
 ---
+
+
 
 ## Support and responsible disclosure
 

@@ -4,8 +4,9 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "RED_BRC_YOUTUBE_SYNC_ENDPOINT": "https://your-red-host/internal/brc-edu/youtube/sync",
-    "RED_BRC_YOUTUBE_SYNC_SECRET": "",
+    "RED_BRC_YOUTUBE_SYNC_SECRET": "<service-sync-secret>",
     "BRC_YOUTUBE_SYNC_SCHEDULE": "0 0 * * * *",
-    "RED_BRC_YOUTUBE_WEBHOOK_FORWARD": "true"
+    "RED_BRC_YOUTUBE_WEBHOOK_FORWARD": "true",
+    "BRC_YOUTUBE_WEBHOOK_SECRET": "<websub-shared-secret>"
   }
 }

@@ -3,7 +3,7 @@ import type { ServerType } from "../../server.js";
 import { brcFetch, companyNameSchema, jsonResponse } from "../../shared.js";
 import { NOMINAL_MONTHLY_MOVEMENTS_DESCRIPTION } from "./payloads_tools.js";
 
-function buildListQuery(args: {
+export function buildListQuery(args: {
   page?: number;
   pageSize?: number;
   filter?: string;
@@ -21,6 +21,10 @@ function buildListQuery(args: {
 
   const query = params.toString();
   return query ? `?${query}` : "";
+}
+
+export async function listBrcCustomers(companyName: string, page: number, pageSize: number) {
+  return brcFetch(companyName, `/v1/customers${buildListQuery({page,pageSize})}`, {signal:AbortSignal.timeout(15_000)});
 }
 
 export function registerListTool(
